@@ -1,0 +1,27 @@
+{
+  "name": "ai-news-workers",
+  "version": "0.1.0-phase0",
+  "description": "AI News Intelligence — Cloudflare Workers API (Phase 0)",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "hono": "^4.5.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.5.0",
+    "@cloudflare/workers-types": "^4.20240815.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0",
+    "wrangler": "^3.70.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,36 @@
+name = "ai-news-intelligence"
+main = "src/index.ts"
+compatibility_date = "2024-08-15"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-news-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "00000000-0000-0000-0000-000000000000"
+
+[vars]
+ENVIRONMENT = "development"
+CORS_ORIGIN = "*"
+PUBLIC_RATE_LIMIT_WINDOW_SECONDS = "60"
+PUBLIC_RATE_LIMIT_MAX_REQUESTS = "100"
+INTERNAL_RATE_LIMIT_WINDOW_SECONDS = "60"
+INTERNAL_RATE_LIMIT_MAX_REQUESTS = "1000"
+PUBLIC_BODY_LIMIT_BYTES = "65536"
+INTERNAL_BODY_LIMIT_BYTES = "262144"
+HMAC_ALGORITHM = "SHA-256"
+HMAC_HEADER = "X-HMAC-Signature"
+NONCE_HEADER = "X-Nonce"
+TIMESTAMP_HEADER = "X-Timestamp"
+REPLAY_WINDOW_SECONDS = "300"
+
+[env.production]
+name = "ai-news-intelligence-prod"
+[env.production.vars]
+ENVIRONMENT = "production"
+CORS_ORIGIN = "https://your-domain.com"
+PUBLIC_RATE_LIMIT_MAX_REQUESTS = "200"
+INTERNAL_RATE_LIMIT_MAX_REQUESTS = "5000"

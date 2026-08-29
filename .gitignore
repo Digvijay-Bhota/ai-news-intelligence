@@ -11,16 +11,13 @@
 .claude-flow.backup/
 .swarm.backup/
 .mcp.json.backup
-
 # Local Ruflo databases
 ruvector.db
 ruvector.db.backup
-
 # Ruflo swarm runtime databases
 .swarm/*.db
 .swarm/*.db-shm
 .swarm/*.db-wal
-
 # Ruflo runtime state
 .claude-flow/daemon-state.json
 .claude-flow/harness-active-policy.json
@@ -28,7 +25,9 @@ ruvector.db.backup
 .claude-flow/policy/state.json
 .claude-flow/swarm/swarm-state.json
 .swarm/state.json
-
 # Ruflo runtime artifacts
 .claude-flow/daemon.pid
 .swarm/backups/
+
+# Node dependencies
+node_modules/
