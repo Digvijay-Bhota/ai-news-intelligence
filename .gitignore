@@ -28,3 +28,7 @@ ruvector.db.backup
 .claude-flow/policy/state.json
 .claude-flow/swarm/swarm-state.json
 .swarm/state.json
+
+# Ruflo runtime artifacts
+.claude-flow/daemon.pid
+.swarm/backups/
