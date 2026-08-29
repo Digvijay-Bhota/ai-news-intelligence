@@ -1,0 +1,30 @@
+# Ruflo local secrets and runtime data
+.env
+.env.local
+.env.*.local
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
+
+# Ruflo backups
+.claude.backup/
+.claude-flow.backup/
+.swarm.backup/
+.mcp.json.backup
+
+# Local Ruflo databases
+ruvector.db
+ruvector.db.backup
+
+# Ruflo swarm runtime databases
+.swarm/*.db
+.swarm/*.db-shm
+.swarm/*.db-wal
+
+# Ruflo runtime state
+.claude-flow/daemon-state.json
+.claude-flow/harness-active-policy.json
+.claude-flow/metrics/
+.claude-flow/policy/state.json
+.claude-flow/swarm/swarm-state.json
+.swarm/state.json
