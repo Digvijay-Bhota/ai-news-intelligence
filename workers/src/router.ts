@@ -45,20 +45,31 @@ function error(message: string, status = 400, extraHeaders?: Record<string, stri
 
 // ─── Helpers ──────────────────────────────────────────────
 
-async function buildFeedItem(db: ReturnType<typeof createDbClient>, article: ArticleRaw): Promise<FeedItem> {
-  const source = await db.getSourceById(article.source_id);
-  return {
-    id: article.id,
-    external_id: article.external_id,
-    title: article.title,
-    summary: article.summary,
-    url: article.url,
-    source: source?.name ?? 'unknown',
-    published_at: article.published_at,
-    category: null,
-    topics: [],
-    events: [],
-  };
+async function buildFeedItemsBatch(db: ReturnType<typeof createDbClient>, articles: ArticleRaw[]): Promise<FeedItem[]> {
+  if (articles.length === 0) return [];
+  const articleIds = articles.map(a => a.id);
+  const sourceIds = articles.map(a => a.source_id);
+
+  const [intelligenceMap, sourcesMap] = await Promise.all([
+    db.getIntelligenceBatch(articleIds),
+    db.getSourcesBatch(sourceIds)
+  ]);
+
+  return articles.map(article => {
+    const intelligence = intelligenceMap.get(article.id) ?? { topics: [], events: [] };
+    return {
+      id: article.id,
+      external_id: article.external_id,
+      title: article.title,
+      summary: article.summary,
+      url: article.url,
+      source: sourcesMap.get(article.source_id) ?? 'unknown',
+      published_at: article.published_at,
+      category: null,
+      topics: intelligence.topics,
+      events: intelligence.events,
+    };
+  });
 }
 
 // ─── Public Handlers ──────────────────────────────────────
@@ -91,10 +102,7 @@ async function handleFeed(request: Request, env: Env): Promise<Response> {
   );
 
   const db = createDbClient(env);
-  const items: FeedItem[] = [];
-  for (const article of result.articles) {
-    items.push(await buildFeedItem(db, article));
-  }
+  const items = await buildFeedItemsBatch(db, result.articles);
 
   return success({
     meta: {

@@ -17,6 +17,65 @@ export class DbClient {
     return this.db.prepare('SELECT * FROM sources WHERE id = ?1').bind(id).first<Source>();
   }
 
+  async getSourcesBatch(sourceIds: number[]): Promise<Map<number, string>> {
+    if (sourceIds.length === 0) return new Map();
+    const uniqueIds = Array.from(new Set(sourceIds));
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const query = `SELECT id, name FROM sources WHERE id IN (${placeholders})`;
+    const res = await this.db.prepare(query).bind(...uniqueIds).all<{ id: number; name: string }>();
+
+    const map = new Map<number, string>();
+    if (res.results) {
+      for (const row of res.results) {
+        map.set(row.id, row.name);
+      }
+    }
+    return map;
+  }
+
+  async getIntelligenceBatch(articleIds: number[]): Promise<Map<number, { topics: string[]; events: string[] }>> {
+    const map = new Map<number, { topics: string[]; events: string[] }>();
+    if (articleIds.length === 0) return map;
+
+    for (const id of articleIds) {
+      map.set(id, { topics: [], events: [] });
+    }
+
+    const uniqueIds = Array.from(new Set(articleIds));
+    const placeholders = uniqueIds.map(() => '?').join(',');
+
+    const topicsQuery = `
+      SELECT at.article_raw_id, t.name
+      FROM article_topics at
+      JOIN topics t ON t.id = at.topic_id
+      WHERE at.article_raw_id IN (${placeholders})
+    `;
+    const topicsRes = await this.db.prepare(topicsQuery).bind(...uniqueIds).all<{ article_raw_id: number; name: string }>();
+
+    const eventsQuery = `
+      SELECT ae.article_raw_id, e.title
+      FROM article_events ae
+      JOIN events e ON e.id = ae.event_id
+      WHERE ae.article_raw_id IN (${placeholders})
+    `;
+    const eventsRes = await this.db.prepare(eventsQuery).bind(...uniqueIds).all<{ article_raw_id: number; title: string }>();
+
+    if (topicsRes.results) {
+      for (const row of topicsRes.results) {
+        map.get(row.article_raw_id)?.topics.push(row.name);
+      }
+    }
+
+    if (eventsRes.results) {
+      for (const row of eventsRes.results) {
+        map.get(row.article_raw_id)?.events.push(row.title);
+      }
+    }
+
+    return map;
+  }
+
+
   // ─── Articles Raw ─────────────────────────────────────────
   async getArticleById(id: number): Promise<ArticleRaw | null> {
     return this.db.prepare('SELECT * FROM articles_raw WHERE id = ?1').bind(id).first<ArticleRaw>();

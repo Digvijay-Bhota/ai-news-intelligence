@@ -29,6 +29,13 @@ describe('Integration', () => {
     const feedReq = await signedRequest('http://localhost/api/v1/feed', 'GET');
     const feedRes = await route(feedReq, env);
     expect(feedRes.status).toBe(200);
+    const feedJson = (await feedRes.json()) as ApiResponse<any>;
+    expect(feedJson.success).toBe(true);
+    expect(feedJson.data.items).toBeDefined();
+    expect(feedJson.data.items.length).toBeGreaterThan(0);
+    expect(feedJson.data.items[0].topics).toContain('AI Integration Topic');
+    expect(feedJson.data.items[0].events).toContain('AI Integration Event');
+    expect(feedJson.data.items[0].source).toBe('Integration Source');
 
     // Set preferences
     const prefsReq = await signedRequest('http://localhost/api/v1/preferences', 'POST', {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, vitest, it, expect } from 'vitest';
 import { route } from '../src/router';
 import { createMockEnv, createMockD1Database, createMockKVNamespace, TEST_SECRET } from './setup';
 import { buildSignedRequest } from '../src/utils/hmac';
@@ -30,6 +30,50 @@ describe('Router', () => {
   });
 
   describe('Feed', () => {
+    it('feed response contains actual topic/event values', async () => {
+      const env = makeEnv();
+
+      // Override DbClient directly using vi.spyOn to return mock articles and intelligence
+      const dbClientModule = await import('../src/db/client');
+      const mockClient = {
+        listArticles: async () => ({
+          articles: [{
+            id: 1, external_id: '1', source_id: 1, title: 'Test',
+            summary: 'Sum', url: 'http://test', raw_content: '',
+            published_at: 1000, fetched_at: 1000, language: 'en',
+            status: 'processed', created_at: 1000
+          }],
+          total: 1
+        }),
+        getIntelligenceBatch: async () => {
+          const map = new Map();
+          map.set(1, { topics: ['TopicA'], events: ['EventA'] });
+          return map;
+        },
+        getSourcesBatch: async () => {
+          const map = new Map();
+          map.set(1, 'SourceA');
+          return map;
+        },
+        getUserPreferences: async () => null,
+      };
+      const spy = vitest.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockClient as any);
+
+      const req = await signedRequest('http://localhost/api/v1/feed?limit=10&offset=0&source_id=1', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as ApiResponse<any>;
+
+      expect(json.data.meta.limit).toBe(10);
+      expect(json.data.meta.offset).toBe(0);
+      expect(json.data.items.length).toBe(1);
+      expect(json.data.items[0].topics).toEqual(['TopicA']);
+      expect(json.data.items[0].events).toEqual(['EventA']);
+      expect(json.data.items[0].source).toEqual('SourceA');
+
+      spy.mockRestore();
+    });
+
     it('returns feed with meta', async () => {
       const env = makeEnv();
       const req = await signedRequest('http://localhost/api/v1/feed', 'GET');

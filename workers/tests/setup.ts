@@ -85,6 +85,43 @@ export function createMockD1Database(): D1Database {
   return (rows[0] ?? null) as T | null;
 },
         all: async <T>() => {
+          const upperQuery = query.toUpperCase();
+          if (upperQuery.includes('SELECT * FROM ARTICLES_RAW')) {
+            return {
+              results: [{
+                id: 1, external_id: 'ext-1', source_id: 1, title: 'Integration Test Article',
+                summary: 'Sum', url: 'http://test', raw_content: '',
+                published_at: 1000, fetched_at: 1000, language: 'en',
+                status: 'processed', created_at: 1000
+              }] as unknown as T[],
+              success: true, meta: {}
+            };
+          }
+          if (upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW')) {
+            return {
+              results: [{ total: 1 }] as unknown as T[],
+              success: true, meta: {}
+            };
+          }
+          if (upperQuery.includes('FROM ARTICLE_TOPICS AT')) {
+            return {
+              results: [{ article_raw_id: 1, name: 'AI Integration Topic' }] as unknown as T[],
+              success: true, meta: {}
+            };
+          }
+          if (upperQuery.includes('FROM ARTICLE_EVENTS AE')) {
+            return {
+              results: [{ article_raw_id: 1, title: 'AI Integration Event' }] as unknown as T[],
+              success: true, meta: {}
+            };
+          }
+          if (upperQuery.includes('FROM SOURCES WHERE ID IN')) {
+            return {
+              results: [{ id: 1, name: 'Integration Source' }] as unknown as T[],
+              success: true, meta: {}
+            };
+          }
+
           const key = `${query}:${JSON.stringify(values)}`;
           const rows = storage.get(key) ?? [];
           return { results: rows as T[], success: true, meta: {} };

@@ -111,4 +111,77 @@ describe('DbClient', () => {
       expect(query).toContain("ELSE 2");
     });
   });
+
+  describe('Batch Loading', () => {
+    it('getSourcesBatch handles empty array', async () => {
+      const client = makeClient();
+      const map = await client.getSourcesBatch([]);
+      expect(map.size).toBe(0);
+    });
+
+    it('getIntelligenceBatch handles empty array', async () => {
+      const client = makeClient();
+      const map = await client.getIntelligenceBatch([]);
+      expect(map.size).toBe(0);
+    });
+
+    it('getSourcesBatch maps correctly', async () => {
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+      const allMock = vi.fn().mockResolvedValue({
+        results: [
+          { id: 1, name: 'Source A' },
+          { id: 2, name: 'Source B' }
+        ]
+      });
+      const bindMock = vi.fn().mockReturnValue({ all: allMock });
+      vi.spyOn(db, 'prepare').mockReturnValue({ bind: bindMock } as any);
+
+      const map = await client.getSourcesBatch([1, 2, 2]);
+      expect(map.size).toBe(2);
+      expect(map.get(1)).toBe('Source A');
+      expect(map.get(2)).toBe('Source B');
+      expect(bindMock).toHaveBeenCalledWith(1, 2);
+    });
+
+    it('getIntelligenceBatch maps topics and events correctly', async () => {
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+
+      let callCount = 0;
+      const allMock = vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) { // Topics
+          return Promise.resolve({
+            results: [
+              { article_raw_id: 1, name: 'AI' },
+              { article_raw_id: 1, name: 'Tech' }
+            ]
+          });
+        }
+        // Events
+        return Promise.resolve({
+          results: [
+            { article_raw_id: 2, title: 'Event A' }
+          ]
+        });
+      });
+      const bindMock = vi.fn().mockReturnValue({ all: allMock });
+      vi.spyOn(db, 'prepare').mockReturnValue({ bind: bindMock } as any);
+
+      const map = await client.getIntelligenceBatch([1, 2, 3]);
+      expect(map.size).toBe(3);
+
+      expect(map.get(1)?.topics).toEqual(['AI', 'Tech']);
+      expect(map.get(1)?.events).toEqual([]);
+
+      expect(map.get(2)?.topics).toEqual([]);
+      expect(map.get(2)?.events).toEqual(['Event A']);
+
+      expect(map.get(3)?.topics).toEqual([]); // Article with no topics/events
+      expect(map.get(3)?.events).toEqual([]);
+
+      expect(bindMock).toHaveBeenCalledWith(1, 2, 3);
+    });
+  });
 });
