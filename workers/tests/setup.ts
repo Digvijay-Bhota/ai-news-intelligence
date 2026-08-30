@@ -7,6 +7,7 @@ export function createMockEnv(overrides: Partial<Env> = {}): Env {
     DB: {} as D1Database,
     CACHE: {} as KVNamespace,
     HMAC_SECRET: TEST_SECRET,
+    GEMINI_API_KEY: 'test-gemini-key',
     PIPELINE_TOKEN_ID: 'test-pipeline-token',
     ENVIRONMENT: 'test',
     CORS_ORIGIN: '*',

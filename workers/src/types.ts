@@ -6,6 +6,7 @@ export interface Env {
   DB: D1Database;
   CACHE: KVNamespace;
   HMAC_SECRET: string;
+  GEMINI_API_KEY: string;
   PIPELINE_TOKEN_ID: string;
   ENVIRONMENT: string;
   CORS_ORIGIN: string;

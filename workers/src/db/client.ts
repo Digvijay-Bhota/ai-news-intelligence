@@ -138,6 +138,83 @@ export class DbClient {
     return result;
   }
 
+  // ─── AI / Enrichment ──────────────────────────────────────
+  async createArticleContent(data: {
+    article_raw_id: number;
+    cleaned_text: string;
+    extracted_entities: string;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        'INSERT INTO article_content (article_raw_id, cleaned_text, extracted_entities) VALUES (?1, ?2, ?3)'
+      )
+      .bind(data.article_raw_id, data.cleaned_text, data.extracted_entities)
+      .run();
+  }
+
+  async createTopic(name: string, slug: string): Promise<number> {
+    const result = await this.db
+      .prepare('INSERT INTO topics (name, slug) VALUES (?1, ?2) RETURNING id')
+      .bind(name, slug)
+      .first<{ id: number }>();
+    if (!result) throw new Error('Failed to create topic');
+    return result.id;
+  }
+
+  async linkArticleTopic(article_raw_id: number, topic_id: number, confidence: number): Promise<void> {
+    await this.db
+      .prepare('INSERT INTO article_topics (article_raw_id, topic_id, confidence) VALUES (?1, ?2, ?3)')
+      .bind(article_raw_id, topic_id, confidence)
+      .run();
+  }
+
+  async createEvent(event: Omit<Event, 'id' | 'created_at'>): Promise<number> {
+    const result = await this.db
+      .prepare(
+        'INSERT INTO events (event_hash, title, description, severity, started_at, ended_at, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id'
+      )
+      .bind(
+        event.event_hash,
+        event.title,
+        event.description,
+        event.severity,
+        event.started_at,
+        event.ended_at,
+        event.status
+      )
+      .first<{ id: number }>();
+    if (!result) throw new Error('Failed to create event');
+    return result.id;
+  }
+
+  async linkArticleEvent(article_raw_id: number, event_id: number, relevance_score: number): Promise<void> {
+    await this.db
+      .prepare('INSERT INTO article_events (article_raw_id, event_id, relevance_score) VALUES (?1, ?2, ?3)')
+      .bind(article_raw_id, event_id, relevance_score)
+      .run();
+  }
+
+  async getEventByHash(event_hash: string): Promise<Event | null> {
+    return this.db.prepare('SELECT * FROM events WHERE event_hash = ?1').bind(event_hash).first<Event>();
+  }
+
+  async updateAiJobStatus(id: number, status: string, result?: string, error_message?: string): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare(
+        'UPDATE ai_jobs SET status = ?1, result = ?2, error_message = ?3, completed_at = ?4 WHERE id = ?5'
+      )
+      .bind(status, result ?? null, error_message ?? null, now, id)
+      .run();
+  }
+
+  async createAiLog(ai_job_id: number, message: string, log_level: string = 'info'): Promise<void> {
+    await this.db
+      .prepare('INSERT INTO ai_logs (ai_job_id, message, log_level) VALUES (?1, ?2, ?3)')
+      .bind(ai_job_id, message, log_level)
+      .run();
+  }
+
   // ─── Deduplication ────────────────────────────────────────
   async getDedupHash(hash: string): Promise<DedupHash | null> {
     return this.db.prepare('SELECT * FROM dedup_hashes WHERE hash = ?1').bind(hash).first<DedupHash>();
