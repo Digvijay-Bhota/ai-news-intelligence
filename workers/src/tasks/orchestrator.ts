@@ -49,17 +49,39 @@ export async function runPipeline(env: Env): Promise<void> {
       }
     }
 
-    // 2. Processing
+    // 2. Processing (Pending)
     const { articles } = await db.listArticles({ status: 'pending', limit: 100 });
-    for (const article of articles.slice(0, MAX_ARTICLES)) {
+    let totalAttempts = 0;
+
+    for (const article of articles) {
+      if (totalAttempts >= MAX_ARTICLES) break;
       const claimed = await db.claimArticle(article.id);
       if (!claimed) continue;
       
+      totalAttempts++;
       try {
         await processArticle(env, article);
       } catch (e) {
         await db.updateArticleStatus(article.id, 'failed');
         // processor handles ai_job status and logs
+      }
+    }
+
+    // 3. Retry Processing (Failed)
+    const remainingSlots = MAX_ARTICLES - totalAttempts;
+    if (remainingSlots > 0) {
+      const retryCandidates = await db.listRetryableFailedArticles(remainingSlots);
+      for (const article of retryCandidates) {
+        if (totalAttempts >= MAX_ARTICLES) break;
+        const claimed = await db.claimFailedArticle(article.id);
+        if (!claimed) continue;
+
+        totalAttempts++;
+        try {
+          await processArticle(env, article);
+        } catch (e) {
+          await db.updateArticleStatus(article.id, 'failed');
+        }
       }
     }
   } catch (e) {

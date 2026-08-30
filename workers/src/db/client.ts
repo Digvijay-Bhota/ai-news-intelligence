@@ -226,6 +226,44 @@ export class DbClient {
     return result.meta.changes === 1;
   }
 
+  async claimFailedArticle(id: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        'UPDATE articles_raw SET status = "processing" WHERE id = ?1 AND status = "failed"'
+      )
+      .bind(id)
+      .run();
+    return result.meta.changes === 1;
+  }
+
+  async listRetryableFailedArticles(limit: number): Promise<ArticleRaw[]> {
+    const query = `
+      SELECT a.*
+      FROM articles_raw a
+      WHERE a.status = 'failed'
+        AND (
+          SELECT COUNT(*)
+          FROM ai_jobs j
+          WHERE j.article_raw_id = a.id AND j.job_type = 'enrichment'
+        ) < IFNULL((
+          SELECT CASE
+            WHEN latest_failed_job.error_message LIKE '%429%' THEN 5
+            ELSE 2
+          END
+          FROM ai_jobs latest_failed_job
+          WHERE latest_failed_job.article_raw_id = a.id
+            AND latest_failed_job.job_type = 'enrichment'
+            AND latest_failed_job.status = 'failed'
+          ORDER BY latest_failed_job.created_at DESC
+          LIMIT 1
+        ), 2)
+      ORDER BY a.created_at ASC
+      LIMIT ?1
+    `;
+    const r = await this.db.prepare(query).bind(limit).all<ArticleRaw>();
+    return r.results ?? [];
+  }
+
   async updatePipelineJobStatus(id: number, status: string, error?: string | null): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     await this.db

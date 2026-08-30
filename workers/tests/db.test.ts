@@ -79,4 +79,36 @@ describe('DbClient', () => {
       expect(job.started_at).toBe(123);
     });
   });
+
+  describe('Retries', () => {
+    it('claims failed article', async () => {
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+      const runMock = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
+      const bindMock = vi.fn().mockReturnValue({ run: runMock });
+      vi.spyOn(db, 'prepare').mockReturnValue({ bind: bindMock } as any);
+
+      const result = await client.claimFailedArticle(10);
+      expect(result).toBe(true);
+      expect(bindMock).toHaveBeenCalledWith(10);
+    });
+
+    it('listRetryableFailedArticles executes correctly', async () => {
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+      const allMock = vi.fn().mockResolvedValue({ results: [{ id: 1 }] });
+      const bindMock = vi.fn().mockReturnValue({ all: allMock });
+      const prepareSpy = vi.spyOn(db, 'prepare').mockReturnValue({ bind: bindMock } as any);
+
+      const result = await client.listRetryableFailedArticles(5);
+      expect(result.length).toBe(1);
+      expect(bindMock).toHaveBeenCalledWith(5);
+
+      const query = prepareSpy.mock.calls[0][0] as string;
+      expect(query).toContain("status = 'failed'");
+      expect(query).toContain("job_type = 'enrichment'");
+      expect(query).toContain("LIKE '%429%' THEN 5");
+      expect(query).toContain("ELSE 2");
+    });
+  });
 });
