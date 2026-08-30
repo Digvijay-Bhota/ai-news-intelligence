@@ -6,7 +6,7 @@
  * Uses a single configured pipeline token/secret.
  */
 
-import type { Env, ApiResponse } from '../types';
+import type { Env } from '../types';
 import { UnauthorizedError } from './errors';
 
 export interface HmacPayload {

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { route } from '../src/router';
 import { createMockEnv, createMockD1Database, createMockKVNamespace, TEST_SECRET } from './setup';
 import { buildSignedRequest } from '../src/utils/hmac';
+import type { ApiResponse } from '../src/types';
 
 describe('Router', () => {
   function makeEnv() {
@@ -22,7 +23,7 @@ describe('Router', () => {
       const req = await signedRequest('http://localhost/api/v1/health', 'GET');
       const res = await route(req, env);
       expect(res.status).toBe(200);
-      const json = await res.json();
+      const json = (await res.json()) as ApiResponse<any>;
       expect(json.success).toBe(true);
       expect(json.data.status).toBe('healthy');
     });
@@ -34,7 +35,7 @@ describe('Router', () => {
       const req = await signedRequest('http://localhost/api/v1/feed', 'GET');
       const res = await route(req, env);
       expect(res.status).toBe(200);
-      const json = await res.json();
+      const json = (await res.json()) as ApiResponse<any>;
       expect(json.success).toBe(true);
       expect(json.data.meta).toBeDefined();
     });
@@ -46,7 +47,7 @@ describe('Router', () => {
       const req = await signedRequest('http://localhost/api/v1/preferences?user_id=u1', 'GET');
       const res = await route(req, env);
       expect(res.status).toBe(200);
-      const json = await res.json();
+      const json = (await res.json()) as ApiResponse<any>;
       expect(json.data.digest_frequency).toBe('daily');
     });
 
@@ -58,7 +59,7 @@ describe('Router', () => {
       });
       const res = await route(req, env);
       expect(res.status).toBe(200);
-      const json = await res.json();
+      const json = (await res.json()) as ApiResponse<any>;
       expect(json.data.digest_frequency).toBe('weekly');
     });
   });
@@ -69,7 +70,7 @@ describe('Router', () => {
       const req = await signedRequest('http://localhost/api/v1/saved?user_id=u1', 'GET');
       const res = await route(req, env);
       expect(res.status).toBe(200);
-      const json = await res.json();
+      const json = (await res.json()) as ApiResponse<any>;
       expect(Array.isArray(json.data)).toBe(true);
     });
 

@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { getClientIp, checkPublicRateLimit, checkInternalRateLimit } from '../src/utils/rate-limiter';
-import { RateLimitError } from '../src/utils/errors';
 import { createMockEnv, createMockD1Database } from './setup';
 
 describe('Rate Limiter', () => {

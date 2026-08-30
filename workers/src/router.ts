@@ -63,7 +63,7 @@ async function buildFeedItem(db: ReturnType<typeof createDbClient>, article: Art
 
 // ─── Public Handlers ──────────────────────────────────────
 
-async function handleHealth(request: Request, env: Env): Promise<Response> {
+async function handleHealth(_request: Request, env: Env): Promise<Response> {
   return success({
     status: 'healthy',
     version: '0.1.0-phase0',
@@ -72,13 +72,13 @@ async function handleHealth(request: Request, env: Env): Promise<Response> {
   });
 }
 
-async function handleFeed(_request: Request, env: Env): Promise<Response> {
+async function handleFeed(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '20', 10), 100);
   const offset = parseInt(url.searchParams.get('offset') ?? '0', 10);
   const sourceId = url.searchParams.get('source_id');
 
-  const cacheKey = generateCacheKey('feed', { limit, offset, sourceId });
+  const cacheKey = generateCacheKey('feed', { limit, offset, sourceId: sourceId ?? undefined });
   const result = await withCache(
     cacheKey,
     () => createDbClient(env).listArticles({
@@ -97,8 +97,12 @@ async function handleFeed(_request: Request, env: Env): Promise<Response> {
   }
 
   return success({
+    meta: {
+      limit,
+      offset,
+      total: result.total,
+    },
     items,
-    meta: { page: Math.floor(offset / limit) + 1, limit, total: result.total },
   });
 }
 
@@ -335,35 +339,35 @@ export async function route(request: Request, env: Env): Promise<Response> {
 
     // Public API
     if (path === '/api/v1/feed' && request.method === 'GET') {
-      const auth = await authenticate(request, env, false);
+      await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/feed', env);
       response = await handleFeed(request, env);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     if (path === '/api/v1/preferences' && request.method === 'GET') {
-      const auth = await authenticate(request, env, false);
+      await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/preferences', env);
       response = await handleGetPreferences(request, env);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     if (path === '/api/v1/preferences' && request.method === 'POST') {
-      const auth = await authenticate(request, env, false);
+      await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/preferences', env);
       response = await handlePostPreferences(request, env);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     if (path === '/api/v1/saved' && request.method === 'GET') {
-      const auth = await authenticate(request, env, false);
+      await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/saved', env);
       response = await handleGetSaved(request, env);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     if (path === '/api/v1/saved' && request.method === 'POST') {
-      const auth = await authenticate(request, env, false);
+      await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/saved', env);
       response = await handlePostSaved(request, env);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
@@ -371,14 +375,14 @@ export async function route(request: Request, env: Env): Promise<Response> {
 
     const savedMatch = path.match(/^\/api\/v1\/saved\/(\d+)$/);
     if (savedMatch && request.method === 'DELETE') {
-      const auth = await authenticate(request, env, false);
+      await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/saved/:id', env);
       response = await handleDeleteSaved(request, env, parseInt(savedMatch[1], 10));
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     if (path === '/api/v1/hide' && request.method === 'POST') {
-      const auth = await authenticate(request, env, false);
+      await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/hide', env);
       response = await handleHide(request, env);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));

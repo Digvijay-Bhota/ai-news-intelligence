@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { route } from '../src/router';
 import { createMockEnv, createMockD1Database, createMockKVNamespace, TEST_SECRET } from './setup';
 import { buildSignedRequest } from '../src/utils/hmac';
+import type { ApiResponse } from '../src/types';
 
 describe('Integration', () => {
   function makeEnv() {
@@ -42,7 +43,7 @@ describe('Integration', () => {
     const getPrefsReq = await signedRequest('http://localhost/api/v1/preferences?user_id=integration-user', 'GET');
     const getPrefsRes = await route(getPrefsReq, env);
     expect(getPrefsRes.status).toBe(200);
-    const prefsJson = await getPrefsRes.json();
+    const prefsJson = (await getPrefsRes.json()) as ApiResponse<any>;
     expect(prefsJson.data.user_id).toBe('integration-user');
 
     // Save article

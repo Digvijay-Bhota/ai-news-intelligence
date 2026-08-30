@@ -109,7 +109,7 @@ export class DbClient {
   }
 
   // ─── Pipeline Jobs ────────────────────────────────────────
-  async createPipelineJob(job: Omit<PipelineJob, 'id' | 'created_at'>): Promise<PipelineJob> {
+  async createPipelineJob(job: Omit<PipelineJob, 'id' | 'created_at' | 'started_at' | 'completed_at' | 'retry_count'> & Partial<Pick<PipelineJob, 'started_at' | 'completed_at' | 'retry_count'>>): Promise<PipelineJob> {
     const now = Math.floor(Date.now() / 1000);
     const result = await this.db
       .prepare(
@@ -124,7 +124,7 @@ export class DbClient {
   }
 
   // ─── AI Jobs ──────────────────────────────────────────────
-  async createAiJob(job: Omit<AiJob, 'id' | 'created_at'>): Promise<AiJob> {
+  async createAiJob(job: Omit<AiJob, 'id' | 'created_at' | 'result' | 'error_message' | 'started_at' | 'completed_at' | 'prompt_tokens' | 'completion_tokens'> & Partial<Pick<AiJob, 'result' | 'error_message' | 'started_at' | 'completed_at' | 'prompt_tokens' | 'completion_tokens'>>): Promise<AiJob> {
     const now = Math.floor(Date.now() / 1000);
     const result = await this.db
       .prepare(
