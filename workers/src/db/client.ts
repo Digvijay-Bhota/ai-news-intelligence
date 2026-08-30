@@ -215,6 +215,36 @@ export class DbClient {
       .run();
   }
 
+  async claimArticle(id: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        'UPDATE articles_raw SET status = "processing" WHERE id = ?1 AND status = "pending"'
+      )
+      .bind(id)
+      .run();
+    return result.meta.changes === 1;
+  }
+
+  async updatePipelineJobStatus(id: number, status: string, error?: string): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare(
+        'UPDATE pipeline_jobs SET status = ?1, error_message = ?2, completed_at = ?3 WHERE id = ?4'
+      )
+      .bind(status, error ?? null, now, id)
+      .run();
+  }
+
+  async updateSourceHealth(source_id: number, status: string, error?: string): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare(
+        'UPDATE source_health SET status = ?1, error_message = ?2, checked_at = ?3 WHERE source_id = ?4'
+      )
+      .bind(status, error ?? null, now, source_id)
+      .run();
+  }
+
   // ─── Deduplication ────────────────────────────────────────
   async getDedupHash(hash: string): Promise<DedupHash | null> {
     return this.db.prepare('SELECT * FROM dedup_hashes WHERE hash = ?1').bind(hash).first<DedupHash>();
