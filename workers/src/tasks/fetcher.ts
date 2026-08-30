@@ -4,6 +4,7 @@
 
 import type { Env, Source } from '../types';
 import { createDbClient } from '../db/client';
+import { generateArticleHash } from './normalization';
 
 export interface IngestedArticle {
   external_id: string;
@@ -28,21 +29,24 @@ export async function fetchAndIngest(env: Env, source: Source): Promise<number> 
   let ingested = 0;
 
   for (const article of articles) {
-    const existing = await db.getArticleByExternalId(article.external_id);
-    if (!existing) {
-      await db.createArticle({
-        external_id: article.external_id,
-        source_id: source.id,
-        title: article.title,
-        summary: article.summary,
-        url: article.url,
-        raw_content: article.raw_content,
-        published_at: article.published_at,
-        language: 'en', // Default for now
-        status: 'pending',
-      });
-      ingested++;
-    }
+    const hash = await generateArticleHash(article.title, article.url);
+    const existingHash = await db.getDedupHash(hash);
+    if (existingHash) continue;
+
+    const newArticle = await db.createArticle({
+      external_id: article.external_id,
+      source_id: source.id,
+      title: article.title,
+      summary: article.summary,
+      url: article.url,
+      raw_content: article.raw_content,
+      published_at: article.published_at,
+      language: 'en',
+      status: 'pending',
+    });
+
+    await db.createDedupHash(hash, newArticle.id);
+    ingested++;
   }
 
   return ingested;

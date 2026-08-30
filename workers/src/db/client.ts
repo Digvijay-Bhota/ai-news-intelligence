@@ -2,7 +2,7 @@
  * D1 Database Access Layer — Phase 0 (Canonical)
  */
 
-import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, UserPreference, SavedArticle, HiddenStory, PipelineToken } from '../types';
+import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, UserPreference, SavedArticle, HiddenStory, PipelineToken } from '../types';
 
 export class DbClient {
   constructor(private readonly db: D1Database) {}
@@ -136,6 +136,18 @@ export class DbClient {
       .first<AiJob>();
     if (!result) throw new Error('Failed to create AI job');
     return result;
+  }
+
+  // ─── Deduplication ────────────────────────────────────────
+  async getDedupHash(hash: string): Promise<DedupHash | null> {
+    return this.db.prepare('SELECT * FROM dedup_hashes WHERE hash = ?1').bind(hash).first<DedupHash>();
+  }
+
+  async createDedupHash(hash: string, articleRawId: number): Promise<void> {
+    await this.db
+      .prepare('INSERT INTO dedup_hashes (hash, article_raw_id, hash_type) VALUES (?1, ?2, ?3)')
+      .bind(hash, articleRawId, 'content')
+      .run();
   }
 
   // ─── User Preferences ─────────────────────────────────────

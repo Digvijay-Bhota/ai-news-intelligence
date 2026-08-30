@@ -44,6 +44,8 @@ describe('fetchAndIngest', () => {
     const mockDbClient = {
       getArticleByExternalId: vi.fn().mockResolvedValue(null),
       createArticle: vi.fn().mockResolvedValue({ id: 1 }),
+      getDedupHash: vi.fn().mockResolvedValue(null),
+      createDedupHash: vi.fn().mockResolvedValue(undefined),
     };
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
 
