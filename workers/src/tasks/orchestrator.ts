@@ -24,11 +24,26 @@ export async function runPipeline(env: Env): Promise<void> {
     // 1. Ingestion
     const sources = await db.listSources();
     for (const source of sources.slice(0, MAX_SOURCES)) {
+      const now = Math.floor(Date.now() / 1000);
+      const health = await db.getSourceHealth(source.id);
       try {
         await fetchAndIngest(env, source);
-        await db.updateSourceHealth(source.id, 'success');
+        await db.updateSourceHealth(source.id, {
+          status: 'healthy',
+          last_success_at: now,
+          last_failure_at: health?.last_failure_at ?? null,
+          consecutive_failures: 0,
+          error_message: null
+        });
       } catch (e) {
-        await db.updateSourceHealth(source.id, 'failed', e instanceof Error ? e.message : 'Unknown error');
+        const errorMsg = e instanceof Error ? e.message : 'Unknown error';
+        await db.updateSourceHealth(source.id, {
+          status: 'down',
+          last_success_at: health?.last_success_at ?? null,
+          last_failure_at: now,
+          consecutive_failures: (health?.consecutive_failures ?? 0) + 1,
+          error_message: errorMsg
+        });
       }
     }
 

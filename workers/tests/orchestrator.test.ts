@@ -11,6 +11,7 @@ describe('Orchestrator', () => {
     const mockDbClient = {
       createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
       listSources: vi.fn().mockResolvedValue([{ id: 1, feed_url: 'u' }]),
+      getSourceHealth: vi.fn().mockResolvedValue(null),
       updateSourceHealth: vi.fn(),
       listArticles: vi.fn().mockResolvedValue({ articles: [{ id: 1 }] }),
       claimArticle: vi.fn().mockResolvedValue(true),
@@ -24,6 +25,7 @@ describe('Orchestrator', () => {
 
     expect(fetchSpy).toHaveBeenCalled();
     expect(processSpy).toHaveBeenCalled();
+    expect(mockDbClient.updateSourceHealth).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'healthy' }));
     expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed');
   });
 
@@ -32,6 +34,7 @@ describe('Orchestrator', () => {
     const mockDbClient = {
       createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
       listSources: vi.fn().mockResolvedValue([{ id: 1, feed_url: 'u' }]),
+      getSourceHealth: vi.fn().mockResolvedValue(null),
       updateSourceHealth: vi.fn(),
       listArticles: vi.fn().mockResolvedValue({ articles: [{ id: 1 }] }),
       claimArticle: vi.fn().mockResolvedValue(true),
@@ -44,7 +47,7 @@ describe('Orchestrator', () => {
 
     await runPipeline(env);
 
-    expect(mockDbClient.updateSourceHealth).toHaveBeenCalledWith(1, 'failed', 'Fetch fail');
+    expect(mockDbClient.updateSourceHealth).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'down', error_message: 'Fetch fail' }));
     expect(mockDbClient.updateArticleStatus).toHaveBeenCalledWith(1, 'failed');
     expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed');
   });

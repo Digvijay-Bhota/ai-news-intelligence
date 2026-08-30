@@ -2,7 +2,7 @@
  * D1 Database Access Layer — Phase 0 (Canonical)
  */
 
-import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, UserPreference, SavedArticle, HiddenStory, PipelineToken } from '../types';
+import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, UserPreference, SavedArticle, HiddenStory, PipelineToken } from '../types';
 
 export class DbClient {
   constructor(private readonly db: D1Database) {}
@@ -235,13 +235,31 @@ export class DbClient {
       .run();
   }
 
-  async updateSourceHealth(source_id: number, status: string, error?: string): Promise<void> {
+  async getSourceHealth(source_id: number): Promise<SourceHealth | null> {
+    return this.db.prepare('SELECT * FROM source_health WHERE source_id = ?1').bind(source_id).first<SourceHealth>();
+  }
+
+  async updateSourceHealth(source_id: number, data: {
+    status: string,
+    last_success_at?: number | null,
+    last_failure_at?: number | null,
+    consecutive_failures: number,
+    error_message: string | null
+  }): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     await this.db
       .prepare(
-        'UPDATE source_health SET status = ?1, error_message = ?2, checked_at = ?3 WHERE source_id = ?4'
+        'UPDATE source_health SET status = ?1, last_success_at = ?2, last_failure_at = ?3, consecutive_failures = ?4, error_message = ?5, checked_at = ?6 WHERE source_id = ?7'
       )
-      .bind(status, error ?? null, now, source_id)
+      .bind(
+        data.status,
+        data.last_success_at ?? null,
+        data.last_failure_at ?? null,
+        data.consecutive_failures,
+        data.error_message,
+        now,
+        source_id
+      )
       .run();
   }
 
