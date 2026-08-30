@@ -16,10 +16,30 @@ export async function processArticle(env: Env, article: ArticleRaw): Promise<voi
   });
 
   try {
-    const prompt = `Analyze this article and return JSON with summary, topics (list of strings), and events (list with title, description, severity):
-Title: ${article.title}
-Summary: ${article.summary ?? 'N/A'}
-Content: ${article.raw_content?.slice(0, 2000) ?? 'N/A'}`;
+    const prompt = `Analyze this article and return ONLY a JSON object with exactly the following structure:
+{
+  "summary": "string",
+  "topics": ["string"],
+  "events": [
+    {
+      "title": "string",
+      "description": "string",
+      "severity": "low|medium|high|critical"
+    }
+  ]
+}
+
+CRITICAL INSTRUCTIONS:
+- Output JSON ONLY. No markdown formatting, no code fences (\`\`\`json).
+- If there are no meaningful events, return an empty array for events: []
+- title must be a non-empty string.
+- description must be a non-empty string.
+- severity must be exactly one of: low, medium, high, critical.
+- Do NOT use null for any event fields.
+
+Article Title: ${article.title}
+Article Summary: ${article.summary ?? 'N/A'}
+Article Content: ${article.raw_content?.slice(0, 2000) ?? 'N/A'}`;
 
     const enrichment = await retryWithBackoff(() => generateEnrichment(env, prompt));
     validateEnrichment(enrichment);
@@ -72,13 +92,32 @@ Content: ${article.raw_content?.slice(0, 2000) ?? 'N/A'}`;
 }
 
 function validateEnrichment(data: any): asserts data is GeminiResponse {
-  if (typeof data.summary !== 'string') throw new Error('Invalid summary');
-  if (!Array.isArray(data.topics) || !data.topics.every((t: any) => typeof t === 'string')) throw new Error('Invalid topics');
-  if (!Array.isArray(data.events)) throw new Error('Invalid events');
+  if (!data || typeof data !== 'object') {
+    throw new Error('Invalid structure: expected a JSON object');
+  }
+  if (typeof data.summary !== 'string') {
+    throw new Error('Invalid structure: summary must be a string');
+  }
+  if (!Array.isArray(data.topics) || !data.topics.every((t: any) => typeof t === 'string')) {
+    throw new Error('Invalid structure: topics must be an array of strings');
+  }
+  if (!Array.isArray(data.events)) {
+    throw new Error('Invalid structure: events must be an array');
+  }
+
   const severities = ['low', 'medium', 'high', 'critical'];
   for (const e of data.events) {
-    if (typeof e.title !== 'string' || typeof e.description !== 'string' || !severities.includes(e.severity)) {
-      throw new Error('Invalid event structure');
+    if (!e || typeof e !== 'object') {
+      throw new Error('Invalid event structure: event must be an object');
+    }
+    if (typeof e.title !== 'string' || e.title.trim() === '') {
+      throw new Error('Invalid event structure: title must be a non-empty string');
+    }
+    if (typeof e.description !== 'string' || e.description.trim() === '') {
+      throw new Error('Invalid event structure: description must be a non-empty string');
+    }
+    if (!severities.includes(e.severity)) {
+      throw new Error('Invalid event structure: severity must be one of low, medium, high, critical');
     }
   }
 }

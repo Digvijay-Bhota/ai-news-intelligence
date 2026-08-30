@@ -36,6 +36,17 @@ export async function generateEnrichment(
   }
 
   const data = (await response.json()) as any;
-  const text = data.candidates[0].content.parts[0].text;
-  return JSON.parse(text) as GeminiResponse;
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (typeof text !== 'string') {
+    throw new Error('Invalid response structure from Gemini API');
+  }
+
+  const cleanedText = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+
+  try {
+    return JSON.parse(cleanedText) as GeminiResponse;
+  } catch (e) {
+    throw new Error('Invalid JSON returned by Gemini API');
+  }
 }

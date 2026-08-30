@@ -43,7 +43,7 @@ describe('Article Processor', () => {
     expect(mockDbClient.updateAiJobStatus).toHaveBeenCalledWith(10, 'completed', JSON.stringify(mockEnrichment));
   });
 
-  it('rejects invalid AI JSON', async () => {
+  it('rejects invalid AI JSON structure', async () => {
     const env = createMockEnv();
     const article: ArticleRaw = {
       id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
@@ -58,8 +58,70 @@ describe('Article Processor', () => {
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
     vi.spyOn(geminiModule, 'generateEnrichment').mockResolvedValue({ invalid: 'structure' } as any);
 
-    await expect(processArticle(env, article)).rejects.toThrow();
+    await expect(processArticle(env, article)).rejects.toThrow('Invalid structure: summary must be a string');
     expect(mockDbClient.updateAiJobStatus).toHaveBeenCalledWith(10, 'failed', undefined, expect.any(String));
+  });
+
+  it('rejects missing or null event description', async () => {
+    const env = createMockEnv();
+    const article: ArticleRaw = {
+      id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
+      raw_content: 'content', published_at: null, fetched_at: 0, language: 'en', status: 'pending', created_at: 0
+    };
+
+    const mockDbClient = {
+      createAiJob: vi.fn().mockResolvedValue({ id: 10 }),
+      createAiLog: vi.fn(),
+      updateAiJobStatus: vi.fn(),
+    };
+    vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+    vi.spyOn(geminiModule, 'generateEnrichment').mockResolvedValue({
+      summary: 's', topics: [], events: [{ title: 't', description: null, severity: 'low' }]
+    } as any);
+
+    await expect(processArticle(env, article)).rejects.toThrow('Invalid event structure: description must be a non-empty string');
+  });
+
+  it('rejects invalid event severity', async () => {
+    const env = createMockEnv();
+    const article: ArticleRaw = {
+      id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
+      raw_content: 'content', published_at: null, fetched_at: 0, language: 'en', status: 'pending', created_at: 0
+    };
+
+    const mockDbClient = {
+      createAiJob: vi.fn().mockResolvedValue({ id: 10 }),
+      createAiLog: vi.fn(),
+      updateAiJobStatus: vi.fn(),
+    };
+    vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+    vi.spyOn(geminiModule, 'generateEnrichment').mockResolvedValue({
+      summary: 's', topics: [], events: [{ title: 't', description: 'd', severity: 'extreme' }]
+    } as any);
+
+    await expect(processArticle(env, article)).rejects.toThrow('Invalid event structure: severity must be one of low, medium, high, critical');
+  });
+
+  it('allows empty events array', async () => {
+    const env = createMockEnv();
+    const article: ArticleRaw = {
+      id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
+      raw_content: 'content', published_at: null, fetched_at: 0, language: 'en', status: 'pending', created_at: 0
+    };
+
+    const mockDbClient = {
+      createAiJob: vi.fn().mockResolvedValue({ id: 10 }),
+      createArticleContent: vi.fn(),
+      updateArticleStatus: vi.fn(),
+      updateAiJobStatus: vi.fn(),
+    };
+    vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+
+    const mockEnrichment = { summary: 's', topics: [], events: [] };
+    vi.spyOn(geminiModule, 'generateEnrichment').mockResolvedValue(mockEnrichment as any);
+
+    await processArticle(env, article);
+    expect(mockDbClient.updateAiJobStatus).toHaveBeenCalledWith(10, 'completed', JSON.stringify(mockEnrichment));
   });
 
   it('retries on 429', async () => {
