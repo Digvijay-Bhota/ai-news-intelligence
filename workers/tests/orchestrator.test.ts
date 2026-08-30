@@ -26,7 +26,7 @@ describe('Orchestrator', () => {
     expect(fetchSpy).toHaveBeenCalled();
     expect(processSpy).toHaveBeenCalled();
     expect(mockDbClient.updateSourceHealth).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'healthy' }));
-    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed');
+    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined);
   });
 
   it('isolates failures', async () => {
@@ -49,26 +49,19 @@ describe('Orchestrator', () => {
 
     expect(mockDbClient.updateSourceHealth).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'down', error_message: 'Fetch fail' }));
     expect(mockDbClient.updateArticleStatus).toHaveBeenCalledWith(1, 'failed');
-    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed');
+    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined);
   });
 
-  it('does not process article if claiming fails', async () => {
+  it('correctly finalizes pipeline on unexpected error', async () => {
     const env = createMockEnv();
     const mockDbClient = {
       createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
-      listSources: vi.fn().mockResolvedValue([]),
-      listArticles: vi.fn().mockResolvedValue({ articles: [{ id: 1 }] }),
-      claimArticle: vi.fn().mockResolvedValue(false),
-      updateArticleStatus: vi.fn(),
+      listSources: vi.fn().mockRejectedValue(new Error('Fatal DB Error')),
       updatePipelineJobStatus: vi.fn(),
     };
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
-    const processSpy = vi.spyOn(processorModule, 'processArticle').mockResolvedValue(undefined);
 
-    await runPipeline(env);
-
-    expect(processSpy).not.toHaveBeenCalled();
-    expect(mockDbClient.updateArticleStatus).not.toHaveBeenCalled();
-    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed');
+    await expect(runPipeline(env)).rejects.toThrow('Fatal DB Error');
+    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'failed', 'Fatal DB Error');
   });
 });

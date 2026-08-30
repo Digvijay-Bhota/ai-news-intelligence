@@ -20,6 +20,8 @@ export async function runPipeline(env: Env): Promise<void> {
     error_message: null
   });
 
+  let error: Error | undefined;
+
   try {
     // 1. Ingestion
     const sources = await db.listSources();
@@ -60,10 +62,14 @@ export async function runPipeline(env: Env): Promise<void> {
         // processor handles ai_job status and logs
       }
     }
-
-    await db.updatePipelineJobStatus(pipelineJob.id, 'completed');
   } catch (e) {
-    await db.updatePipelineJobStatus(pipelineJob.id, 'failed', e instanceof Error ? e.message : 'Unknown error');
-    throw e;
+    error = e instanceof Error ? e : new Error(String(e));
+  } finally {
+    await db.updatePipelineJobStatus(
+      pipelineJob.id,
+      error ? 'failed' : 'completed',
+      error?.message
+    );
+    if (error) throw error;
   }
 }

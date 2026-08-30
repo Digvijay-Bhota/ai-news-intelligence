@@ -9,11 +9,11 @@ crons = ["0 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "ai-news-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "f174571c-041a-47aa-b59b-78e67b8fe176"
 
 [[kv_namespaces]]
 binding = "CACHE"
-id = "00000000-0000-0000-0000-000000000000"
+id = "aa49bafbadca4a8196c164d92fb883e1"
 
 [vars]
 ENVIRONMENT = "development"

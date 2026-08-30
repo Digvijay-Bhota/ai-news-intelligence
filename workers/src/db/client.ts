@@ -111,13 +111,14 @@ export class DbClient {
   // ─── Pipeline Jobs ────────────────────────────────────────
   async createPipelineJob(job: Omit<PipelineJob, 'id' | 'created_at' | 'started_at' | 'completed_at' | 'retry_count'> & Partial<Pick<PipelineJob, 'started_at' | 'completed_at' | 'retry_count'>>): Promise<PipelineJob> {
     const now = Math.floor(Date.now() / 1000);
+    const startedAt = job.status === 'running' ? now : (job.started_at ?? null);
     const result = await this.db
       .prepare(
-        `INSERT INTO pipeline_jobs (job_type, status, payload, created_at)
-         VALUES (?1, ?2, ?3, ?4)
+        `INSERT INTO pipeline_jobs (job_type, status, payload, created_at, started_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
          RETURNING *`
       )
-      .bind(job.job_type, job.status ?? 'queued', job.payload ?? null, now)
+      .bind(job.job_type, job.status ?? 'queued', job.payload ?? null, now, startedAt)
       .first<PipelineJob>();
     if (!result) throw new Error('Failed to create pipeline job');
     return result;
@@ -225,7 +226,7 @@ export class DbClient {
     return result.meta.changes === 1;
   }
 
-  async updatePipelineJobStatus(id: number, status: string, error?: string): Promise<void> {
+  async updatePipelineJobStatus(id: number, status: string, error?: string | null): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     await this.db
       .prepare(
