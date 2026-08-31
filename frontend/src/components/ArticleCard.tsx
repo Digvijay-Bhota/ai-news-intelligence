@@ -12,7 +12,7 @@ export function ArticleCard({ article }: { article: Article }) {
         <div className="flex justify-between items-start mb-3">
           <span className="text-sm font-semibold text-indigo-600 uppercase tracking-wider">{article.source}</span>
           <div className="flex items-center text-gray-500 text-xs" title={article.published_at ? new Date(article.published_at * 1000).toLocaleString() : undefined}>
-            <ClockIcon className="w-3.5 h-3.5 mr-1" />
+            <ClockIcon className="w-3.5 h-3.5 mr-1.5" />
             <time dateTime={article.published_at ? new Date(article.published_at * 1000).toISOString() : undefined}>
               {formatRelativeTime(article.published_at)}
             </time>
@@ -35,7 +35,7 @@ export function ArticleCard({ article }: { article: Article }) {
 
         {(article.topics.length > 0 || article.events.length > 0) && (
           <div className="mt-4 pt-4 border-t border-gray-100">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap -m-1">
               {article.events.map((e, idx) => (
                 <EventBadge key={idx} event={e} />
               ))}
@@ -55,7 +55,7 @@ export function ArticleCard({ article }: { article: Article }) {
           className="inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-800 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded px-2 py-1 -mr-2"
           aria-label={`Read full article: ${article.title}`}
         >
-          Read article <ExternalLinkIcon className="w-4 h-4 ml-1.5" />
+          Read article <span className="ml-1.5 inline-flex items-center"><ExternalLinkIcon className="w-4 h-4" /></span>
         </a>
       </div>
     </article>
