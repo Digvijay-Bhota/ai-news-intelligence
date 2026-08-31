@@ -27,7 +27,7 @@ export default function SavedPage() {
 
       {savedArticles.length === 0 ? (
         <div className="text-center py-20 bg-white rounded-xl border border-gray-200">
-          <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+          <svg role="presentation" className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
           </svg>
           <h3 className="mt-2 text-sm font-semibold text-gray-900">No saved articles</h3>
