@@ -90,28 +90,47 @@ export class DbClient {
     offset?: number;
     source_id?: number;
     status?: string;
+    q?: string;
+    topic_slug?: string;
     orderBy?: 'published_at' | 'created_at';
     order?: 'ASC' | 'DESC';
   } = {}): Promise<{ articles: ArticleRaw[]; total: number }> {
-    const { limit = 20, offset = 0, source_id, status, orderBy = 'published_at', order = 'DESC' } = options;
+    const { limit = 20, offset = 0, source_id, status, q, topic_slug, orderBy = 'published_at', order = 'DESC' } = options;
 
     const conditions: string[] = [];
     const params: (string | number)[] = [];
 
-    if (source_id !== undefined) { conditions.push('source_id = ?' + (params.length + 1)); params.push(source_id); }
-    if (status) { conditions.push('status = ?' + (params.length + 1)); params.push(status); }
+    if (source_id !== undefined) {
+      params.push(source_id);
+      conditions.push('articles_raw.source_id = ?' + params.length);
+    }
+    if (status) {
+      params.push(status);
+      conditions.push('articles_raw.status = ?' + params.length);
+    }
+    if (q) {
+      params.push(`%${q}%`, `%${q}%`);
+      conditions.push(`(articles_raw.title LIKE ?${params.length - 1} OR articles_raw.summary LIKE ?${params.length})`);
+    }
+
+    let joinClause = '';
+    if (topic_slug) {
+      joinClause = 'JOIN article_topics ON articles_raw.id = article_topics.article_raw_id JOIN topics ON article_topics.topic_id = topics.id';
+      params.push(topic_slug);
+      conditions.push(`topics.slug = ?${params.length}`);
+    }
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
     const countResult = await this.db
-      .prepare(`SELECT COUNT(*) as total FROM articles_raw ${where}`)
+      .prepare(`SELECT COUNT(DISTINCT articles_raw.id) as total FROM articles_raw ${joinClause} ${where}`)
       .bind(...params)
       .first<{ total: number }>();
 
     const articles = await this.db
       .prepare(
-        `SELECT * FROM articles_raw ${where}
-         ORDER BY ${orderBy} ${order}
+        `SELECT DISTINCT articles_raw.* FROM articles_raw ${joinClause} ${where}
+         ORDER BY articles_raw.${orderBy} ${order}
          LIMIT ?${params.length + 1} OFFSET ?${params.length + 2}`
       )
       .bind(...params, limit, offset)

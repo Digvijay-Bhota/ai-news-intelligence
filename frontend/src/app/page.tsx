@@ -1,4 +1,6 @@
+import { Suspense } from 'react';
 import { Feed } from '../components/Feed';
+import { FeedFilters } from '../components/FeedFilters';
 
 export default function HomePage() {
   return (
@@ -8,7 +10,13 @@ export default function HomePage() {
         <p className="mt-2 text-lg text-gray-600">Curated AI news, developments, and analysis.</p>
       </div>
 
-      <Feed />
+      <Suspense fallback={<div className="h-16 bg-gray-100 rounded-lg animate-pulse mb-6"></div>}>
+        <FeedFilters />
+      </Suspense>
+
+      <Suspense fallback={<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"><div className="h-64 bg-gray-100 rounded-lg animate-pulse"></div></div>}>
+        <Feed />
+      </Suspense>
     </div>
   );
 }

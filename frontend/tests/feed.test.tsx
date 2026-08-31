@@ -5,12 +5,27 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Feed } from '../src/components/Feed';
+import { FeedFilters } from '../src/components/FeedFilters';
 import { ArticleCard } from '../src/components/ArticleCard';
 import * as api from '../src/lib/api';
 import { UserArticlesProvider } from '../src/lib/userArticlesContext';
 
 vi.mock('../src/lib/api', () => ({
   fetchFeed: vi.fn(),
+  fetchTopics: vi.fn().mockResolvedValue({ success: true, data: [] }),
+  fetchSources: vi.fn().mockResolvedValue({ success: true, data: [] })
+}));
+
+let mockSearchParams = new URLSearchParams();
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    prefetch: vi.fn()
+  }),
+  usePathname: () => '/',
+  useSearchParams: () => mockSearchParams
 }));
 
 const mockArticle = {
@@ -221,6 +236,53 @@ describe('Article Actions', () => {
     // The article is hidden from feed
     await waitFor(() => {
       expect(screen.queryByText('Test Article Title')).toBeNull();
+    });
+  });
+});
+
+describe('Feed Filters', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it('initializes filters from URL', async () => {
+    mockSearchParams.set('q', 'robotics');
+    mockSearchParams.set('topic', 'ai');
+    mockSearchParams.set('source_id', '1');
+
+    vi.mocked(api.fetchFeed).mockResolvedValueOnce({
+      success: true,
+      data: {
+        meta: { limit: 20, offset: 0, total: 1 },
+        items: [mockArticle],
+      }
+    });
+
+    renderWithProvider(<Feed />);
+
+    await waitFor(() => {
+      expect(api.fetchFeed).toHaveBeenCalledWith(
+        20, 0, 'robotics', 'ai', '1', expect.any(AbortSignal)
+      );
+    });
+  });
+
+  it('renders FeedFilters with correct defaults and metadata', async () => {
+    mockSearchParams.set('q', 'test-query');
+    vi.mocked(api.fetchTopics).mockResolvedValueOnce({
+      success: true, data: [{ id: 1, name: 'AI Topic', slug: 'ai', description: '', active: 1 }]
+    });
+    vi.mocked(api.fetchSources).mockResolvedValueOnce({
+      success: true, data: [{ id: 1, name: 'TechCrunch', base_url: '', source_type: '', active: 1 }]
+    });
+
+    renderWithProvider(<FeedFilters />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('test-query')).toBeDefined();
+      expect(screen.getByText('AI Topic')).toBeDefined();
+      expect(screen.getByText('TechCrunch')).toBeDefined();
     });
   });
 });

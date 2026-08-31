@@ -185,3 +185,30 @@ describe('DbClient', () => {
     });
   });
 });
+
+describe('listArticles Filters', () => {
+  it('applies q, topic_slug, and source_id filters', async () => {
+    const { createMockD1Database } = await import('./setup');
+    const db = createMockD1Database();
+    const client = new DbClient(db);
+
+    const bindMock = vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [] }) });
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      // Mock both count and select queries
+      if (sql.includes('COUNT')) {
+        return { bind: () => ({ first: async () => ({ total: 0 }) }) } as any;
+      }
+      return { bind: bindMock } as any;
+    });
+
+    await client.listArticles({ q: 'test', topic_slug: 'ai', source_id: 1 });
+
+    expect(bindMock).toHaveBeenCalled();
+    const bindArgs = bindMock.mock.calls[0];
+    // Check that params array contains the correctly parsed/bound values
+    // source_id (1), q (%test%, %test%), topic_slug (ai), limit (20), offset (0)
+    expect(bindArgs).toContain(1);
+    expect(bindArgs).toContain('%test%');
+    expect(bindArgs).toContain('ai');
+  });
+});

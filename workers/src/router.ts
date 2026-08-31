@@ -88,13 +88,24 @@ async function handleFeed(request: Request, env: Env): Promise<Response> {
   const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '20', 10), 100);
   const offset = parseInt(url.searchParams.get('offset') ?? '0', 10);
   const sourceId = url.searchParams.get('source_id');
+  const q = url.searchParams.get('q');
+  const topic = url.searchParams.get('topic');
 
-  const cacheKey = generateCacheKey('feed', { limit, offset, sourceId: sourceId ?? undefined });
+  const cacheKey = generateCacheKey('feed', {
+    limit,
+    offset,
+    sourceId: sourceId ?? undefined,
+    q: q ?? undefined,
+    topic: topic ?? undefined
+  });
+
   const result = await withCache(
     cacheKey,
     () => createDbClient(env).listArticles({
       limit, offset,
       source_id: sourceId ? parseInt(sourceId, 10) : undefined,
+      q: q ? q.slice(0, 100) : undefined, // Safe truncation
+      topic_slug: topic ? topic.slice(0, 100) : undefined,
       status: 'processed',
     }),
     env,
@@ -112,6 +123,28 @@ async function handleFeed(request: Request, env: Env): Promise<Response> {
     },
     items,
   });
+}
+
+async function handleGetTopics(_request: Request, env: Env): Promise<Response> {
+  const cacheKey = generateCacheKey('topics', {});
+  const topics = await withCache(
+    cacheKey,
+    () => createDbClient(env).listTopics(),
+    env,
+    300
+  );
+  return success(topics);
+}
+
+async function handleGetSources(_request: Request, env: Env): Promise<Response> {
+  const cacheKey = generateCacheKey('sources', {});
+  const sources = await withCache(
+    cacheKey,
+    () => createDbClient(env).listSources(),
+    env,
+    300
+  );
+  return success(sources);
 }
 
 async function handleGetPreferences(request: Request, env: Env): Promise<Response> {
@@ -350,6 +383,18 @@ export async function route(request: Request, env: Env): Promise<Response> {
       await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/feed', env);
       response = await handleFeed(request, env);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    if (path === '/api/v1/topics' && request.method === 'GET') {
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/topics', env);
+      response = await handleGetTopics(request, env);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    if (path === '/api/v1/sources' && request.method === 'GET') {
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/sources', env);
+      response = await handleGetSources(request, env);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useUserArticles } from '../lib/userArticlesContext';
 import { fetchFeed } from '../lib/api';
 import type { Article } from '../types';
@@ -12,6 +13,11 @@ import { EmptyState } from './EmptyState';
 const LIMIT = 20;
 
 export function Feed() {
+  const searchParams = useSearchParams();
+  const q = searchParams.get('q') || undefined;
+  const topic = searchParams.get('topic') || undefined;
+  const source_id = searchParams.get('source_id') || undefined;
+
   const [articles, setArticles] = useState<Article[]>([]);
   const { hiddenArticleIds } = useUserArticles();
   const [loading, setLoading] = useState(true);
@@ -37,7 +43,7 @@ export function Feed() {
       }
 
       const currentOffset = isLoadMore ? offset : 0;
-      const response = await fetchFeed(LIMIT, currentOffset, abortControllerRef.current.signal);
+      const response = await fetchFeed(LIMIT, currentOffset, q, topic, source_id, abortControllerRef.current.signal);
 
       if (response.success) {
         const newArticles = response.data.items;
@@ -60,7 +66,7 @@ export function Feed() {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [offset]);
+  }, [offset, q, topic, source_id]);
 
   useEffect(() => {
     loadFeed(false);
@@ -69,7 +75,7 @@ export function Feed() {
         abortControllerRef.current.abort();
       }
     };
-  }, []);
+  }, [q, topic, source_id]);
 
   if (loading) {
     return (

@@ -264,3 +264,7 @@ INSERT OR IGNORE INTO topics (name, slug, description) VALUES
   ('Cybersecurity', 'cybersecurity', 'Security breaches, threats, and defenses'),
   ('Cloud Computing', 'cloud-computing', 'AWS, Azure, GCP, and cloud infrastructure'),
   ('Hardware', 'hardware', 'CPUs, GPUs, and consumer electronics');
+
+-- M7-D Topic Filters
+CREATE INDEX IF NOT EXISTS idx_topics_slug ON topics(slug);
+CREATE INDEX IF NOT EXISTS idx_article_topics_topic ON article_topics(topic_id);
