@@ -26,7 +26,7 @@ export function createMockEnv(overrides: Partial<Env> = {}): Env {
   };
 }
 
-export function createMockD1Database(): D1Database {
+export function createMockD1Database(seed = false): D1Database {
   const storage = new Map<string, Record<string, unknown>[]>();
   return {
     prepare: (query: string) => ({
@@ -86,7 +86,7 @@ export function createMockD1Database(): D1Database {
 },
         all: async <T>() => {
           const upperQuery = query.toUpperCase();
-          if (upperQuery.includes('SELECT * FROM ARTICLES_RAW')) {
+          if (seed && upperQuery.includes('SELECT * FROM ARTICLES_RAW')) {
             return {
               results: [{
                 id: 1, external_id: 'ext-1', source_id: 1, title: 'Integration Test Article',
@@ -97,25 +97,25 @@ export function createMockD1Database(): D1Database {
               success: true, meta: {}
             };
           }
-          if (upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW')) {
+          if (seed && upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW')) {
             return {
               results: [{ total: 1 }] as unknown as T[],
               success: true, meta: {}
             };
           }
-          if (upperQuery.includes('FROM ARTICLE_TOPICS AT')) {
+          if (seed && upperQuery.includes('FROM ARTICLE_TOPICS AT')) {
             return {
               results: [{ article_raw_id: 1, name: 'AI Integration Topic' }] as unknown as T[],
               success: true, meta: {}
             };
           }
-          if (upperQuery.includes('FROM ARTICLE_EVENTS AE')) {
+          if (seed && upperQuery.includes('FROM ARTICLE_EVENTS AE')) {
             return {
               results: [{ article_raw_id: 1, title: 'AI Integration Event' }] as unknown as T[],
               success: true, meta: {}
             };
           }
-          if (upperQuery.includes('FROM SOURCES WHERE ID IN')) {
+          if (seed && upperQuery.includes('FROM SOURCES WHERE ID IN')) {
             return {
               results: [{ id: 1, name: 'Integration Source' }] as unknown as T[],
               success: true, meta: {}

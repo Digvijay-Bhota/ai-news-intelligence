@@ -6,7 +6,7 @@ import type { ApiResponse } from '../src/types';
 
 describe('Integration', () => {
   function makeEnv() {
-    return createMockEnv({ DB: createMockD1Database(), CACHE: createMockKVNamespace() });
+    return createMockEnv({ DB: createMockD1Database(true), CACHE: createMockKVNamespace() });
   }
 
   async function signedRequest(url: string, method: string, body?: object, isInternal = false): Promise<Request> {
