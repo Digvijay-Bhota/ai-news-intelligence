@@ -1,11 +1,44 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { Article } from '../types';
 import { formatRelativeTime } from '../lib/utils';
 import { TopicBadge } from './TopicBadge';
 import { EventBadge } from './EventBadge';
-import { ClockIcon, ExternalLinkIcon } from './icons';
+import { ClockIcon, ExternalLinkIcon, BookmarkIcon, EyeOffIcon } from './icons';
+import { useUserArticles } from '../lib/userArticlesContext';
 
 export function ArticleCard({ article }: { article: Article }) {
+  const { savedArticles, saveArticle, unsaveArticle, hideArticle } = useUserArticles();
+  const [isSaving, setIsSaving] = useState(false);
+  const [isHiding, setIsHiding] = useState(false);
+
+  const isSaved = savedArticles.some(s => s.article.id === article.id);
+
+  const handleSaveToggle = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      if (isSaved) {
+        await unsaveArticle(article.id);
+      } else {
+        await saveArticle(article);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleHide = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (isHiding) return;
+    setIsHiding(true);
+    try {
+      await hideArticle(article.id);
+    } finally {
+      setIsHiding(false);
+    }
+  };
+
   return (
     <article className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow duration-200 flex flex-col h-full">
       <div className="p-5 flex-1 flex flex-col">
@@ -47,7 +80,29 @@ export function ArticleCard({ article }: { article: Article }) {
         )}
       </div>
 
-      <div className="bg-gray-50 px-5 py-3 border-t border-gray-100 flex justify-end">
+      <div className="bg-gray-50 px-5 py-3 border-t border-gray-100 flex justify-between items-center">
+        <div className="flex space-x-2">
+          <button
+            onClick={handleSaveToggle}
+            disabled={isSaving}
+            className={`inline-flex items-center p-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors ${isSaved ? 'text-indigo-600 bg-indigo-50 hover:bg-indigo-100' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+            aria-label={isSaved ? "Unsave article" : "Save article"}
+            title={isSaved ? "Unsave article" : "Save article"}
+          >
+            <span className="inline-flex items-center"><BookmarkIcon className="w-5 h-5" solid={isSaved} /></span>
+          </button>
+
+          <button
+            onClick={handleHide}
+            disabled={isHiding}
+            className="inline-flex items-center p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
+            aria-label="Hide article"
+            title="Hide article"
+          >
+            <span className="inline-flex items-center"><EyeOffIcon className="w-5 h-5" /></span>
+          </button>
+        </div>
+
         <a
           href={article.url}
           target="_blank"

@@ -1,6 +1,7 @@
 import './globals.css';
 import { ReactNode } from 'react';
 import { Header } from '../components/Header';
+import { UserArticlesProvider } from '../lib/userArticlesContext';
 
 export const metadata = {
   title: 'AI News Intelligence - Professional Feed',
@@ -11,13 +12,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body className="min-h-screen bg-gray-50 flex flex-col text-gray-900 antialiased font-sans">
-        <Header />
+        <UserArticlesProvider>
+          <Header />
 
-        <div className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
-          <main className="w-full">
-            {children}
-          </main>
-        </div>
+          <div className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
+            <main className="w-full">
+              {children}
+            </main>
+          </div>
+        </UserArticlesProvider>
 
         <footer className="bg-white border-t border-gray-200 py-8 mt-auto">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row justify-between items-center text-sm text-gray-500">

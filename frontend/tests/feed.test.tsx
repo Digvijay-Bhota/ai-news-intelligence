@@ -7,6 +7,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Feed } from '../src/components/Feed';
 import { ArticleCard } from '../src/components/ArticleCard';
 import * as api from '../src/lib/api';
+import { UserArticlesProvider } from '../src/lib/userArticlesContext';
 
 vi.mock('../src/lib/api', () => ({
   fetchFeed: vi.fn(),
@@ -25,9 +26,13 @@ const mockArticle = {
   events: ['Launch'],
 };
 
+const renderWithProvider = (ui: React.ReactElement) => {
+  return render(<UserArticlesProvider>{ui}</UserArticlesProvider>);
+};
+
 describe('ArticleCard', () => {
   it('renders title, source, summary, and external link', () => {
-    render(<ArticleCard article={mockArticle} />);
+    renderWithProvider(<ArticleCard article={mockArticle} />);
 
     expect(screen.getByText('Test Source')).toBeDefined();
     expect(screen.getByText('Test Article Title')).toBeDefined();
@@ -38,7 +43,7 @@ describe('ArticleCard', () => {
   });
 
   it('renders topic and event badges', () => {
-    render(<ArticleCard article={mockArticle} />);
+    renderWithProvider(<ArticleCard article={mockArticle} />);
     expect(screen.getByText('AI')).toBeDefined();
     expect(screen.getByText('Tech')).toBeDefined();
     expect(screen.getByText('Launch')).toBeDefined();
@@ -59,7 +64,7 @@ describe('Feed', () => {
       }
     });
 
-    render(<Feed />);
+    renderWithProvider(<Feed />);
 
     // Starts in loading state
     expect(document.querySelector('.animate-pulse')).toBeDefined();
@@ -78,7 +83,7 @@ describe('Feed', () => {
       }
     });
 
-    render(<Feed />);
+    renderWithProvider(<Feed />);
 
     await waitFor(() => {
       expect(screen.getByText('No articles found')).toBeDefined();
@@ -88,7 +93,7 @@ describe('Feed', () => {
   it('error state is shown on failure', async () => {
     vi.mocked(api.fetchFeed).mockRejectedValueOnce(new Error('Network failure'));
 
-    render(<Feed />);
+    renderWithProvider(<Feed />);
 
     await waitFor(() => {
       expect(screen.getByText('Unable to load feed')).toBeDefined();
@@ -113,7 +118,7 @@ describe('Feed', () => {
         }
       });
 
-    render(<Feed />);
+    renderWithProvider(<Feed />);
 
     await waitFor(() => {
       expect(screen.getByText('Test Article Title')).toBeDefined();
@@ -137,13 +142,85 @@ describe('Feed', () => {
       }
     });
 
-    render(<Feed />);
+    renderWithProvider(<Feed />);
 
     await waitFor(() => {
       expect(screen.getByText('Test Article Title')).toBeDefined();
     });
 
-    // total is 1, we fetched 1, so load more should not be present
     expect(screen.queryByRole('button', { name: /Load more articles/i })).toBeNull();
+  });
+});
+
+describe('Article Actions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    // mock global fetch
+    global.fetch = vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ id: 999 })
+    })) as any;
+  });
+
+  it('save and unsave flow', async () => {
+    vi.mocked(api.fetchFeed).mockResolvedValueOnce({
+      success: true,
+      data: {
+        meta: { limit: 20, offset: 0, total: 1 },
+        items: [mockArticle],
+      }
+    });
+
+    renderWithProvider(<Feed />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Article Title')).toBeDefined();
+    });
+
+    const saveBtn = screen.getByRole('button', { name: 'Save article' });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/saved', expect.objectContaining({ method: 'POST' }));
+    });
+
+    // UI updates to Unsave
+    expect(screen.getByRole('button', { name: 'Unsave article' })).toBeDefined();
+
+    const unsaveBtn = screen.getByRole('button', { name: 'Unsave article' });
+    fireEvent.click(unsaveBtn);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/saved/999', expect.objectContaining({ method: 'DELETE' }));
+    });
+  });
+
+  it('hide flow optimistically removes article', async () => {
+    vi.mocked(api.fetchFeed).mockResolvedValueOnce({
+      success: true,
+      data: {
+        meta: { limit: 20, offset: 0, total: 1 },
+        items: [mockArticle],
+      }
+    });
+
+    renderWithProvider(<Feed />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Article Title')).toBeDefined();
+    });
+
+    const hideBtn = screen.getByRole('button', { name: 'Hide article' });
+    fireEvent.click(hideBtn);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/hide', expect.objectContaining({ method: 'POST' }));
+    });
+
+    // The article is hidden from feed
+    await waitFor(() => {
+      expect(screen.queryByText('Test Article Title')).toBeNull();
+    });
   });
 });

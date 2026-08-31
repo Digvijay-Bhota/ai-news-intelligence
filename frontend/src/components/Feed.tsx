@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useUserArticles } from '../lib/userArticlesContext';
 import { fetchFeed } from '../lib/api';
 import type { Article } from '../types';
 import { ArticleCard } from './ArticleCard';
@@ -12,6 +13,7 @@ const LIMIT = 20;
 
 export function Feed() {
   const [articles, setArticles] = useState<Article[]>([]);
+  const { hiddenArticleIds } = useUserArticles();
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +88,9 @@ export function Feed() {
     return <ErrorState message={error} onRetry={() => loadFeed(false)} />;
   }
 
-  if (!loading && articles.length === 0) {
+  const visibleArticles = articles.filter(a => !hiddenArticleIds.has(a.id));
+
+  if (!loading && visibleArticles.length === 0) {
     return <EmptyState />;
   }
 
@@ -101,7 +105,7 @@ export function Feed() {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {articles.map((article) => (
+        {visibleArticles.map((article) => (
           <ArticleCard key={article.id} article={article} />
         ))}
       </div>

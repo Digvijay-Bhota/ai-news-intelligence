@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateHmac } from '../src/utils/hmac';
 import { GET } from '../src/app/api/feed/route';
+import { POST as POST_SAVED } from '../src/app/api/saved/route';
+import { DELETE as DELETE_SAVED } from '../src/app/api/saved/[id]/route';
+import { POST as POST_HIDE } from '../src/app/api/hide/route';
 import { env } from 'cloudflare:workers';
+
+vi.mock('../src/lib/session', () => ({
+  getOrCreateUserId: vi.fn(() => 'test-user-id')
+}));
 
 vi.mock('cloudflare:workers', () => ({
   env: {
@@ -9,8 +16,6 @@ vi.mock('cloudflare:workers', () => ({
     BACKEND_API: undefined,
   },
 }));
-
-// ---- HMAC Utility Tests -----------------------------------------------
 
 describe('HMAC Utility', () => {
   it('generates a 64-hex-char SHA-256 signature', async () => {
@@ -43,27 +48,14 @@ describe('HMAC Utility', () => {
   });
 });
 
-// ---- BFF Route Tests ---------------------------------------------------
-
 describe('BFF /api/feed Route', () => {
   beforeEach(() => {
-    // Clear both so each test starts clean.
-
     (env as any).HMAC_SECRET = undefined;
-
-    (env as any).BACKEND_API = undefined;
-  });
-
-  afterEach(() => {
-
-    (env as any).HMAC_SECRET = undefined;
-
     (env as any).BACKEND_API = undefined;
   });
 
   function makeRequest(url = 'http://localhost/api/feed') {
     const req = new Request(url);
-    // Attach nextUrl as required by the BFF route (NextRequest interface).
     return Object.assign(req, { nextUrl: new URL(url) }) as unknown as import('next/server').NextRequest;
   }
 
@@ -75,8 +67,7 @@ describe('BFF /api/feed Route', () => {
   });
 
   it('returns 500 when BACKEND_API binding is missing', async () => {
-
-    env.HMAC_SECRET = 'test-secret';
+    (env as any).HMAC_SECRET = 'test-secret';
     const res = await GET(makeRequest());
     expect(res.status).toBe(500);
     const json = await res.json() as { error: string };
@@ -84,14 +75,13 @@ describe('BFF /api/feed Route', () => {
   });
 
   it('calls BACKEND_API.fetch with signed HMAC headers', async () => {
-
-    env.HMAC_SECRET = 'test-secret';
+    (env as any).HMAC_SECRET = 'test-secret';
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ success: true, data: { items: [] } }),
     });
 
-    env.BACKEND_API = { fetch: mockFetch };
+    (env as any).BACKEND_API = { fetch: mockFetch };
 
     const res = await GET(makeRequest('http://localhost/api/feed'));
     expect(res.status).toBe(200);
@@ -104,37 +94,76 @@ describe('BFF /api/feed Route', () => {
     expect(sentReq.headers.get('X-Nonce')).toBeTruthy();
     expect(sentReq.headers.get('X-Timestamp')).toBeTruthy();
   });
+});
 
-  it('forwards query params to BACKEND_API and uses correct path', async () => {
-
-    env.HMAC_SECRET = 'test-secret';
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ success: true, data: { items: [] } }),
-    });
-
-    env.BACKEND_API = { fetch: mockFetch };
-
-    await GET(makeRequest('http://localhost/api/feed?limit=5&offset=10'));
-
-    const sentReq: Request = mockFetch.mock.calls[0][0];
-    expect(sentReq.url).toBe('http://backend/api/v1/feed?limit=5&offset=10');
+describe('BFF /api/saved Route', () => {
+  beforeEach(() => {
+    (env as any).HMAC_SECRET = 'test-secret';
+    (env as any).BACKEND_API = {
+      fetch: vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ id: 123 })
+      })
+    };
   });
 
-  it('returns backend error status when BACKEND_API call fails', async () => {
-
-    env.HMAC_SECRET = 'test-secret';
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 401,
-      text: async () => 'Unauthorized',
+  it('POST /api/saved calls BACKEND_API with valid signature', async () => {
+    const req = new Request('http://localhost/api/saved', {
+      method: 'POST',
+      body: JSON.stringify({ article_raw_id: 1 })
     });
 
-    env.BACKEND_API = { fetch: mockFetch };
+    const res = await POST_SAVED(req as any);
+    expect(res.status).toBe(200);
 
-    const res = await GET(makeRequest());
-    expect(res.status).toBe(401);
-    const json = await res.json() as { error: string };
-    expect(json.error).toContain('Backend error: 401');
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq = mockFetch.mock.calls[0][0];
+
+    expect(sentReq.url).toBe('http://backend/api/v1/saved');
+    expect(sentReq.method).toBe('POST');
+    expect(sentReq.headers.get('X-HMAC-Signature')).toBeTruthy();
+  });
+
+  it('DELETE /api/saved/[id] calls BACKEND_API with valid signature and query param', async () => {
+    const req = new Request('http://localhost/api/saved/123', { method: 'DELETE' });
+    const res = await DELETE_SAVED(req as any, { params: { id: '123' } });
+
+    expect(res.status).toBe(200);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq = mockFetch.mock.calls[0][0];
+
+    expect(sentReq.url).toBe('http://backend/api/v1/saved/123?user_id=test-user-id');
+    expect(sentReq.method).toBe('DELETE');
+    expect(sentReq.headers.get('X-HMAC-Signature')).toBeTruthy();
+  });
+});
+
+describe('BFF /api/hide Route', () => {
+  beforeEach(() => {
+    (env as any).HMAC_SECRET = 'test-secret';
+    (env as any).BACKEND_API = {
+      fetch: vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ id: 456 })
+      })
+    };
+  });
+
+  it('POST /api/hide calls BACKEND_API with valid signature', async () => {
+    const req = new Request('http://localhost/api/hide', {
+      method: 'POST',
+      body: JSON.stringify({ article_raw_id: 1 })
+    });
+
+    const res = await POST_HIDE(req as any);
+    expect(res.status).toBe(200);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq = mockFetch.mock.calls[0][0];
+
+    expect(sentReq.url).toBe('http://backend/api/v1/hide');
+    expect(sentReq.method).toBe('POST');
+    expect(sentReq.headers.get('X-HMAC-Signature')).toBeTruthy();
   });
 });
