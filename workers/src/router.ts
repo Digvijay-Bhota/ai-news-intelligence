@@ -82,6 +82,22 @@ async function handleHealth(_request: Request, env: Env): Promise<Response> {
     environment: env.ENVIRONMENT ?? 'unknown',
   });
 }
+async function handleGetArticleDetail(_request: Request, env: Env, id: number): Promise<Response> {
+  const cacheKey = generateCacheKey('article_detail', { id });
+
+  const article = await withCache(
+    cacheKey,
+    () => createDbClient(env).getArticleDetailById(id),
+    env,
+    300 // Cache public article intelligence for 5 minutes
+  );
+
+  if (!article) {
+    throw new NotFoundError('Article not found');
+  }
+
+  return success(article);
+}
 
 async function handleFeed(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -90,13 +106,20 @@ async function handleFeed(request: Request, env: Env): Promise<Response> {
   const sourceId = url.searchParams.get('source_id');
   const q = url.searchParams.get('q');
   const topic = url.searchParams.get('topic');
+  const topicsParam = url.searchParams.get('topics');
+  const sourceNamesParam = url.searchParams.get('source_names');
+
+  const topics = topicsParam ? topicsParam.split(',').map(s => s.trim()).filter(Boolean) : undefined;
+  const sourceNames = sourceNamesParam ? sourceNamesParam.split(',').map(s => s.trim()).filter(Boolean) : undefined;
 
   const cacheKey = generateCacheKey('feed', {
     limit,
     offset,
     sourceId: sourceId ?? undefined,
     q: q ?? undefined,
-    topic: topic ?? undefined
+    topic: topic ?? undefined,
+    topics: topics ? topics.join(',') : undefined,
+    sourceNames: sourceNames ? sourceNames.join(',') : undefined
   });
 
   const result = await withCache(
@@ -104,12 +127,14 @@ async function handleFeed(request: Request, env: Env): Promise<Response> {
     () => createDbClient(env).listArticles({
       limit, offset,
       source_id: sourceId ? parseInt(sourceId, 10) : undefined,
+      source_names: sourceNames,
       q: q ? q.slice(0, 100) : undefined, // Safe truncation
       topic_slug: topic ? topic.slice(0, 100) : undefined,
+      topics,
       status: 'processed',
     }),
     env,
-    60
+    30
   );
 
   const db = createDbClient(env);
@@ -375,6 +400,13 @@ export async function route(request: Request, env: Env): Promise<Response> {
     if (path === '/api/v1/health' && request.method === 'GET') {
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/health', env);
       response = await handleHealth(request, env);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    const articleMatch = path.match(/^\/api\/v1\/articles\/(\d+)$/);
+    if (articleMatch && request.method === 'GET') {
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/articles/:id', env);
+      response = await handleGetArticleDetail(request, env, parseInt(articleMatch[1], 10));
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 

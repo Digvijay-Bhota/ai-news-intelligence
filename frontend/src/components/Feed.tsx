@@ -12,7 +12,12 @@ import { EmptyState } from './EmptyState';
 
 const LIMIT = 20;
 
-export function Feed() {
+interface FeedProps {
+  topicsOverride?: string[];
+  sourceNamesOverride?: string[];
+}
+
+export function Feed({ topicsOverride, sourceNamesOverride }: FeedProps = {}) {
   const searchParams = useSearchParams();
   const q = searchParams.get('q') || undefined;
   const topic = searchParams.get('topic') || undefined;
@@ -43,7 +48,12 @@ export function Feed() {
       }
 
       const currentOffset = isLoadMore ? offset : 0;
-      const response = await fetchFeed(LIMIT, currentOffset, q, topic, source_id, abortControllerRef.current.signal);
+      // Also pass topicsOverride and sourceNamesOverride
+      const response = await fetchFeed(
+        LIMIT, currentOffset, q, topic, source_id,
+        topicsOverride, sourceNamesOverride,
+        abortControllerRef.current.signal
+      );
 
       if (response.success) {
         const newArticles = response.data.items;
@@ -66,7 +76,7 @@ export function Feed() {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [offset, q, topic, source_id]);
+  }, [offset, q, topic, source_id, topicsOverride, sourceNamesOverride]);
 
   useEffect(() => {
     loadFeed(false);
@@ -75,7 +85,7 @@ export function Feed() {
         abortControllerRef.current.abort();
       }
     };
-  }, [q, topic, source_id]);
+  }, [q, topic, source_id, topicsOverride, sourceNamesOverride]);
 
   if (loading) {
     return (

@@ -6,6 +6,8 @@ export async function fetchFeed(
   q?: string,
   topic?: string,
   source_id?: string,
+  topics?: string[],
+  sourceNames?: string[],
   signal?: AbortSignal
 ): Promise<FeedResponse> {
   const params = new URLSearchParams({
@@ -16,6 +18,8 @@ export async function fetchFeed(
   if (q) params.set('q', q);
   if (topic) params.set('topic', topic);
   if (source_id) params.set('source_id', source_id);
+  if (topics && topics.length > 0) params.set('topics', topics.join(','));
+  if (sourceNames && sourceNames.length > 0) params.set('source_names', sourceNames.join(','));
 
   const res = await fetch(`/api/feed?${params.toString()}`, { signal });
   if (!res.ok) throw new Error('Failed to fetch feed');

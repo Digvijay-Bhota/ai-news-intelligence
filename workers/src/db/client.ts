@@ -81,6 +81,55 @@ export class DbClient {
     return this.db.prepare('SELECT * FROM articles_raw WHERE id = ?1').bind(id).first<ArticleRaw>();
   }
 
+  async getArticleDetailById(id: number) {
+    const article = await this.getArticleById(id);
+    if (!article) return null;
+
+    const source = await this.getSourceById(article.source_id);
+    const content = await this.db.prepare('SELECT cleaned_text, extracted_entities FROM article_content WHERE article_raw_id = ?1').bind(id).first<{ cleaned_text: string | null; extracted_entities: string | null }>();
+
+    const topicsQuery = `
+      SELECT t.name, t.slug
+      FROM article_topics at
+      JOIN topics t ON t.id = at.topic_id
+      WHERE at.article_raw_id = ?1
+    `;
+    const topicsRes = await this.db.prepare(topicsQuery).bind(id).all<{ name: string; slug: string }>();
+
+    const eventsQuery = `
+      SELECT e.title, e.description, e.severity, e.started_at
+      FROM article_events ae
+      JOIN events e ON e.id = ae.event_id
+      WHERE ae.article_raw_id = ?1
+    `;
+    const eventsRes = await this.db.prepare(eventsQuery).bind(id).all<{ title: string; description: string; severity: string; started_at: number }>();
+
+    let extracted_entities: any[] = [];
+    if (content?.extracted_entities) {
+      try {
+        const parsed = JSON.parse(content.extracted_entities);
+        extracted_entities = Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        // Fallback for malformed JSON
+        extracted_entities = [];
+      }
+    }
+
+    return {
+      id: article.id,
+      external_id: article.external_id,
+      title: article.title,
+      summary: article.summary,
+      cleaned_text: content?.cleaned_text ?? null,
+      url: article.url,
+      source: source?.name ?? 'unknown',
+      published_at: article.published_at,
+      topics: topicsRes.results ?? [],
+      events: eventsRes.results ?? [],
+      extracted_entities,
+    };
+  }
+
   async getArticleByExternalId(externalId: string): Promise<ArticleRaw | null> {
     return this.db.prepare('SELECT * FROM articles_raw WHERE external_id = ?1').bind(externalId).first<ArticleRaw>();
   }
@@ -89,21 +138,36 @@ export class DbClient {
     limit?: number;
     offset?: number;
     source_id?: number;
+    source_names?: string[];
     status?: string;
     q?: string;
     topic_slug?: string;
+    topics?: string[];
     orderBy?: 'published_at' | 'created_at';
     order?: 'ASC' | 'DESC';
   } = {}): Promise<{ articles: ArticleRaw[]; total: number }> {
-    const { limit = 20, offset = 0, source_id, status, q, topic_slug, orderBy = 'published_at', order = 'DESC' } = options;
+    const { limit = 20, offset = 0, source_id, source_names, status, q, topic_slug, topics, orderBy = 'published_at', order = 'DESC' } = options;
 
     const conditions: string[] = [];
     const params: (string | number)[] = [];
+    let joinClause = '';
 
     if (source_id !== undefined) {
       params.push(source_id);
       conditions.push('articles_raw.source_id = ?' + params.length);
     }
+
+    if (source_names && source_names.length > 0) {
+      if (!joinClause.includes('JOIN sources')) {
+        joinClause += ' JOIN sources ON articles_raw.source_id = sources.id';
+      }
+      const placeholders = source_names.map(s => {
+        params.push(s);
+        return '?' + params.length;
+      }).join(',');
+      conditions.push(`sources.name IN (${placeholders})`);
+    }
+
     if (status) {
       params.push(status);
       conditions.push('articles_raw.status = ?' + params.length);
@@ -113,11 +177,21 @@ export class DbClient {
       conditions.push(`(articles_raw.title LIKE ?${params.length - 1} OR articles_raw.summary LIKE ?${params.length})`);
     }
 
-    let joinClause = '';
-    if (topic_slug) {
-      joinClause = 'JOIN article_topics ON articles_raw.id = article_topics.article_raw_id JOIN topics ON article_topics.topic_id = topics.id';
-      params.push(topic_slug);
-      conditions.push(`topics.slug = ?${params.length}`);
+    if (topic_slug || (topics && topics.length > 0)) {
+      if (!joinClause.includes('JOIN article_topics')) {
+        joinClause += ' JOIN article_topics ON articles_raw.id = article_topics.article_raw_id JOIN topics ON article_topics.topic_id = topics.id';
+      }
+      if (topic_slug) {
+        params.push(topic_slug);
+        conditions.push(`topics.slug = ?${params.length}`);
+      }
+      if (topics && topics.length > 0) {
+        const placeholders = topics.map(t => {
+          params.push(t);
+          return '?' + params.length;
+        }).join(',');
+        conditions.push(`topics.slug IN (${placeholders})`);
+      }
     }
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';

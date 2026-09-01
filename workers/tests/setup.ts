@@ -80,13 +80,26 @@ export function createMockD1Database(seed = false): D1Database {
     } as T;
   }
 
+  if (seed && upperQuery.includes('SELECT * FROM ARTICLES_RAW WHERE ID = ?') && values[0] === 1) {
+    return {
+      id: 1, external_id: 'ext-1', source_id: 1, title: 'Integration Test Article',
+      summary: 'Sum', url: 'http://test', raw_content: '',
+      published_at: 1000, fetched_at: 1000, language: 'en',
+      status: 'processed', created_at: 1000
+    } as T;
+  }
+
+  if (seed && (upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW') || upperQuery.includes('SELECT COUNT(DISTINCT ARTICLES_RAW.ID) AS TOTAL FROM ARTICLES_RAW'))) {
+    return { total: 1 } as T;
+  }
+
   const key = `${query}:${JSON.stringify(values)}`;
   const rows = storage.get(key) ?? [];
   return (rows[0] ?? null) as T | null;
 },
         all: async <T>() => {
           const upperQuery = query.toUpperCase();
-          if (seed && upperQuery.includes('SELECT * FROM ARTICLES_RAW')) {
+          if (seed && (upperQuery.includes('SELECT * FROM ARTICLES_RAW') || upperQuery.includes('SELECT DISTINCT ARTICLES_RAW.* FROM ARTICLES_RAW'))) {
             return {
               results: [{
                 id: 1, external_id: 'ext-1', source_id: 1, title: 'Integration Test Article',
@@ -97,7 +110,7 @@ export function createMockD1Database(seed = false): D1Database {
               success: true, meta: {}
             };
           }
-          if (seed && upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW')) {
+          if (seed && (upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW') || upperQuery.includes('SELECT COUNT(DISTINCT ARTICLES_RAW.ID) AS TOTAL FROM ARTICLES_RAW'))) {
             return {
               results: [{ total: 1 }] as unknown as T[],
               success: true, meta: {}
