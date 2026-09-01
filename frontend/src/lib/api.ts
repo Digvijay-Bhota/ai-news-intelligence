@@ -1,4 +1,4 @@
-import { FeedResponse, TopicsResponse, SourcesResponse } from '../types';
+import { FeedResponse, TopicsResponse, SourcesResponse, EventDetailResponse } from '../types';
 
 export async function fetchFeed(
   limit = 20,
@@ -35,5 +35,11 @@ export async function fetchTopics(signal?: AbortSignal): Promise<TopicsResponse>
 export async function fetchSources(signal?: AbortSignal): Promise<SourcesResponse> {
   const res = await fetch('/api/sources', { signal });
   if (!res.ok) throw new Error('Failed to fetch sources');
+  return res.json();
+}
+
+export async function fetchEvent(hash: string, signal?: AbortSignal): Promise<EventDetailResponse> {
+  const res = await fetch(`/api/events/${hash}`, { signal });
+  if (!res.ok) throw new Error('Failed to fetch event details');
   return res.json();
 }

@@ -89,6 +89,12 @@ export function createMockD1Database(seed = false): D1Database {
     } as T;
   }
 
+  if (seed && upperQuery.includes('FROM EVENTS WHERE EVENT_HASH = ?')) {
+    return {
+      hash: 'evt-hash', title: 'AI Integration Event', description: 'Desc', severity: 'info', started_at: 1000
+    } as T;
+  }
+
   if (seed && (upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW') || upperQuery.includes('SELECT COUNT(DISTINCT ARTICLES_RAW.ID) AS TOTAL FROM ARTICLES_RAW'))) {
     return { total: 1 } as T;
   }
@@ -110,9 +116,20 @@ export function createMockD1Database(seed = false): D1Database {
               success: true, meta: {}
             };
           }
-          if (seed && (upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW') || upperQuery.includes('SELECT COUNT(DISTINCT ARTICLES_RAW.ID) AS TOTAL FROM ARTICLES_RAW'))) {
+          if (seed && upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW') || upperQuery.includes('SELECT COUNT(DISTINCT ARTICLES_RAW.ID) AS TOTAL FROM ARTICLES_RAW')) {
             return {
               results: [{ total: 1 }] as unknown as T[],
+              success: true, meta: {}
+            };
+          }
+          if (seed && upperQuery.includes('FROM ARTICLES_RAW A') && upperQuery.includes('WHERE E.EVENT_HASH = ?')) {
+            return {
+              results: [{
+                id: 1, external_id: 'ext-1', source_id: 1, title: 'Integration Test Article',
+                summary: 'Sum', url: 'http://test', raw_content: '',
+                published_at: 1000, fetched_at: 1000, language: 'en',
+                status: 'processed', created_at: 1000
+              }] as unknown as T[],
               success: true, meta: {}
             };
           }
@@ -123,6 +140,18 @@ export function createMockD1Database(seed = false): D1Database {
             };
           }
           if (seed && upperQuery.includes('FROM ARTICLE_EVENTS AE')) {
+            if (upperQuery.includes('SELECT E.EVENT_HASH, E.TITLE, E.DESCRIPTION, E.SEVERITY, E.STARTED_AT')) {
+              return {
+                results: [{ event_hash: 'evt-hash', title: 'AI Integration Event', description: 'Desc', severity: 'info', started_at: 1000 }] as unknown as T[],
+                success: true, meta: {}
+              };
+            }
+            if (upperQuery.includes('E.EVENT_HASH')) {
+               return {
+                results: [{ article_raw_id: 1, title: 'AI Integration Event', event_hash: 'evt-hash' }] as unknown as T[],
+                success: true, meta: {}
+              };
+            }
             return {
               results: [{ article_raw_id: 1, title: 'AI Integration Event' }] as unknown as T[],
               success: true, meta: {}

@@ -8,7 +8,7 @@ export interface Article {
   published_at: number | null;
   category: string | null;
   topics: string[];
-  events: string[];
+  events: { title: string; hash: string }[];
 }
 
 export interface Topic {
@@ -47,4 +47,18 @@ export interface TopicsResponse {
 export interface SourcesResponse {
   success: boolean;
   data: Source[];
+}
+
+export interface EventDetailResponse {
+  success: boolean;
+  data: {
+    event: {
+      hash: string;
+      title: string;
+      description: string | null;
+      severity: string;
+      started_at: number | null;
+    };
+    articles: Article[];
+  };
 }

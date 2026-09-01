@@ -226,7 +226,7 @@ export interface FeedItem {
   published_at: number | null;
   category: string | null;
   topics: string[];
-  events: string[];
+  events: { title: string; hash: string }[];
 }
 
 export interface ApiResponse<T = unknown> {

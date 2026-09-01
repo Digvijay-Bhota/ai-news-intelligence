@@ -155,14 +155,24 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
                       e.severity === 'critical' ? 'bg-red-500' :
                       e.severity === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
                     }`}></div>
-                    <h4 className="text-sm font-bold text-gray-900 dark:text-gray-100">{e.title}</h4>
+                    <h4 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+                      {e.event_hash ? (
+                        <Link href={`/events/${e.event_hash}`} className="hover:text-indigo-600 dark:hover:text-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded">
+                          {e.title}
+                        </Link>
+                      ) : (
+                        e.title
+                      )}
+                    </h4>
                     {e.started_at && (
                       <time className="text-xs text-gray-500 dark:text-gray-400 block mb-1 mt-0.5">
                         {new Date(e.started_at * 1000).toLocaleDateString()}
                       </time>
                     )}
                     {e.description && (
-                      <p className="text-sm text-gray-600 dark:text-gray-300 mt-1.5 leading-relaxed">{e.description}</p>
+                      <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed mt-1">
+                        {e.description}
+                      </p>
                     )}
                   </div>
                 ))}

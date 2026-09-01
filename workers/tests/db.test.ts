@@ -162,7 +162,7 @@ describe('DbClient', () => {
         // Events
         return Promise.resolve({
           results: [
-            { article_raw_id: 2, title: 'Event A' }
+            { article_raw_id: 2, title: 'Event A', event_hash: 'event-hash-a' }
           ]
         });
       });
@@ -176,7 +176,7 @@ describe('DbClient', () => {
       expect(map.get(1)?.events).toEqual([]);
 
       expect(map.get(2)?.topics).toEqual([]);
-      expect(map.get(2)?.events).toEqual(['Event A']);
+      expect(map.get(2)?.events).toEqual([{ title: 'Event A', hash: 'event-hash-a' }]);
 
       expect(map.get(3)?.topics).toEqual([]); // Article with no topics/events
       expect(map.get(3)?.events).toEqual([]);

@@ -30,15 +30,15 @@ vi.mock('next/navigation', () => ({
 
 const mockArticle = {
   id: 1,
-  external_id: 'ext-1',
-  title: 'Test Article Title',
-  summary: 'Test summary content',
-  url: 'https://example.com',
-  source: 'Test Source',
+  external_id: 'ext-123',
+  title: 'Test AI Article',
+  summary: 'This is a test summary about AI.',
+  url: 'https://example.com/test-ai',
+  source: 'TechCrunch',
   published_at: Math.floor(Date.now() / 1000) - 3600, // 1 hour ago
   category: null,
-  topics: ['AI', 'Tech'],
-  events: ['Launch'],
+  topics: ['Artificial Intelligence'],
+  events: [{ title: 'AI Update', hash: 'event123' }],
 };
 
 const renderWithProvider = (ui: React.ReactElement) => {

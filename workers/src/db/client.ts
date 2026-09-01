@@ -33,8 +33,8 @@ export class DbClient {
     return map;
   }
 
-  async getIntelligenceBatch(articleIds: number[]): Promise<Map<number, { topics: string[]; events: string[] }>> {
-    const map = new Map<number, { topics: string[]; events: string[] }>();
+  async getIntelligenceBatch(articleIds: number[]): Promise<Map<number, { topics: string[]; events: { title: string; hash: string }[] }>> {
+    const map = new Map<number, { topics: string[]; events: { title: string; hash: string }[] }>();
     if (articleIds.length === 0) return map;
 
     for (const id of articleIds) {
@@ -53,12 +53,12 @@ export class DbClient {
     const topicsRes = await this.db.prepare(topicsQuery).bind(...uniqueIds).all<{ article_raw_id: number; name: string }>();
 
     const eventsQuery = `
-      SELECT ae.article_raw_id, e.title
+      SELECT ae.article_raw_id, e.title, e.event_hash
       FROM article_events ae
       JOIN events e ON e.id = ae.event_id
       WHERE ae.article_raw_id IN (${placeholders})
     `;
-    const eventsRes = await this.db.prepare(eventsQuery).bind(...uniqueIds).all<{ article_raw_id: number; title: string }>();
+    const eventsRes = await this.db.prepare(eventsQuery).bind(...uniqueIds).all<{ article_raw_id: number; title: string; event_hash: string }>();
 
     if (topicsRes.results) {
       for (const row of topicsRes.results) {
@@ -68,7 +68,7 @@ export class DbClient {
 
     if (eventsRes.results) {
       for (const row of eventsRes.results) {
-        map.get(row.article_raw_id)?.events.push(row.title);
+        map.get(row.article_raw_id)?.events.push({ title: row.title, hash: row.event_hash });
       }
     }
 
@@ -97,12 +97,12 @@ export class DbClient {
     const topicsRes = await this.db.prepare(topicsQuery).bind(id).all<{ name: string; slug: string }>();
 
     const eventsQuery = `
-      SELECT e.title, e.description, e.severity, e.started_at
+      SELECT e.event_hash, e.title, e.description, e.severity, e.started_at
       FROM article_events ae
       JOIN events e ON e.id = ae.event_id
       WHERE ae.article_raw_id = ?1
     `;
-    const eventsRes = await this.db.prepare(eventsQuery).bind(id).all<{ title: string; description: string; severity: string; started_at: number }>();
+    const eventsRes = await this.db.prepare(eventsQuery).bind(id).all<{ event_hash: string; title: string; description: string; severity: string; started_at: number }>();
 
     let extracted_entities: any[] = [];
     if (content?.extracted_entities) {
@@ -132,6 +132,29 @@ export class DbClient {
 
   async getArticleByExternalId(externalId: string): Promise<ArticleRaw | null> {
     return this.db.prepare('SELECT * FROM articles_raw WHERE external_id = ?1').bind(externalId).first<ArticleRaw>();
+  }
+
+  async getEventDetailByHash(hash: string): Promise<{ event: { hash: string; title: string; description: string | null; severity: string; started_at: number | null }; articles: ArticleRaw[] } | null> {
+    const event = await this.db.prepare(
+      'SELECT event_hash as hash, title, description, severity, started_at FROM events WHERE event_hash = ?1'
+    ).bind(hash).first<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null }>();
+
+    if (!event) return null;
+
+    const query = `
+      SELECT a.*
+      FROM articles_raw a
+      JOIN article_events ae ON a.id = ae.article_raw_id
+      JOIN events e ON ae.event_id = e.id
+      WHERE e.event_hash = ?1
+      ORDER BY a.published_at ASC
+    `;
+    const articlesRes = await this.db.prepare(query).bind(hash).all<ArticleRaw>();
+
+    return {
+      event,
+      articles: articlesRes.results ?? []
+    };
   }
 
   async listArticles(options: {

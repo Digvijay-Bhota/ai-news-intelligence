@@ -99,6 +99,29 @@ async function handleGetArticleDetail(_request: Request, env: Env, id: number): 
   return success(article);
 }
 
+async function handleGetEvent(_request: Request, env: Env, hash: string): Promise<Response> {
+  const cacheKey = generateCacheKey('event_detail', { hash });
+
+  const eventDetail = await withCache(
+    cacheKey,
+    () => createDbClient(env).getEventDetailByHash(hash),
+    env,
+    300
+  );
+
+  if (!eventDetail) {
+    throw new NotFoundError('Event not found');
+  }
+
+  const db = createDbClient(env);
+  const items = await buildFeedItemsBatch(db, eventDetail.articles);
+
+  return success({
+    event: eventDetail.event,
+    articles: items
+  });
+}
+
 async function handleFeed(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '20', 10), 100);
@@ -407,6 +430,13 @@ export async function route(request: Request, env: Env): Promise<Response> {
     if (articleMatch && request.method === 'GET') {
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/articles/:id', env);
       response = await handleGetArticleDetail(request, env, parseInt(articleMatch[1], 10));
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    const eventMatch = path.match(/^\/api\/v1\/events\/([a-zA-Z0-9_-]+)$/);
+    if (eventMatch && request.method === 'GET') {
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/events/:hash', env);
+      response = await handleGetEvent(request, env, eventMatch[1]);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 

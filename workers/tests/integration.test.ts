@@ -34,8 +34,18 @@ describe('Integration', () => {
     expect(feedJson.data.items).toBeDefined();
     expect(feedJson.data.items.length).toBeGreaterThan(0);
     expect(feedJson.data.items[0].topics).toContain('AI Integration Topic');
-    expect(feedJson.data.items[0].events).toContain('AI Integration Event');
+    expect(feedJson.data.items[0].events[0].title).toBe('AI Integration Event');
+    expect(feedJson.data.items[0].events[0].hash).toBe('evt-hash');
     expect(feedJson.data.items[0].source).toBe('Integration Source');
+
+    // Get event detail
+    const eventReq = await signedRequest('http://localhost/api/v1/events/evt-hash', 'GET');
+    const eventRes = await route(eventReq, env);
+    expect(eventRes.status).toBe(200);
+    const eventJson = (await eventRes.json()) as ApiResponse<any>;
+    expect(eventJson.success).toBe(true);
+    expect(eventJson.data.event.title).toBe('AI Integration Event');
+    expect(eventJson.data.articles.length).toBeGreaterThan(0);
 
     // Set preferences
     const prefsReq = await signedRequest('http://localhost/api/v1/preferences', 'POST', {
