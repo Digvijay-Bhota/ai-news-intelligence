@@ -1,17 +1,60 @@
 import React from 'react';
 import Link from 'next/link';
-import { fetchEvent } from '../../../lib/api';
+import { env } from 'cloudflare:workers';
+import { generateHmac } from '../../../utils/hmac';
+import { EventDetailResponse } from '../../../types';
 import { ArticleCard } from '../../../components/ArticleCard';
 import { ErrorState } from '../../../components/ErrorState';
 import { EmptyState } from '../../../components/EmptyState';
 import { ChevronLeftIcon } from '../../../components/icons';
+
+export const runtime = 'edge';
+
+async function getEvent(hash: string): Promise<EventDetailResponse> {
+  const secret = env.HMAC_SECRET;
+  if (!secret) throw new Error('Missing HMAC_SECRET');
+
+  const backend = env.BACKEND_API;
+  if (!backend || typeof backend.fetch !== 'function') throw new Error('Missing BACKEND_API binding');
+
+  const ts = Math.floor(Date.now() / 1000);
+  const nonce = `nonce-${ts}-${Math.random().toString(36).substring(2, 9)}`;
+  const fullPath = `/api/v1/events/${hash}`;
+
+  const hmacPayload = {
+    method: 'GET',
+    path: fullPath,
+    timestamp: ts,
+    nonce,
+    body: '',
+  };
+
+  const signature = await generateHmac(hmacPayload, secret);
+
+  const backendReq = new Request(`http://backend${fullPath}`, {
+    method: 'GET',
+    headers: {
+      'X-HMAC-Signature': signature,
+      'X-Nonce': nonce,
+      'X-Timestamp': String(ts),
+    },
+  });
+
+  const res = await backend.fetch(backendReq);
+
+  if (!res.ok) {
+    throw new Error(`Backend error: ${res.status}`);
+  }
+
+  return res.json();
+}
 
 export default async function EventPage({ params }: { params: Promise<{ hash: string }> }) {
   const { hash } = await params;
   let eventDetail;
 
   try {
-    eventDetail = await fetchEvent(hash);
+    eventDetail = await getEvent(hash);
   } catch (error) {
     return (
       <div className="max-w-4xl mx-auto py-8">
@@ -71,7 +114,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
         <div className="relative">
           {/* Vertical timeline line for desktop/tablet */}
           <div className="hidden md:block absolute left-8 top-0 bottom-0 w-px bg-gray-200 dark:bg-gray-800" />
-          
+
           <div className="space-y-8">
             {articles.map((article, index) => (
               <div key={article.id} className="relative md:pl-20">
@@ -79,7 +122,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
                 <div className="hidden md:flex absolute left-8 -translate-x-1/2 top-6 w-4 h-4 rounded-full bg-indigo-100 dark:bg-indigo-900/50 border-2 border-indigo-500 items-center justify-center">
                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
                 </div>
-                
+
                 <ArticleCard article={article} />
               </div>
             ))}
