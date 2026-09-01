@@ -127,15 +127,15 @@ export function Feed({ topicsOverride, sourceNamesOverride }: FeedProps = {}) {
       </div>
 
       {hasMore && (
-        <div className="mt-10 flex justify-center">
+        <div className="mt-12 flex justify-center">
           <button
             onClick={() => loadFeed(true)}
             disabled={loadingMore}
-            className="bg-white border border-gray-300 text-gray-700 font-medium py-2.5 px-6 rounded-full hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+            className="w-full sm:w-auto bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-medium py-3 px-8 rounded-full hover:bg-gray-50 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-gray-950 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
           >
             {loadingMore ? (
               <>
-                <svg role="presentation" aria-hidden="true" focusable="false" className="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <svg role="presentation" aria-hidden="true" focusable="false" className="animate-spin -ml-1 mr-3 h-5 w-5 text-gray-500 dark:text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>

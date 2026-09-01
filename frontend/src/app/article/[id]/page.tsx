@@ -71,60 +71,60 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
     : 'Unknown date';
 
   return (
-    <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-      <div className="mb-6">
-        <Link href="/" className="text-sm font-medium text-indigo-600 hover:text-indigo-800">
+    <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      <div className="mb-8">
+        <Link href="/" className="inline-flex items-center text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 rounded transition-colors">
           &larr; Back to Feed
         </Link>
       </div>
 
-      <header className="mb-8 border-b pb-6">
-        <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 tracking-tight mb-4">
-          {title}
-        </h1>
-        <div className="flex flex-wrap items-center text-sm text-gray-500 gap-4">
-          <span className="font-semibold text-gray-700">{source}</span>
-          <span>&bull;</span>
-          <time dateTime={published_at ? new Date(published_at * 1000).toISOString() : ''}>
-            {formattedDate}
-          </time>
-        </div>
-      </header>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+        <div className="lg:col-span-8 space-y-8">
+          <header className="mb-10 pb-6 border-b border-gray-200 dark:border-gray-800">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight mb-5 leading-tight">
+              {title}
+            </h1>
+            <div className="flex flex-wrap items-center text-sm text-gray-500 dark:text-gray-400 gap-4">
+              <span className="font-semibold text-gray-700 dark:text-gray-300">{source}</span>
+              <span>&bull;</span>
+              <time dateTime={published_at ? new Date(published_at * 1000).toISOString() : ''}>
+                {formattedDate}
+              </time>
+            </div>
+          </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-        <div className="lg:col-span-2 space-y-8">
           {summary && (
-            <section>
-              <h2 className="text-xl font-bold text-gray-900 mb-3">Summary</h2>
-              <div className="prose text-gray-700 max-w-none">
-                <p className="text-lg leading-relaxed">{summary}</p>
-              </div>
+            <section className="bg-gray-50 dark:bg-gray-900/50 p-6 rounded-xl border border-gray-100 dark:border-gray-800">
+              <h2 className="text-sm font-bold tracking-wider text-gray-500 dark:text-gray-400 uppercase mb-3">Summary</h2>
+              <p className="text-lg text-gray-800 dark:text-gray-200 leading-relaxed max-w-prose">
+                {summary}
+              </p>
             </section>
           )}
 
           {cleaned_text && (
             <section>
-              <h2 className="text-xl font-bold text-gray-900 mb-3">Full Article</h2>
-              <div className="prose text-gray-800 max-w-none whitespace-pre-wrap leading-relaxed">
+              <h2 className="sr-only">Full Article</h2>
+              <div className="max-w-prose text-lg text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed">
                 {cleaned_text}
               </div>
             </section>
           )}
 
-          <section className="pt-6">
-            <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center px-5 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
+          <section className="pt-8 pb-4">
+            <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center px-6 py-3.5 border border-transparent text-base font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-gray-950 transition-colors shadow-sm">
               Read original on {source}
             </a>
           </section>
         </div>
 
-        <aside className="space-y-8 lg:border-l lg:pl-8">
+        <aside className="space-y-10 lg:col-span-4 lg:border-l lg:border-gray-200 dark:lg:border-gray-800 lg:pl-8">
           {topics && topics.length > 0 && (
             <section>
-              <h3 className="text-sm font-bold tracking-wider text-gray-500 uppercase mb-3">Topics</h3>
+              <h3 className="text-sm font-bold tracking-wider text-gray-500 dark:text-gray-400 uppercase mb-4">Topics</h3>
               <div className="flex flex-wrap gap-2">
                 {topics.map((t: any) => (
-                  <Link key={t.slug} href={`/topics/${t.slug}`} className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors">
+                  <Link key={t.slug} href={`/topics/${t.slug}`} className="inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-300 dark:hover:bg-indigo-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 transition-colors">
                     {t.name}
                   </Link>
                 ))}
@@ -134,10 +134,10 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
 
           {extracted_entities && extracted_entities.length > 0 && (
             <section>
-              <h3 className="text-sm font-bold tracking-wider text-gray-500 uppercase mb-3">Key Entities</h3>
+              <h3 className="text-sm font-bold tracking-wider text-gray-500 dark:text-gray-400 uppercase mb-4">Key Entities</h3>
               <div className="flex flex-wrap gap-2">
                 {extracted_entities.map((e: string, i: number) => (
-                  <span key={i} className="inline-flex items-center px-2.5 py-0.5 rounded border border-gray-300 text-xs font-medium text-gray-700 bg-white">
+                  <span key={i} className="inline-flex items-center px-2.5 py-1 rounded-md border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-900">
                     {e}
                   </span>
                 ))}
@@ -147,22 +147,22 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
 
           {events && events.length > 0 && (
             <section>
-              <h3 className="text-sm font-bold tracking-wider text-gray-500 uppercase mb-4">Event Timeline</h3>
+              <h3 className="text-sm font-bold tracking-wider text-gray-500 dark:text-gray-400 uppercase mb-5">Event Timeline</h3>
               <div className="space-y-6">
                 {events.map((e: any, i: number) => (
-                  <div key={i} className="relative pl-4 border-l-2 border-gray-200">
-                    <div className={`absolute -left-1.5 top-1.5 w-3 h-3 rounded-full ${
+                  <div key={i} className="relative pl-5 border-l-2 border-gray-200 dark:border-gray-700">
+                    <div className={`absolute -left-[5px] top-1.5 w-2 h-2 rounded-full ${
                       e.severity === 'critical' ? 'bg-red-500' :
                       e.severity === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
                     }`}></div>
-                    <h4 className="text-sm font-bold text-gray-900">{e.title}</h4>
+                    <h4 className="text-sm font-bold text-gray-900 dark:text-gray-100">{e.title}</h4>
                     {e.started_at && (
-                      <time className="text-xs text-gray-500 block mb-1">
+                      <time className="text-xs text-gray-500 dark:text-gray-400 block mb-1 mt-0.5">
                         {new Date(e.started_at * 1000).toLocaleDateString()}
                       </time>
                     )}
                     {e.description && (
-                      <p className="text-sm text-gray-600 mt-1">{e.description}</p>
+                      <p className="text-sm text-gray-600 dark:text-gray-300 mt-1.5 leading-relaxed">{e.description}</p>
                     )}
                   </div>
                 ))}

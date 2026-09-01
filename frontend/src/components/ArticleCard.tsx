@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import Link from 'next/link';
 import type { Article } from '../types';
 import { formatRelativeTime } from '../lib/utils';
 import { TopicBadge } from './TopicBadge';
@@ -40,11 +41,11 @@ export function ArticleCard({ article }: { article: Article }) {
   };
 
   return (
-    <article className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow duration-200 flex flex-col h-full">
+    <article className="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden hover:shadow-md dark:hover:border-gray-700 transition-all duration-200 flex flex-col h-full">
       <div className="p-5 flex-1 flex flex-col">
         <div className="flex justify-between items-start mb-3">
-          <span className="text-sm font-semibold text-indigo-600 uppercase tracking-wider">{article.source}</span>
-          <div className="flex items-center text-gray-500 text-xs" title={article.published_at ? new Date(article.published_at * 1000).toLocaleString() : undefined}>
+          <span className="text-sm font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">{article.source}</span>
+          <div className="flex items-center text-gray-500 dark:text-gray-400 text-xs" title={article.published_at ? new Date(article.published_at * 1000).toLocaleString() : undefined}>
             <ClockIcon className="w-3.5 h-3.5 mr-1.5" />
             <time dateTime={article.published_at ? new Date(article.published_at * 1000).toISOString() : undefined}>
               {formatRelativeTime(article.published_at)}
@@ -52,14 +53,14 @@ export function ArticleCard({ article }: { article: Article }) {
           </div>
         </div>
 
-        <h2 className="text-xl font-bold text-gray-900 mb-2 leading-tight">
-          <a href={article.url} target="_blank" rel="noopener noreferrer" className="hover:text-indigo-600 hover:underline focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded">
+        <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-3 leading-snug">
+          <Link href={`/article/${article.id}`} className="hover:text-indigo-600 dark:hover:text-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 rounded">
             {article.title}
-          </a>
+          </Link>
         </h2>
 
         {article.summary && (
-          <p className="text-gray-600 text-sm mb-4 line-clamp-3 leading-relaxed flex-1">
+          <p className="text-gray-600 dark:text-gray-300 text-sm mb-4 line-clamp-3 leading-relaxed flex-1">
             {article.summary}
           </p>
         )}
@@ -67,8 +68,8 @@ export function ArticleCard({ article }: { article: Article }) {
         {(!article.summary) && <div className="flex-1" />}
 
         {(article.topics.length > 0 || article.events.length > 0) && (
-          <div className="mt-4 pt-4 border-t border-gray-100">
-            <div className="flex flex-wrap -m-1">
+          <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+            <div className="flex flex-wrap gap-1.5">
               {article.events.map((e, idx) => (
                 <EventBadge key={idx} event={e} />
               ))}
@@ -80,12 +81,12 @@ export function ArticleCard({ article }: { article: Article }) {
         )}
       </div>
 
-      <div className="bg-gray-50 px-5 py-3 border-t border-gray-100 flex justify-between items-center">
+      <div className="bg-gray-50 dark:bg-gray-900/50 px-5 py-3 border-t border-gray-100 dark:border-gray-800 flex justify-between items-center">
         <div className="flex space-x-2">
           <button
             onClick={handleSaveToggle}
             disabled={isSaving}
-            className={`inline-flex items-center p-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors ${isSaved ? 'text-indigo-600 bg-indigo-50 hover:bg-indigo-100' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+            className={`inline-flex items-center p-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 transition-colors ${isSaved ? 'text-indigo-600 bg-indigo-50 dark:text-indigo-400 dark:bg-indigo-500/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
             aria-label={isSaved ? "Unsave article" : "Save article"}
             title={isSaved ? "Unsave article" : "Save article"}
           >
@@ -95,7 +96,7 @@ export function ArticleCard({ article }: { article: Article }) {
           <button
             onClick={handleHide}
             disabled={isHiding}
-            className="inline-flex items-center p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
+            className="inline-flex items-center p-1.5 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 transition-colors"
             aria-label="Hide article"
             title="Hide article"
           >
@@ -107,10 +108,10 @@ export function ArticleCard({ article }: { article: Article }) {
           href={article.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-800 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded px-2 py-1 -mr-2"
-          aria-label={`Read full article: ${article.title}`}
+          className="inline-flex items-center text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 rounded px-2 py-1 -mr-2"
+          aria-label={`Read full article at source: ${article.title}`}
         >
-          Read article <span className="ml-1.5 inline-flex items-center"><ExternalLinkIcon className="w-4 h-4" /></span>
+          Source <span className="ml-1.5 inline-flex items-center"><ExternalLinkIcon className="w-4 h-4" /></span>
         </a>
       </div>
     </article>

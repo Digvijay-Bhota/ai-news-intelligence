@@ -80,10 +80,10 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <div className="max-w-3xl mx-auto py-12 px-4">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-50 mb-8">Settings</h1>
         <div className="animate-pulse space-y-6">
-          <div className="h-40 bg-gray-100 rounded-lg"></div>
-          <div className="h-40 bg-gray-100 rounded-lg"></div>
+          <div className="h-40 bg-gray-100 dark:bg-gray-800 rounded-lg"></div>
+          <div className="h-40 bg-gray-100 dark:bg-gray-800 rounded-lg"></div>
         </div>
       </div>
     );
@@ -91,67 +91,67 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-3xl mx-auto py-12 px-4 sm:px-6">
-      <h1 className="text-3xl font-extrabold text-gray-900 mb-2">Settings</h1>
-      <p className="text-gray-600 mb-8">Customize your AI News Intelligence experience.</p>
+      <h1 className="text-3xl font-extrabold text-gray-900 dark:text-gray-50 mb-2">Settings</h1>
+      <p className="text-gray-600 dark:text-gray-400 mb-8">Customize your AI News Intelligence experience.</p>
       
       {message && (
-        <div className={`mb-6 p-4 rounded-md ${message.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+        <div className={`mb-6 p-4 rounded-md ${message.type === 'success' ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300 border border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800'}`}>
           {message.text}
         </div>
       )}
 
-      <form onSubmit={handleSave} className="space-y-10 bg-white p-6 sm:p-8 rounded-xl shadow-sm border border-gray-200">
+      <form onSubmit={handleSave} className="space-y-10 bg-white dark:bg-gray-900 p-6 sm:p-8 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
         
         <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Preferred Topics</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Preferred Topics</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {topics.map(t => (
-              <label key={t.slug} className="relative flex items-start p-4 cursor-pointer border rounded-lg hover:bg-gray-50 transition-colors">
+              <label key={t.slug} className="relative flex items-start p-4 cursor-pointer border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors focus-within:ring-2 focus-within:ring-indigo-500 dark:focus-within:ring-indigo-400">
                 <div className="flex items-center h-5">
                   <input
                     type="checkbox"
-                    className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                    className="h-4 w-4 text-indigo-600 dark:text-indigo-500 border-gray-300 dark:border-gray-600 rounded focus:ring-0 outline-none"
                     checked={prefTopics.includes(t.slug)}
                     onChange={() => toggleTopic(t.slug)}
                   />
                 </div>
                 <div className="ml-3 text-sm">
-                  <span className="font-medium text-gray-900">{t.name}</span>
+                  <span className="font-medium text-gray-900 dark:text-gray-200">{t.name}</span>
                 </div>
               </label>
             ))}
-            {topics.length === 0 && <p className="text-gray-500 text-sm">No topics available.</p>}
+            {topics.length === 0 && <p className="text-gray-500 dark:text-gray-400 text-sm">No topics available.</p>}
           </div>
         </section>
 
         <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Preferred Sources</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Preferred Sources</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {sources.map(s => (
-              <label key={s.id} className="relative flex items-start p-4 cursor-pointer border rounded-lg hover:bg-gray-50 transition-colors">
+              <label key={s.id} className="relative flex items-start p-4 cursor-pointer border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors focus-within:ring-2 focus-within:ring-indigo-500 dark:focus-within:ring-indigo-400">
                 <div className="flex items-center h-5">
                   <input
                     type="checkbox"
-                    className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                    className="h-4 w-4 text-indigo-600 dark:text-indigo-500 border-gray-300 dark:border-gray-600 rounded focus:ring-0 outline-none"
                     checked={prefSources.includes(s.name)}
                     onChange={() => toggleSource(s.name)}
                   />
                 </div>
                 <div className="ml-3 text-sm">
-                  <span className="font-medium text-gray-900">{s.name}</span>
+                  <span className="font-medium text-gray-900 dark:text-gray-200">{s.name}</span>
                 </div>
               </label>
             ))}
-            {sources.length === 0 && <p className="text-gray-500 text-sm">No sources available.</p>}
+            {sources.length === 0 && <p className="text-gray-500 dark:text-gray-400 text-sm">No sources available.</p>}
           </div>
         </section>
 
         <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Digest Frequency</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Digest Frequency</h2>
           <select 
             value={digestFreq}
             onChange={e => setDigestFreq(e.target.value)}
-            className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
+            className="mt-1 block w-full pl-3 pr-10 py-2.5 text-base border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 sm:text-sm rounded-md"
           >
             <option value="realtime">Real-time (As it happens)</option>
             <option value="daily">Daily Digest</option>
@@ -160,12 +160,12 @@ export default function SettingsPage() {
           </select>
         </section>
 
-        <div className="pt-5 border-t border-gray-200">
+        <div className="pt-6 border-t border-gray-200 dark:border-gray-800">
           <div className="flex justify-end">
             <button
               type="submit"
               disabled={saving}
-              className="inline-flex justify-center py-2.5 px-6 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex justify-center py-2.5 px-6 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 dark:bg-indigo-500 hover:bg-indigo-700 dark:hover:bg-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-gray-950 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {saving ? 'Saving...' : 'Save Preferences'}
             </button>

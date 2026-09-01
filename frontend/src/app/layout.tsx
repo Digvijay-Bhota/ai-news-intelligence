@@ -11,7 +11,7 @@ export const metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-gray-50 flex flex-col text-gray-900 antialiased font-sans">
+      <body className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col text-gray-900 dark:text-gray-50 antialiased font-sans">
         <UserArticlesProvider>
           <Header />
 
@@ -22,8 +22,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </div>
         </UserArticlesProvider>
 
-        <footer className="bg-white border-t border-gray-200 py-8 mt-auto">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row justify-between items-center text-sm text-gray-500">
+        <footer className="bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 py-8 mt-auto">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row justify-between items-center text-sm text-gray-500 dark:text-gray-400">
             <div className="mb-4 sm:mb-0">
               &copy; {new Date().getFullYear()} AI News Intelligence. All rights reserved.
             </div>
