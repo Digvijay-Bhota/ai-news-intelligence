@@ -134,7 +134,7 @@ async function handleFeed(request: Request, env: Env): Promise<Response> {
       status: 'processed',
     }),
     env,
-    30
+    60
   );
 
   const db = createDbClient(env);

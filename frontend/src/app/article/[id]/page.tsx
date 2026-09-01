@@ -1,26 +1,45 @@
 import React from 'react';
-import { headers } from 'next/headers';
 import Link from 'next/link';
+import { env } from 'cloudflare:workers';
+import { generateHmac } from '../../../utils/hmac';
+
+export const runtime = 'edge';
 
 async function getArticle(id: string) {
-  const headersList = await headers();
-  const host = headersList.get('host') || 'localhost:3000';
-  const protocol = host.includes('localhost') ? 'http' : 'https';
+  const secret = env.HMAC_SECRET;
+  if (!secret) throw new Error('Missing HMAC_SECRET');
   
-  // Forward cookies for identity
-  const cookieHeader = headersList.get('cookie') || '';
-  
-  const res = await fetch(`${protocol}://${host}/api/articles/${id}`, {
+  const backend = env.BACKEND_API;
+  if (!backend || typeof backend.fetch !== 'function') throw new Error('Missing BACKEND_API binding');
+
+  const ts = Math.floor(Date.now() / 1000);
+  const nonce = `nonce-${ts}-${Math.random().toString(36).substring(2, 9)}`;
+  const fullPath = `/api/v1/articles/${id}`;
+
+  const hmacPayload = {
+    method: 'GET',
+    path: fullPath,
+    timestamp: ts,
+    nonce,
+    body: '',
+  };
+
+  const signature = await generateHmac(hmacPayload, secret);
+
+  const backendReq = new Request(`http://backend${fullPath}`, {
+    method: 'GET',
     headers: {
-      cookie: cookieHeader
+      'X-HMAC-Signature': signature,
+      'X-Nonce': nonce,
+      'X-Timestamp': String(ts),
     },
-    // No cache here to ensure fresh fetch, though the BFF may cache
-    cache: 'no-store'
   });
+
+  const res = await backend.fetch(backendReq);
   
   if (!res.ok) {
     if (res.status === 404) return null;
-    throw new Error('Failed to fetch article');
+    throw new Error('Failed to fetch article from backend');
   }
   
   const json = await res.json();
