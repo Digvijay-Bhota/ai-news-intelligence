@@ -23,6 +23,32 @@ it('GET /api/v1/events returns active events', async () => {
       }
     });
 
+    it('GET /api/v1/events/:hash returns event detail with freshness', async () => {
+      const env = makeEnv();
+
+      const dbClientModule = await import('../src/db/client');
+      const mockClient = {
+        getEventDetailByHash: async (_hash: string) => ({
+          event: { hash: 'hash-test', title: 'Test Event', description: 'Desc', severity: 'critical', started_at: 1000 },
+          coverage: { total_articles: 10, total_sources: 2, first_published_at: 1000, last_published_at: 5000000, sources: [] },
+          articles: []
+        }),
+      };
+      const spy = vitest.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockClient as any);
+
+      const req = await signedRequest('http://localhost/api/v1/events/hash-test', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(200);
+      const json = await res.json() as any;
+      expect(json.success).toBe(true);
+      expect(json.data.event).toHaveProperty('freshness');
+      expect(json.data.event).toHaveProperty('last_published_at');
+      expect(json.data.event.last_published_at).toBe(5000000); // Ensures it maps coverage.last_published_at correctly
+
+      spy.mockRestore();
+    });
+
+
 
   function makeEnv() {
     return createMockEnv({ DB: createMockD1Database(true), CACHE: createMockKVNamespace() });

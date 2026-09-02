@@ -185,7 +185,8 @@ export class DbClient {
       SELECT
         s.name,
         COUNT(a.id) AS article_count,
-        MIN(a.published_at) AS first_published_at
+        MIN(a.published_at) AS first_published_at,
+        MAX(a.published_at) AS last_published_at
       FROM articles_raw a
       JOIN article_events ae ON a.id = ae.article_raw_id
       JOIN events e ON ae.event_id = e.id
@@ -194,7 +195,7 @@ export class DbClient {
       GROUP BY s.id, s.name
       ORDER BY first_published_at ASC
     `;
-    const coverageRes = await this.db.prepare(coverageQuery).bind(hash).all<{ name: string; article_count: number; first_published_at: number | null }>();
+    const coverageRes = await this.db.prepare(coverageQuery).bind(hash).all<{ name: string; article_count: number; first_published_at: number | null; last_published_at: number | null }>();
 
     const sources = coverageRes.results ?? [];
     let total_articles = 0;
@@ -207,8 +208,10 @@ export class DbClient {
         if (first_published_at === null || src.first_published_at < first_published_at) {
           first_published_at = src.first_published_at;
         }
-        if (last_published_at === null || src.first_published_at > last_published_at) {
-          last_published_at = src.first_published_at;
+      }
+      if (src.last_published_at !== null) {
+        if (last_published_at === null || src.last_published_at > last_published_at) {
+          last_published_at = src.last_published_at;
         }
       }
     }
