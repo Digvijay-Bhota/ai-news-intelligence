@@ -43,3 +43,9 @@ export async function fetchEvent(hash: string, signal?: AbortSignal): Promise<Ev
   if (!res.ok) throw new Error('Failed to fetch event details');
   return res.json();
 }
+
+export async function fetchActiveEvents(signal?: AbortSignal): Promise<{ success: boolean; data: import('../types').EventSummary[] }> {
+  const res = await fetch('/api/events', { signal });
+  if (!res.ok) throw new Error('Failed to fetch active events');
+  return res.json();
+}

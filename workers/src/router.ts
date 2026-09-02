@@ -99,6 +99,20 @@ async function handleGetArticleDetail(_request: Request, env: Env, id: number): 
   return success(article);
 }
 
+
+async function handleGetEvents(_request: Request, env: Env): Promise<Response> {
+  const cacheKey = generateCacheKey('active_events', {});
+
+  const events = await withCache(
+    cacheKey,
+    () => createDbClient(env).getActiveEvents(),
+    env,
+    300
+  );
+
+  return success(events);
+}
+
 async function handleGetEvent(_request: Request, env: Env, hash: string): Promise<Response> {
   const cacheKey = generateCacheKey('event_detail', { hash });
 
@@ -445,6 +459,13 @@ export async function route(request: Request, env: Env): Promise<Response> {
     if (articleMatch && request.method === 'GET') {
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/articles/:id', env);
       response = await handleGetArticleDetail(request, env, parseInt(articleMatch[1], 10));
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+
+    if (path === '/api/v1/events' && request.method === 'GET') {
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/events', env);
+      response = await handleGetEvents(request, env);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 

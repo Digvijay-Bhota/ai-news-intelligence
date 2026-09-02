@@ -5,6 +5,23 @@ import { buildSignedRequest } from '../src/utils/hmac';
 import type { ApiResponse } from '../src/types';
 
 describe('Router', () => {
+
+    it('GET /api/v1/events returns active events', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(200);
+      const json = await res.json() as any;
+      expect(json.success).toBe(true);
+      expect(json.data).toBeInstanceOf(Array);
+      if (json.data.length > 0) {
+        expect(json.data[0]).toHaveProperty('hash');
+        expect(json.data[0]).toHaveProperty('article_count');
+        expect(json.data[0].severity).toBe('critical'); // deterministic ordering check
+      }
+    });
+
+
   function makeEnv() {
     return createMockEnv({ DB: createMockD1Database(true), CACHE: createMockKVNamespace() });
   }

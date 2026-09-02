@@ -134,6 +134,33 @@ export class DbClient {
     return this.db.prepare('SELECT * FROM articles_raw WHERE external_id = ?1').bind(externalId).first<ArticleRaw>();
   }
 
+
+  async getActiveEvents(): Promise<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number }[]> {
+    const query = `
+      SELECT e.event_hash as hash, e.title, e.description, e.severity, e.started_at, COUNT(ae.article_raw_id) as article_count
+      FROM events e
+      LEFT JOIN article_events ae ON e.id = ae.event_id
+      WHERE e.status = 'active'
+      GROUP BY e.id
+      ORDER BY
+        CASE e.severity
+          WHEN 'critical' THEN 1
+          WHEN 'high' THEN 2
+          WHEN 'warning' THEN 3
+          WHEN 'medium' THEN 4
+          WHEN 'info' THEN 5
+          WHEN 'low' THEN 6
+          ELSE 7
+        END ASC,
+        article_count DESC,
+        e.started_at DESC,
+        e.id DESC
+      LIMIT 50
+    `;
+    const res = await this.db.prepare(query).all<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number }>();
+    return res.results ?? [];
+  }
+
   async getEventDetailByHash(hash: string): Promise<{ event: { hash: string; title: string; description: string | null; severity: string; started_at: number | null }; coverage: { total_articles: number; total_sources: number; first_published_at: number | null; last_published_at: number | null; sources: { name: string; article_count: number; first_published_at: number | null; }[] }; articles: (ArticleRaw & { extracted_entities?: string | null })[] } | null> {
     const event = await this.db.prepare(
       'SELECT event_hash as hash, title, description, severity, started_at FROM events WHERE event_hash = ?1'

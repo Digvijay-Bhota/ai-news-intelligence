@@ -26,6 +26,7 @@ export function Header() {
   const navLinks = [
     { name: 'Feed', href: '/' },
     { name: 'For You', href: '/foryou' },
+    { name: 'Top Events', href: '/events' },
     { name: 'Topics', href: '#', disabled: true },
     { name: 'Saved', href: '/saved' },
     { name: 'Settings', href: '/settings' },

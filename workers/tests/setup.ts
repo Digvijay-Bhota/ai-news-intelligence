@@ -34,6 +34,18 @@ export function createMockD1Database(seed = false): D1Database {
         first: async <T>() => {
   const upperQuery = query.toUpperCase();
 
+          if (seed && upperQuery.includes('WHERE E.STATUS = \'ACTIVE\'') && upperQuery.includes('GROUP BY E.ID')) {
+             return {
+                results: [
+                  { hash: 'evt-hash-crit', title: 'Critical Event', description: 'Desc', severity: 'critical', started_at: 1000, article_count: 50 },
+                  { hash: 'evt-hash-warn', title: 'Warning Event', description: 'Desc', severity: 'warning', started_at: 1000, article_count: 20 },
+                  { hash: 'evt-hash-info', title: 'Info Event', description: 'Desc', severity: 'info', started_at: 1000, article_count: 10 }
+                ] as unknown as T[],
+                success: true, meta: {}
+             };
+          }
+
+
   if (upperQuery.includes('INSERT INTO USER_PREFERENCES')) {
     return {
       id: 1,

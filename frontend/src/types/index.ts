@@ -83,3 +83,12 @@ export interface EventDetailResponse {
     articles: Article[];
   };
 }
+
+export interface EventSummary {
+  hash: string;
+  title: string;
+  description: string | null;
+  severity: string;
+  started_at: number | null;
+  article_count: number;
+}

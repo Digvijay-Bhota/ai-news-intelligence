@@ -251,3 +251,12 @@ export interface ApiResponse<T = unknown> {
 }
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS';
+
+export interface EventSummary {
+  hash: string;
+  title: string;
+  description: string | null;
+  severity: string;
+  started_at: number | null;
+  article_count: number;
+}

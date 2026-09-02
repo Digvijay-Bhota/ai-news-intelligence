@@ -3,6 +3,19 @@ import { DbClient, createDbClient } from '../src/db/client';
 import { createMockEnv, createMockD1Database } from './setup';
 
 describe('DbClient', () => {
+
+  describe('Events Dashboard', () => {
+    it('getActiveEvents retrieves active events ordered by severity and coverage', async () => {
+      const client = makeClient();
+      const events = await client.getActiveEvents();
+      expect(events).toBeInstanceOf(Array);
+      if (events.length > 0) {
+        expect(events[0].severity).toBe('critical');
+        expect(events[1].severity).toBe('warning');
+      }
+    });
+  });
+
   function makeClient(): DbClient {
     return createDbClient(createMockEnv({ DB: createMockD1Database() }));
   }
