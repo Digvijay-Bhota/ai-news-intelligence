@@ -96,16 +96,26 @@ export default function EventsDashboard() {
                 href={`/events/${event.hash}`}
                 className="block group"
               >
-                <div className="bg-white dark:bg-gray-900 rounded-xl shadow-sm hover:shadow-md transition-all duration-200 border border-gray-200 dark:border-gray-800 hover:border-indigo-300 dark:hover:border-gray-700 p-6 flex flex-col sm:flex-row sm:items-start gap-4">
+                <div className={`bg-white dark:bg-gray-900 rounded-xl shadow-sm hover:shadow-md transition-all duration-200 border border-gray-200 dark:border-gray-800 hover:border-indigo-300 dark:hover:border-gray-700 p-6 flex flex-col sm:flex-row sm:items-start gap-4 ${event.freshness === 'stale' ? 'opacity-70 grayscale-[20%]' : ''}`}>
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-3 mb-3">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${badgeColor}`}>
                         <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${dotColor}`} aria-hidden="true"></span>
                         {(event.severity || 'info').toUpperCase()}
+                        {event.freshness && (
+                          <>
+                            <span className="mx-1.5 opacity-50">&middot;</span>
+                            {event.freshness.toUpperCase()}
+                          </>
+                        )}
                       </span>
-                      {event.started_at && (
+                      {event.last_published_at ? (
                         <span className="text-sm text-gray-500 dark:text-gray-400">
-                          {new Date(event.started_at * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                          {new Date(event.last_published_at * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
+                      ) : (
+                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                          Time unavailable
                         </span>
                       )}
                     </div>

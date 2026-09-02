@@ -135,14 +135,27 @@ export class DbClient {
   }
 
 
-  async getActiveEvents(): Promise<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number }[]> {
+  async getActiveEvents(nowSeconds: number): Promise<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number; last_published_at: number | null }[]> {
     const query = `
-      SELECT e.event_hash as hash, e.title, e.description, e.severity, e.started_at, COUNT(ae.article_raw_id) as article_count
+      SELECT 
+        e.event_hash as hash, 
+        e.title, 
+        e.description, 
+        e.severity, 
+        e.started_at, 
+        COUNT(ae.article_raw_id) as article_count,
+        MAX(a.published_at) as last_published_at
       FROM events e
       LEFT JOIN article_events ae ON e.id = ae.event_id
+      LEFT JOIN articles_raw a ON ae.article_raw_id = a.id
       WHERE e.status = 'active'
       GROUP BY e.id
       ORDER BY
+        CASE 
+          WHEN MAX(a.published_at) > (?1 - 86400) AND COUNT(ae.article_raw_id) > 1 THEN 1
+          WHEN MAX(a.published_at) <= (?1 - 172800) THEN 3
+          ELSE 2
+        END ASC,
         CASE e.severity
           WHEN 'critical' THEN 1
           WHEN 'high' THEN 2
@@ -153,11 +166,11 @@ export class DbClient {
           ELSE 7
         END ASC,
         article_count DESC,
-        e.started_at DESC,
+        last_published_at DESC,
         e.id DESC
       LIMIT 50
     `;
-    const res = await this.db.prepare(query).all<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number }>();
+    const res = await this.db.prepare(query).bind(nowSeconds).all<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number; last_published_at: number | null }>();
     return res.results ?? [];
   }
 

@@ -91,11 +91,25 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
             'bg-blue-100 text-blue-800 dark:bg-blue-500/10 dark:text-blue-400'
           }`}>
             {event.severity}
+            {event.freshness && (
+              <>
+                <span className="mx-1.5 opacity-50">&middot;</span>
+                {event.freshness}
+              </>
+            )}
           </span>
-          {event.started_at && (
+          {event.last_published_at ? (
             <time className="text-sm text-gray-500 dark:text-gray-400">
-              Started {new Date(event.started_at * 1000).toLocaleDateString()}
+              Last updated {
+                Math.floor(Date.now() / 1000) - event.last_published_at < 3600
+                  ? 'just now'
+                  : Math.floor((Math.floor(Date.now() / 1000) - event.last_published_at) / 3600) + 'h ago'
+              }
             </time>
+          ) : (
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Last coverage time unavailable
+            </span>
           )}
         </div>
         <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-4 tracking-tight">
