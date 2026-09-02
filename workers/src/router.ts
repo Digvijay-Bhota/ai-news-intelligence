@@ -118,6 +118,7 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
 
   return success({
     event: eventDetail.event,
+    coverage: eventDetail.coverage,
     articles: items
   });
 }

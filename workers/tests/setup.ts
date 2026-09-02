@@ -122,6 +122,12 @@ export function createMockD1Database(seed = false): D1Database {
               success: true, meta: {}
             };
           }
+          if (seed && upperQuery.includes('COUNT(A.ID) AS ARTICLE_COUNT') && upperQuery.includes('WHERE E.EVENT_HASH = ?')) {
+            return {
+              results: [{ name: 'Integration Source', article_count: 1, first_published_at: 1000 }] as unknown as T[],
+              success: true, meta: {}
+            };
+          }
           if (seed && upperQuery.includes('FROM ARTICLES_RAW A') && upperQuery.includes('WHERE E.EVENT_HASH = ?')) {
             return {
               results: [{

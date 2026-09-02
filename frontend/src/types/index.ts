@@ -59,6 +59,17 @@ export interface EventDetailResponse {
       severity: string;
       started_at: number | null;
     };
+    coverage: {
+      total_articles: number;
+      total_sources: number;
+      first_published_at: number | null;
+      last_published_at: number | null;
+      sources: {
+        name: string;
+        article_count: number;
+        first_published_at: number | null;
+      }[];
+    };
     articles: Article[];
   };
 }

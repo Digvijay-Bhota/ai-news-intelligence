@@ -134,12 +134,52 @@ export class DbClient {
     return this.db.prepare('SELECT * FROM articles_raw WHERE external_id = ?1').bind(externalId).first<ArticleRaw>();
   }
 
-  async getEventDetailByHash(hash: string): Promise<{ event: { hash: string; title: string; description: string | null; severity: string; started_at: number | null }; articles: ArticleRaw[] } | null> {
+  async getEventDetailByHash(hash: string): Promise<{ event: { hash: string; title: string; description: string | null; severity: string; started_at: number | null }; coverage: { total_articles: number; total_sources: number; first_published_at: number | null; last_published_at: number | null; sources: { name: string; article_count: number; first_published_at: number | null; }[] }; articles: ArticleRaw[] } | null> {
     const event = await this.db.prepare(
       'SELECT event_hash as hash, title, description, severity, started_at FROM events WHERE event_hash = ?1'
     ).bind(hash).first<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null }>();
 
     if (!event) return null;
+
+    const coverageQuery = `
+      SELECT
+        s.name,
+        COUNT(a.id) AS article_count,
+        MIN(a.published_at) AS first_published_at
+      FROM articles_raw a
+      JOIN article_events ae ON a.id = ae.article_raw_id
+      JOIN events e ON ae.event_id = e.id
+      JOIN sources s ON a.source_id = s.id
+      WHERE e.event_hash = ?1
+      GROUP BY s.id, s.name
+      ORDER BY first_published_at ASC
+    `;
+    const coverageRes = await this.db.prepare(coverageQuery).bind(hash).all<{ name: string; article_count: number; first_published_at: number | null }>();
+
+    const sources = coverageRes.results ?? [];
+    let total_articles = 0;
+    let first_published_at: number | null = null;
+    let last_published_at: number | null = null;
+
+    for (const src of sources) {
+      total_articles += src.article_count;
+      if (src.first_published_at !== null) {
+        if (first_published_at === null || src.first_published_at < first_published_at) {
+          first_published_at = src.first_published_at;
+        }
+        if (last_published_at === null || src.first_published_at > last_published_at) {
+          last_published_at = src.first_published_at;
+        }
+      }
+    }
+
+    const coverage = {
+      total_articles,
+      total_sources: sources.length,
+      first_published_at,
+      last_published_at,
+      sources
+    };
 
     const query = `
       SELECT a.*
@@ -148,11 +188,13 @@ export class DbClient {
       JOIN events e ON ae.event_id = e.id
       WHERE e.event_hash = ?1
       ORDER BY a.published_at ASC
+      LIMIT 100
     `;
     const articlesRes = await this.db.prepare(query).bind(hash).all<ArticleRaw>();
 
     return {
       event,
+      coverage,
       articles: articlesRes.results ?? []
     };
   }

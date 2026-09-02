@@ -74,7 +74,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
     );
   }
 
-  const { event, articles } = eventDetail.data;
+  const { event, coverage, articles } = eventDetail.data;
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -108,6 +108,46 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
         )}
       </header>
 
+      {coverage && (
+        <section className="mb-10 p-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
+            <svg className="w-5 h-5 mr-2 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9.5a2.5 2.5 0 00-2.5-2.5H15" />
+            </svg>
+            Coverage Summary
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Sources</span>
+              <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">{coverage.total_sources}</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Articles</span>
+              <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">{coverage.total_articles}</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400">First Report</span>
+              <span className="text-lg font-medium text-gray-900 dark:text-gray-100">
+                {coverage.first_published_at ? new Date(coverage.first_published_at * 1000).toLocaleDateString() : 'Unknown'}
+              </span>
+            </div>
+          </div>
+          <div>
+            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Sources Covering This Event</h3>
+            <div className="flex flex-wrap gap-2">
+              {coverage.sources.map((src) => (
+                <span key={src.name} className="inline-flex items-center px-2.5 py-1 rounded-md text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700">
+                  {src.name}
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded text-xs bg-gray-200 dark:bg-gray-700 font-medium">
+                    {src.article_count}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
       {articles.length === 0 ? (
         <EmptyState title="No articles found" message="There are no articles associated with this event timeline." />
       ) : (
@@ -127,6 +167,16 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
               </div>
             ))}
           </div>
+
+          {coverage && articles.length < coverage.total_articles && (
+            <div className="mt-8 md:pl-20">
+              <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg text-center border border-gray-200 dark:border-gray-800">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Showing the first {articles.length} articles of {coverage.total_articles} total.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
