@@ -216,6 +216,15 @@ export interface PipelineToken {
 
 // ─── API Types ─────────────────────────────────────────────
 
+export interface ArticleExtractedEntities {
+  topics?: string[];
+  events?: {
+    title: string;
+    description: string;
+    severity: string;
+  }[];
+}
+
 export interface FeedItem {
   id: number;
   external_id: string;
@@ -227,6 +236,7 @@ export interface FeedItem {
   category: string | null;
   topics: string[];
   events: { title: string; hash: string }[];
+  extracted_entities?: ArticleExtractedEntities;
 }
 
 export interface ApiResponse<T = unknown> {

@@ -134,7 +134,7 @@ export class DbClient {
     return this.db.prepare('SELECT * FROM articles_raw WHERE external_id = ?1').bind(externalId).first<ArticleRaw>();
   }
 
-  async getEventDetailByHash(hash: string): Promise<{ event: { hash: string; title: string; description: string | null; severity: string; started_at: number | null }; coverage: { total_articles: number; total_sources: number; first_published_at: number | null; last_published_at: number | null; sources: { name: string; article_count: number; first_published_at: number | null; }[] }; articles: ArticleRaw[] } | null> {
+  async getEventDetailByHash(hash: string): Promise<{ event: { hash: string; title: string; description: string | null; severity: string; started_at: number | null }; coverage: { total_articles: number; total_sources: number; first_published_at: number | null; last_published_at: number | null; sources: { name: string; article_count: number; first_published_at: number | null; }[] }; articles: (ArticleRaw & { extracted_entities?: string | null })[] } | null> {
     const event = await this.db.prepare(
       'SELECT event_hash as hash, title, description, severity, started_at FROM events WHERE event_hash = ?1'
     ).bind(hash).first<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null }>();
@@ -182,15 +182,16 @@ export class DbClient {
     };
 
     const query = `
-      SELECT a.*
+      SELECT a.*, ac.extracted_entities
       FROM articles_raw a
       JOIN article_events ae ON a.id = ae.article_raw_id
       JOIN events e ON ae.event_id = e.id
+      LEFT JOIN article_content ac ON a.id = ac.article_raw_id
       WHERE e.event_hash = ?1
-      ORDER BY a.published_at ASC
+      ORDER BY a.published_at ASC, a.id ASC
       LIMIT 100
     `;
-    const articlesRes = await this.db.prepare(query).bind(hash).all<ArticleRaw>();
+    const articlesRes = await this.db.prepare(query).bind(hash).all<ArticleRaw & { extracted_entities?: string | null }>();
 
     return {
       event,

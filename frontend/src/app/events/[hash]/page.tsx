@@ -155,15 +155,81 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
           {/* Vertical timeline line for desktop/tablet */}
           <div className="hidden md:block absolute left-8 top-0 bottom-0 w-px bg-gray-200 dark:bg-gray-800" />
 
-          <div className="space-y-8">
-            {articles.map((article, index) => (
-              <div key={article.id} className="relative md:pl-20">
-                {/* Timeline node */}
-                <div className="hidden md:flex absolute left-8 -translate-x-1/2 top-6 w-4 h-4 rounded-full bg-indigo-100 dark:bg-indigo-900/50 border-2 border-indigo-500 items-center justify-center">
-                  <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+          <div className="space-y-12">
+            {Object.entries(
+              articles.reduce((acc, article, index) => {
+                const isBreaking = index === 0;
+
+                // Track source
+                if (!acc.seenSources) acc.seenSources = new Set();
+                const isFirstForSource = !acc.seenSources.has(article.source);
+                if (isFirstForSource) acc.seenSources.add(article.source);
+
+                // Track topics
+                if (!acc.seenTopics) acc.seenTopics = new Set();
+                const newTopics: string[] = [];
+                if (article.extracted_entities?.topics) {
+                  for (const topic of article.extracted_entities.topics) {
+                    if (!acc.seenTopics.has(topic.toLowerCase())) {
+                      newTopics.push(topic);
+                      acc.seenTopics.add(topic.toLowerCase());
+                    }
+                  }
+                }
+
+                const dateStr = article.published_at
+                  ? new Date(article.published_at * 1000).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+                  : 'Unknown Date';
+
+                if (!acc.groups) acc.groups = {};
+                if (!acc.groups[dateStr]) acc.groups[dateStr] = [];
+
+                acc.groups[dateStr].push({ ...article, isBreaking, isFirstForSource, newTopics });
+                return acc;
+              }, { seenSources: new Set<string>(), seenTopics: new Set<string>(), groups: {} as Record<string, any[]> }).groups
+            ).map(([dateStr, dayArticles]) => (
+              <div key={dateStr} className="relative">
+                {/* Date Header */}
+                <div className="sticky top-4 z-10 mb-8 md:pl-20 flex items-center">
+                  <div className="hidden md:flex absolute left-8 -translate-x-1/2 w-6 h-6 rounded-full bg-white dark:bg-gray-900 border-4 border-gray-200 dark:border-gray-800 items-center justify-center z-10" />
+                  <h3 className="inline-flex items-center px-4 py-1.5 rounded-full text-sm font-bold bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-sm">
+                    {dateStr}
+                  </h3>
                 </div>
 
-                <ArticleCard article={article} />
+                <div className="space-y-8">
+                  {dayArticles.map((article) => (
+                    <div key={article.id} className="relative md:pl-20">
+                      {/* Timeline node */}
+                      <div className="hidden md:flex absolute left-8 -translate-x-1/2 top-6 w-4 h-4 rounded-full bg-indigo-100 dark:bg-indigo-900/50 border-2 border-indigo-500 items-center justify-center">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                      </div>
+
+                      {/* Badges */}
+                      {(article.isBreaking || article.isFirstForSource || article.newTopics.length > 0) && (
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {article.isBreaking && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 dark:bg-red-500/10 dark:text-red-400 border border-red-200 dark:border-red-500/20">
+                              🔥 Breaking Report
+                            </span>
+                          )}
+                          {!article.isBreaking && article.isFirstForSource && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-500/10 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20">
+                              📰 First report by {article.source}
+                            </span>
+                          )}
+                          {article.newTopics.length > 0 && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
+                              🏷️ New Topics: {article.newTopics.join(', ')}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      <ArticleCard article={article} />
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
@@ -172,7 +238,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
             <div className="mt-8 md:pl-20">
               <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg text-center border border-gray-200 dark:border-gray-800">
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Showing the first {articles.length} articles of {coverage.total_articles} total.
+                  Showing newly appearing topics and early coverage evolution across the first {articles.length} articles of {coverage.total_articles} total.
                 </p>
               </div>
             </div>

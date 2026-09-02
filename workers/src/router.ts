@@ -116,10 +116,24 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
   const db = createDbClient(env);
   const items = await buildFeedItemsBatch(db, eventDetail.articles);
 
+  const itemsWithEntities = items.map((item, index) => {
+    let entities;
+    const raw = eventDetail.articles[index].extracted_entities;
+    if (raw) {
+      try {
+        entities = JSON.parse(raw);
+      } catch (e) {}
+    }
+    return {
+      ...item,
+      ...(entities ? { extracted_entities: entities } : {})
+    };
+  });
+
   return success({
     event: eventDetail.event,
     coverage: eventDetail.coverage,
-    articles: items
+    articles: itemsWithEntities
   });
 }
 
