@@ -135,16 +135,27 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
     throw new NotFoundError('Event not found');
   }
 
+  const now = Math.floor(Date.now() / 1000);
   const db = createDbClient(env);
   const items = await buildFeedItemsBatch(db, eventDetail.articles);
 
+  // Accumulate unique topics while parsing extracted_entities for articles.
+  // This is a single pass — no additional DB queries.
+  const seenTopics = new Set<string>();
   const itemsWithEntities = items.map((item, index) => {
-    let entities;
+    let entities: { topics?: string[]; events?: { title: string; description: string; severity: string }[] } | undefined;
     const raw = eventDetail.articles[index].extracted_entities;
     if (raw) {
       try {
         entities = JSON.parse(raw);
-      } catch (e) {}
+      } catch (_e) {}
+    }
+    if (entities?.topics) {
+      for (const t of entities.topics) {
+        if (typeof t === 'string' && t.trim()) {
+          seenTopics.add(t.trim());
+        }
+      }
     }
     return {
       ...item,
@@ -152,10 +163,45 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
     };
   });
 
+  // Freshness: post-cache, uses coverage.last_published_at (MAX(a.published_at))
+  const freshness = getEventFreshness(
+    eventDetail.coverage.last_published_at,
+    eventDetail.coverage.total_articles,
+    now
+  );
+
+  // Intelligence: all derived from already-fetched data, zero additional queries.
+  const unique_topics = Array.from(seenTopics).sort();
+  const { first_published_at, last_published_at, total_articles, sources } = eventDetail.coverage;
+
+  let days_active: number | null = null;
+  let coverage_density: number | null = null;
+  if (first_published_at !== null && last_published_at !== null) {
+    days_active = Math.ceil((last_published_at - first_published_at) / 86400);
+    coverage_density = Math.round((total_articles / Math.max(days_active, 1)) * 10) / 10;
+  }
+
+  const top_source: string | null = sources.length > 0
+    ? sources.reduce((best, s) => s.article_count > best.article_count ? s : best, sources[0]).name
+    : null;
+
+  const intelligence = {
+    topic_count: unique_topics.length,
+    unique_topics,
+    days_active,
+    coverage_density,
+    top_source,
+  };
+
   return success({
-    event: eventDetail.event,
+    event: {
+      ...eventDetail.event,
+      freshness,
+      last_published_at: eventDetail.coverage.last_published_at,
+    },
     coverage: eventDetail.coverage,
-    articles: itemsWithEntities
+    intelligence,
+    articles: itemsWithEntities,
   });
 }
 

@@ -262,3 +262,28 @@ export interface EventSummary {
   last_published_at: number | null;
   freshness: "developing" | "active" | "stale";
 }
+
+/** Deterministic intelligence derived from existing event coverage data. No AI, no new DB queries. */
+export interface EventIntelligence {
+  /** Number of unique topics seen across all articles in this event. */
+  topic_count: number;
+  /** Deduplicated, sorted topic strings from extracted_entities.topics. */
+  unique_topics: string[];
+  /** Days between first and last published article. Null if timestamps unavailable. */
+  days_active: number | null;
+  /** Articles per day (total_articles / max(days_active, 1)), 1dp. Null if timestamps unavailable. */
+  coverage_density: number | null;
+  /** Name of the source with the highest article count for this event. */
+  top_source: string | null;
+}
+
+/** Event object as returned by GET /api/v1/events/:hash — includes freshness and last_published_at. */
+export interface EventDetailEvent {
+  hash: string;
+  title: string;
+  description: string | null;
+  severity: string;
+  started_at: number | null;
+  last_published_at: number | null;
+  freshness: "developing" | "active" | "stale";
+}

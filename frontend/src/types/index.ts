@@ -59,6 +59,14 @@ export interface SourcesResponse {
   data: Source[];
 }
 
+export interface EventIntelligence {
+  topic_count: number;
+  unique_topics: string[];
+  days_active: number | null;
+  coverage_density: number | null;
+  top_source: string | null;
+}
+
 export interface EventDetailResponse {
   success: boolean;
   data: {
@@ -68,8 +76,8 @@ export interface EventDetailResponse {
       description: string | null;
       severity: string;
       started_at: number | null;
-      last_published_at?: number | null;
-      freshness?: "developing" | "active" | "stale";
+      last_published_at: number | null;
+      freshness: "developing" | "active" | "stale";
     };
     coverage: {
       total_articles: number;
@@ -82,6 +90,7 @@ export interface EventDetailResponse {
         first_published_at: number | null;
       }[];
     };
+    intelligence: EventIntelligence;
     articles: Article[];
   };
 }

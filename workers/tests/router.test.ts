@@ -23,16 +23,40 @@ it('GET /api/v1/events returns active events', async () => {
       }
     });
 
-    it('GET /api/v1/events/:hash returns event detail with freshness', async () => {
+    it('GET /api/v1/events/:hash returns event detail with freshness and intelligence', async () => {
       const env = makeEnv();
 
       const dbClientModule = await import('../src/db/client');
       const mockClient = {
         getEventDetailByHash: async (_hash: string) => ({
           event: { hash: 'hash-test', title: 'Test Event', description: 'Desc', severity: 'critical', started_at: 1000 },
-          coverage: { total_articles: 10, total_sources: 2, first_published_at: 1000, last_published_at: 5000000, sources: [] },
-          articles: []
+          coverage: {
+            total_articles: 10,
+            total_sources: 2,
+            first_published_at: 1000,
+            last_published_at: 5000000,
+            sources: [
+              { name: 'Source A', article_count: 7, first_published_at: 1000, last_published_at: 5000000 },
+              { name: 'Source B', article_count: 3, first_published_at: 2000, last_published_at: 4000000 },
+            ]
+          },
+          articles: [
+            {
+              id: 1, external_id: 'e1', source_id: 1, title: 'A1', summary: 's', url: 'http://t',
+              raw_content: null, published_at: 1000, fetched_at: 1000, language: 'en',
+              status: 'processed', created_at: 1000,
+              extracted_entities: JSON.stringify({ topics: ['Climate', 'Policy'], events: [] })
+            },
+            {
+              id: 2, external_id: 'e2', source_id: 1, title: 'A2', summary: 's', url: 'http://t2',
+              raw_content: null, published_at: 2000, fetched_at: 2000, language: 'en',
+              status: 'processed', created_at: 2000,
+              extracted_entities: JSON.stringify({ topics: ['Climate', 'Science'], events: [] })
+            },
+          ],
         }),
+        getSourcesBatch: async () => { const m = new Map(); m.set(1, 'Source A'); return m; },
+        getIntelligenceBatch: async () => new Map(),
       };
       const spy = vitest.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockClient as any);
 
@@ -41,9 +65,65 @@ it('GET /api/v1/events returns active events', async () => {
       expect(res.status).toBe(200);
       const json = await res.json() as any;
       expect(json.success).toBe(true);
+
+      // Freshness must be on the event object (not missing)
       expect(json.data.event).toHaveProperty('freshness');
+      expect(['developing', 'active', 'stale']).toContain(json.data.event.freshness);
+
+      // last_published_at on event must equal coverage.last_published_at
       expect(json.data.event).toHaveProperty('last_published_at');
-      expect(json.data.event.last_published_at).toBe(5000000); // Ensures it maps coverage.last_published_at correctly
+      expect(json.data.event.last_published_at).toBe(5000000);
+
+      // Intelligence block must be present
+      expect(json.data.intelligence).toBeDefined();
+      expect(typeof json.data.intelligence.topic_count).toBe('number');
+      expect(json.data.intelligence.topic_count).toBe(3); // Climate, Policy, Science (deduped)
+      expect(Array.isArray(json.data.intelligence.unique_topics)).toBe(true);
+      expect(json.data.intelligence.unique_topics).toEqual(['Climate', 'Policy', 'Science']); // sorted
+      expect(json.data.intelligence.top_source).toBe('Source A'); // 7 > 3 articles
+      expect(typeof json.data.intelligence.days_active).toBe('number');
+      expect(typeof json.data.intelligence.coverage_density).toBe('number');
+
+      spy.mockRestore();
+    });
+
+    it('GET /api/v1/events/:hash handles zero articles and null timestamps gracefully', async () => {
+      const env = makeEnv();
+
+      const dbClientModule = await import('../src/db/client');
+      const mockClient = {
+        getEventDetailByHash: async (_hash: string) => ({
+          event: { hash: 'hash-empty', title: 'Empty Event', description: null, severity: 'info', started_at: null },
+          coverage: {
+            total_articles: 0,
+            total_sources: 0,
+            first_published_at: null,
+            last_published_at: null,
+            sources: []
+          },
+          articles: [],
+        }),
+        getSourcesBatch: async () => new Map(),
+        getIntelligenceBatch: async () => new Map(),
+      };
+      const spy = vitest.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockClient as any);
+
+      const req = await signedRequest('http://localhost/api/v1/events/hash-empty', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(200);
+      const json = await res.json() as any;
+      expect(json.success).toBe(true);
+
+      // freshness must be 'active' when last_published_at is null
+      expect(json.data.event.freshness).toBe('active');
+      expect(json.data.event.last_published_at).toBeNull();
+
+      // Intelligence edge cases: null timestamps → null densities, empty topics
+      expect(json.data.intelligence.topic_count).toBe(0);
+      expect(json.data.intelligence.unique_topics).toEqual([]);
+      expect(json.data.intelligence.days_active).toBeNull();
+      expect(json.data.intelligence.coverage_density).toBeNull();
+      expect(json.data.intelligence.top_source).toBeNull();
 
       spy.mockRestore();
     });
