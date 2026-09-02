@@ -68,6 +68,8 @@ export interface EventDetailResponse {
       description: string | null;
       severity: string;
       started_at: number | null;
+      last_published_at?: number | null;
+      freshness?: "developing" | "active" | "stale";
     };
     coverage: {
       total_articles: number;
@@ -91,4 +93,6 @@ export interface EventSummary {
   severity: string;
   started_at: number | null;
   article_count: number;
+  last_published_at: number | null;
+  freshness: "developing" | "active" | "stale";
 }

@@ -18,6 +18,7 @@
  *   POST /internal/v1/pipeline-log
  */
 
+import { getEventFreshness } from "./utils/freshness";
 import type { Env, ApiResponse, ArticleRaw, FeedItem } from './types';
 import { NotFoundError, BadRequestError } from './utils/errors';
 import { authenticate, authenticateInternal, requireScopes } from './middleware/auth';
@@ -102,10 +103,17 @@ async function handleGetArticleDetail(_request: Request, env: Env, id: number): 
 
 async function handleGetEvents(_request: Request, env: Env): Promise<Response> {
   const cacheKey = generateCacheKey('active_events', {});
+  const now = Math.floor(Date.now() / 1000);
 
   const events = await withCache(
     cacheKey,
-    () => createDbClient(env).getActiveEvents(),
+    async () => {
+      const dbEvents = await createDbClient(env).getActiveEvents(now);
+      return dbEvents.map(e => ({
+        ...e,
+        freshness: getEventFreshness(e.last_published_at, e.article_count, now)
+      }));
+    },
     env,
     300
   );

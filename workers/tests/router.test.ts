@@ -6,7 +6,7 @@ import type { ApiResponse } from '../src/types';
 
 describe('Router', () => {
 
-    it('GET /api/v1/events returns active events', async () => {
+it('GET /api/v1/events returns active events', async () => {
       const env = makeEnv();
       const req = await signedRequest('http://localhost/api/v1/events', 'GET');
       const res = await route(req, env);
@@ -17,6 +17,8 @@ describe('Router', () => {
       if (json.data.length > 0) {
         expect(json.data[0]).toHaveProperty('hash');
         expect(json.data[0]).toHaveProperty('article_count');
+        expect(json.data[0]).toHaveProperty('freshness');
+        expect(json.data[0]).toHaveProperty('last_published_at');
         expect(json.data[0].severity).toBe('critical'); // deterministic ordering check
       }
     });

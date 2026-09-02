@@ -5,13 +5,14 @@ import { createMockEnv, createMockD1Database } from './setup';
 describe('DbClient', () => {
 
   describe('Events Dashboard', () => {
-    it('getActiveEvents retrieves active events ordered by severity and coverage', async () => {
+    it('getActiveEvents retrieves active events ordered by freshness and severity', async () => {
       const client = makeClient();
-      const events = await client.getActiveEvents();
+      const events = await client.getActiveEvents(Math.floor(Date.now() / 1000));
       expect(events).toBeInstanceOf(Array);
       if (events.length > 0) {
         expect(events[0].severity).toBe('critical');
         expect(events[1].severity).toBe('warning');
+        expect(events[0]).toHaveProperty('last_published_at');
       }
     });
   });

@@ -259,4 +259,6 @@ export interface EventSummary {
   severity: string;
   started_at: number | null;
   article_count: number;
+  last_published_at: number | null;
+  freshness: "developing" | "active" | "stale";
 }
