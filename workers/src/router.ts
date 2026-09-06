@@ -101,24 +101,64 @@ async function handleGetArticleDetail(_request: Request, env: Env, id: number): 
 }
 
 
-async function handleGetEvents(_request: Request, env: Env): Promise<Response> {
-  const cacheKey = generateCacheKey('active_events', {});
+async function handleGetEvents(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const freshness = url.searchParams.get('freshness');
+  const severity = url.searchParams.get('severity');
+  const min_articles_str = url.searchParams.get('min_articles');
+  const sort = url.searchParams.get('sort');
+
+  if (freshness && !['developing', 'active', 'stale'].includes(freshness)) {
+    throw new BadRequestError('Invalid freshness filter');
+  }
+  if (severity && !['critical', 'high', 'warning', 'medium', 'info', 'low'].includes(severity)) {
+    throw new BadRequestError('Invalid severity filter');
+  }
+  if (sort && !['priority', 'recent', 'coverage'].includes(sort)) {
+    throw new BadRequestError('Invalid sort parameter');
+  }
+
+  let min_articles = 0;
+  if (min_articles_str) {
+    if (!/^\d+$/.test(min_articles_str)) {
+      throw new BadRequestError('min_articles must be a non-negative integer');
+    }
+    min_articles = parseInt(min_articles_str, 10);
+    if (!Number.isSafeInteger(min_articles)) {
+      throw new BadRequestError('min_articles is too large');
+    }
+  }
+
+  const cacheKey = generateCacheKey('active_events', {
+    freshness: freshness ?? undefined,
+    severity: severity ?? undefined,
+    min_articles: min_articles || undefined, // use undefined if 0 to keep clean URL
+    sort: sort ?? undefined
+  });
   const now = Math.floor(Date.now() / 1000);
 
-  const events = await withCache(
+  const result = await withCache(
     cacheKey,
     async () => {
-      const dbEvents = await createDbClient(env).getActiveEvents(now);
-      return dbEvents.map(e => ({
-        ...e,
-        freshness: getEventFreshness(e.last_published_at, e.article_count, now)
-      }));
+      const dbResult = await createDbClient(env).getActiveEvents(now, {
+        freshness: freshness ?? undefined,
+        severity: severity ?? undefined,
+        min_articles,
+        sort: sort ?? undefined
+      });
+      return {
+        items: dbResult.items.map(e => ({
+          ...e,
+          freshness: getEventFreshness(e.last_published_at, e.article_count, now)
+        })),
+        summary: dbResult.summary
+      };
     },
     env,
     300
   );
 
-  return success(events);
+  return success(result);
 }
 
 async function handleGetEvent(_request: Request, env: Env, hash: string): Promise<Response> {

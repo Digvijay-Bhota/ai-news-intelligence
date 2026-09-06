@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { fetchActiveEvents } from '../../lib/api';
 import type { EventSummary } from '../../types';
 
@@ -14,68 +15,171 @@ function EmptyState({ title, message }: { title: string; message: string }) {
   );
 }
 
-export default function EventsDashboard() {
+function EventsDashboardInner() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const currentFreshness = searchParams.get('freshness') || '';
+  const currentSeverity = searchParams.get('severity') || '';
+  const currentMinArticles = searchParams.get('min_articles') || '';
+  const currentSort = searchParams.get('sort') || 'priority';
+
   const [events, setEvents] = useState<EventSummary[]>([]);
+  const [summary, setSummary] = useState<import('../../types').GlobalFreshnessSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetchActiveEvents();
-        if (res.success) {
-          setEvents(res.data);
-        } else {
-          setError(true);
-        }
-      } catch (err) {
-        console.error(err);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetchActiveEvents({
+        freshness: currentFreshness || undefined,
+        severity: currentSeverity || undefined,
+        min_articles: currentMinArticles ? parseInt(currentMinArticles, 10) : undefined,
+        sort: currentSort !== 'priority' ? currentSort : undefined
+      });
+      if (res.success) {
+        setEvents(res.data.items);
+        setSummary(res.data.summary);
+      } else {
         setError(true);
-      } finally {
-        setLoading(false);
       }
+    } catch (err) {
+      console.error(err);
+      setError(true);
+    } finally {
+      setLoading(false);
     }
-    load();
-  }, []);
+  }, [currentFreshness, currentSeverity, currentMinArticles, currentSort]);
 
-  if (loading) {
-    return (
-      <div className="space-y-6 max-w-5xl mx-auto px-4">
-        <div className="mb-8">
-          <h1 className="text-3xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight mb-2">Global Intelligence</h1>
-          <p className="text-lg text-gray-600 dark:text-gray-400">Loading active global events...</p>
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const setFilter = (key: string, value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) {
+      params.set(key, value);
+    } else {
+      params.delete(key);
+    }
+    router.push(pathname + '?' + params.toString());
+  };
+
+  const clearFilters = () => {
+    router.push(pathname);
+  };
+
+  const hasFilters = currentFreshness || currentSeverity || currentMinArticles || currentSort !== 'priority';
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      <header className="mb-8">
+        <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight mb-3">
+          Top Events
+        </h1>
+        <p className="text-lg text-gray-600 dark:text-gray-400 max-w-3xl mb-4">
+          The most critical unfolding stories tracked by AI News Intelligence.
+        </p>
+
+        {summary && (
+          <div className="flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-gray-200 dark:border-gray-800">
+            <div className="font-semibold text-gray-900 dark:text-gray-100">Global Overview:</div>
+            <div><span className="font-medium text-gray-900 dark:text-gray-100">{summary.total}</span> Total</div>
+            <div><span className="font-medium text-indigo-600 dark:text-indigo-400">{summary.developing}</span> Developing</div>
+            <div><span className="font-medium text-green-600 dark:text-green-400">{summary.active}</span> Active</div>
+            <div><span className="font-medium text-gray-500 dark:text-gray-500">{summary.stale}</span> Stale</div>
+          </div>
+        )}
+      </header>
+
+      <div className="mb-8 p-4 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm flex flex-wrap gap-4 items-end">
+        <div>
+          <label htmlFor="freshness-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Freshness</label>
+          <select
+            id="freshness-select"
+            value={currentFreshness}
+            onChange={(e) => setFilter('freshness', e.target.value)}
+            className="block w-full sm:w-40 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-800 dark:border-gray-700 dark:text-gray-100"
+          >
+            <option value="">All</option>
+            <option value="developing">Developing</option>
+            <option value="active">Active</option>
+            <option value="stale">Stale</option>
+          </select>
         </div>
+
+        <div>
+          <label htmlFor="severity-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Severity</label>
+          <select
+            id="severity-select"
+            value={currentSeverity}
+            onChange={(e) => setFilter('severity', e.target.value)}
+            className="block w-full sm:w-40 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-800 dark:border-gray-700 dark:text-gray-100"
+          >
+            <option value="">All</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="warning">Warning</option>
+            <option value="medium">Medium</option>
+            <option value="info">Info</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="min-articles-input" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Min Coverage</label>
+          <input
+            id="min-articles-input"
+            type="number"
+            min="0"
+            value={currentMinArticles}
+            onChange={(e) => setFilter('min_articles', e.target.value)}
+            placeholder="0"
+            className="block w-full sm:w-32 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-800 dark:border-gray-700 dark:text-gray-100"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="sort-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Sort</label>
+          <select
+            id="sort-select"
+            value={currentSort}
+            onChange={(e) => setFilter('sort', e.target.value)}
+            className="block w-full sm:w-40 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-800 dark:border-gray-700 dark:text-gray-100"
+          >
+            <option value="priority">Priority</option>
+            <option value="recent">Recent</option>
+            <option value="coverage">Coverage</option>
+          </select>
+        </div>
+
+        {hasFilters && (
+          <div className="ml-auto">
+            <button
+              onClick={clearFilters}
+              className="px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            >
+              Clear Filters
+            </button>
+          </div>
+        )}
+      </div>
+
+      {loading ? (
         <div className="space-y-4">
           <div className="h-32 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse" />
           <div className="h-32 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse" />
           <div className="h-32 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse" />
         </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="max-w-5xl mx-auto px-4 py-12 text-center">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Failed to load events</h1>
-        <p className="mt-2 text-gray-600 dark:text-gray-400">Could not retrieve active events at this time.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6">
-      <header className="mb-10">
-        <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight mb-3">
-          Top Events
-        </h1>
-        <p className="text-lg text-gray-600 dark:text-gray-400 max-w-3xl">
-          The most critical unfolding stories tracked by AI News Intelligence.
-        </p>
-      </header>
-
-      {events.length === 0 ? (
-        <EmptyState title="No Active Events" message="There are no active global events tracked at the moment." />
+      ) : error ? (
+        <div className="max-w-5xl mx-auto px-4 py-12 text-center">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Failed to load events</h1>
+          <p className="mt-2 text-gray-600 dark:text-gray-400">Could not retrieve active events at this time.</p>
+        </div>
+      ) : events.length === 0 ? (
+        <EmptyState title="No Events Found" message="Try adjusting your filters or clearing them to see more events." />
       ) : (
         <div className="space-y-6">
           {events.map((event) => {
@@ -152,5 +256,20 @@ export default function EventsDashboard() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function EventsDashboard() {
+  return (
+    <Suspense fallback={
+      <div className="space-y-6 max-w-5xl mx-auto px-4 py-8">
+        <div className="mb-8">
+          <h1 className="text-3xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight mb-2">Global Intelligence</h1>
+          <p className="text-lg text-gray-600 dark:text-gray-400">Loading active global events...</p>
+        </div>
+      </div>
+    }>
+      <EventsDashboardInner />
+    </Suspense>
   );
 }

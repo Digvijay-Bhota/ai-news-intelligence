@@ -287,3 +287,15 @@ export interface EventDetailEvent {
   last_published_at: number | null;
   freshness: "developing" | "active" | "stale";
 }
+
+export interface GlobalFreshnessSummary {
+  total: number;
+  developing: number;
+  active: number;
+  stale: number;
+}
+
+export interface EventListResponse {
+  items: EventSummary[];
+  summary: GlobalFreshnessSummary;
+}

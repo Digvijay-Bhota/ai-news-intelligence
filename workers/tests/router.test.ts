@@ -13,16 +13,110 @@ it('GET /api/v1/events returns active events', async () => {
       expect(res.status).toBe(200);
       const json = await res.json() as any;
       expect(json.success).toBe(true);
-      expect(json.data).toBeInstanceOf(Array);
-      if (json.data.length > 0) {
-        expect(json.data[0]).toHaveProperty('hash');
-        expect(json.data[0]).toHaveProperty('article_count');
-        expect(json.data[0]).toHaveProperty('freshness');
-        expect(json.data[0]).toHaveProperty('last_published_at');
-        expect(json.data[0].severity).toBe('critical'); // deterministic ordering check
+      expect(json.data.items).toBeInstanceOf(Array);
+      if (json.data.items.length > 0) {
+        expect(json.data.items[0]).toHaveProperty('hash');
+        expect(json.data.items[0]).toHaveProperty('article_count');
+        expect(json.data.items[0]).toHaveProperty('freshness');
+        expect(json.data.items[0]).toHaveProperty('last_published_at');
+        expect(json.data.items[0].severity).toBe('critical'); // deterministic ordering check
       }
+      expect(json.data.summary).toHaveProperty('total');
     });
 
+    it('GET /api/v1/events rejects invalid freshness', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events?freshness=invalid_fresh', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/v1/events rejects invalid severity', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events?severity=extreme', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/v1/events rejects invalid min_articles', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events?min_articles=-5', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/v1/events passes valid filters', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events?freshness=active&severity=critical&min_articles=10&sort=recent', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(200);
+      const json = await res.json() as any;
+      expect(json.success).toBe(true);
+      expect(json.data.items).toBeDefined();
+    });
+
+
+    it('GET /api/v1/events rejects invalid sort parameter', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events?sort=alphabetical', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/v1/events rejects malformed min_articles like 5abc', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events?min_articles=5abc', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/v1/events rejects decimal min_articles like 1.9', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events?min_articles=1.9', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/v1/events rejects unsafe integer min_articles', async () => {
+      const env = makeEnv();
+      // Unsafe integer > Number.MAX_SAFE_INTEGER
+      const req = await signedRequest('http://localhost/api/v1/events?min_articles=9007199254740992', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/v1/events passes valid zero min_articles', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events?min_articles=0', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(200);
+    });
+
+    it('GET /api/v1/events passes valid combined filters', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/events?freshness=active&severity=critical&min_articles=10&sort=recent', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(200);
+    });
+
+    it('GET /api/v1/events cache keys differ when params differ', async () => {
+      const env = makeEnv();
+      const req1 = await signedRequest('http://localhost/api/v1/events?min_articles=10', 'GET');
+      const req2 = await signedRequest('http://localhost/api/v1/events?min_articles=20', 'GET');
+
+      const spy = vitest.spyOn(env.CACHE, 'get');
+
+      await route(req1, env);
+      const call1 = spy.mock.calls[0][0];
+
+      spy.mockClear();
+
+      await route(req2, env);
+      const call2 = spy.mock.calls[0][0];
+
+      expect(call1).not.toBe(call2);
+      spy.mockRestore();
+    });
     it('GET /api/v1/events/:hash returns event detail with freshness and intelligence', async () => {
       const env = makeEnv();
 

@@ -135,28 +135,54 @@ export class DbClient {
   }
 
 
-  async getActiveEvents(nowSeconds: number): Promise<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number; last_published_at: number | null }[]> {
-    const query = `
-      SELECT 
-        e.event_hash as hash, 
-        e.title, 
-        e.description, 
-        e.severity, 
-        e.started_at, 
-        COUNT(ae.article_raw_id) as article_count,
-        MAX(a.published_at) as last_published_at
-      FROM events e
-      LEFT JOIN article_events ae ON e.id = ae.event_id
-      LEFT JOIN articles_raw a ON ae.article_raw_id = a.id
-      WHERE e.status = 'active'
-      GROUP BY e.id
-      ORDER BY
-        CASE 
-          WHEN MAX(a.published_at) > (?1 - 86400) AND COUNT(ae.article_raw_id) > 1 THEN 1
-          WHEN MAX(a.published_at) <= (?1 - 172800) THEN 3
+  async getActiveEvents(
+    nowSeconds: number,
+    options: {
+      freshness?: string;
+      severity?: string;
+      min_articles?: number;
+      sort?: string;
+    } = {}
+  ): Promise<{
+    items: { hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number; last_published_at: number | null }[];
+    summary: { total: number; developing: number; active: number; stale: number; }
+  }> {
+    const { freshness, severity, min_articles = 0, sort = 'priority' } = options;
+
+    const conditions: string[] = ['1=1'];
+    const params: (string | number)[] = [nowSeconds]; // ?1 is nowSeconds
+
+    if (severity) {
+      params.push(severity);
+      conditions.push(`s.severity = ?${params.length}`);
+    }
+
+    if (min_articles > 0) {
+      params.push(min_articles);
+      conditions.push(`s.article_count >= ?${params.length}`);
+    }
+
+    if (freshness === 'developing') {
+      conditions.push(`s.last_published_at > (?1 - 86400) AND s.article_count > 1`);
+    } else if (freshness === 'stale') {
+      conditions.push(`s.last_published_at <= (?1 - 172800)`);
+    } else if (freshness === 'active') {
+      conditions.push(`(s.last_published_at IS NULL OR (s.last_published_at > (?1 - 172800) AND NOT (s.last_published_at > (?1 - 86400) AND s.article_count > 1)))`);
+    }
+
+    let orderClause = '';
+    if (sort === 'recent') {
+      orderClause = 'ORDER BY s.last_published_at DESC, s.article_count DESC, s.id DESC';
+    } else if (sort === 'coverage') {
+      orderClause = 'ORDER BY s.article_count DESC, s.last_published_at DESC, s.id DESC';
+    } else {
+      orderClause = `ORDER BY
+        CASE
+          WHEN s.last_published_at > (?1 - 86400) AND s.article_count > 1 THEN 1
+          WHEN s.last_published_at <= (?1 - 172800) THEN 3
           ELSE 2
         END ASC,
-        CASE e.severity
+        CASE s.severity
           WHEN 'critical' THEN 1
           WHEN 'high' THEN 2
           WHEN 'warning' THEN 3
@@ -165,13 +191,63 @@ export class DbClient {
           WHEN 'low' THEN 6
           ELSE 7
         END ASC,
-        article_count DESC,
-        last_published_at DESC,
-        e.id DESC
+        s.article_count DESC,
+        s.last_published_at DESC,
+        s.id DESC`;
+    }
+
+    const statsQuery = `
+      SELECT
+        e.id,
+        e.event_hash as hash,
+        e.title,
+        e.description,
+        e.severity,
+        e.started_at,
+        COUNT(ae.article_raw_id) as article_count,
+        MAX(a.published_at) as last_published_at
+      FROM events e
+      LEFT JOIN article_events ae ON e.id = ae.event_id
+      LEFT JOIN articles_raw a ON ae.article_raw_id = a.id
+      WHERE e.status = 'active'
+      GROUP BY e.id
+    `;
+
+    const summaryQuery = `
+      WITH stats AS (${statsQuery})
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN last_published_at > (?1 - 86400) AND article_count > 1 THEN 1 ELSE 0 END) as developing,
+        SUM(CASE WHEN last_published_at <= (?1 - 172800) THEN 1 ELSE 0 END) as stale,
+        SUM(CASE WHEN (last_published_at IS NULL) OR (last_published_at > (?1 - 172800) AND NOT (last_published_at > (?1 - 86400) AND article_count > 1)) THEN 1 ELSE 0 END) as active
+      FROM stats
+    `;
+
+    const itemsQuery = `
+      WITH stats AS (${statsQuery})
+      SELECT s.* FROM stats s
+      WHERE ${conditions.join(' AND ')}
+      ${orderClause}
       LIMIT 50
     `;
-    const res = await this.db.prepare(query).bind(nowSeconds).all<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number; last_published_at: number | null }>();
-    return res.results ?? [];
+
+    const [summaryRes, itemsRes] = await this.db.batch([
+      this.db.prepare(summaryQuery).bind(nowSeconds),
+      this.db.prepare(itemsQuery).bind(...params)
+    ]);
+
+    const summaryRow = (summaryRes.results?.[0] as { total?: number; developing?: number; active?: number; stale?: number }) ?? {};
+    const summary = {
+      total: Number(summaryRow.total ?? 0),
+      developing: Number(summaryRow.developing ?? 0),
+      active: Number(summaryRow.active ?? 0),
+      stale: Number(summaryRow.stale ?? 0),
+    };
+
+    return {
+      items: (itemsRes.results as { hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number; last_published_at: number | null }[]) ?? [],
+      summary
+    };
   }
 
   async getEventDetailByHash(hash: string): Promise<{ event: { hash: string; title: string; description: string | null; severity: string; started_at: number | null }; coverage: { total_articles: number; total_sources: number; first_published_at: number | null; last_published_at: number | null; sources: { name: string; article_count: number; first_published_at: number | null; }[] }; articles: (ArticleRaw & { extracted_entities?: string | null })[] } | null> {

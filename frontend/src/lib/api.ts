@@ -44,8 +44,20 @@ export async function fetchEvent(hash: string, signal?: AbortSignal): Promise<Ev
   return res.json();
 }
 
-export async function fetchActiveEvents(signal?: AbortSignal): Promise<{ success: boolean; data: import('../types').EventSummary[] }> {
-  const res = await fetch('/api/events', { signal });
+export async function fetchActiveEvents(
+  params?: { freshness?: string; severity?: string; min_articles?: number; sort?: string },
+  signal?: AbortSignal
+): Promise<{ success: boolean; data: { items: import('../types').EventSummary[], summary: import('../types').GlobalFreshnessSummary } }> {
+  const searchParams = new URLSearchParams();
+  if (params?.freshness) searchParams.set('freshness', params.freshness);
+  if (params?.severity) searchParams.set('severity', params.severity);
+  if (params?.min_articles !== undefined) searchParams.set('min_articles', params.min_articles.toString());
+  if (params?.sort) searchParams.set('sort', params.sort);
+
+  const query = searchParams.toString();
+  const url = query ? `/api/events?${query}` : '/api/events';
+
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error('Failed to fetch active events');
   return res.json();
 }
