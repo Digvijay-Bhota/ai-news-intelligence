@@ -150,7 +150,17 @@ export class DbClient {
     const { freshness, severity, min_articles = 0, sort = 'priority' } = options;
 
     const conditions: string[] = ['1=1'];
-    const params: (string | number)[] = [nowSeconds]; // ?1 is nowSeconds
+    const params: (string | number)[] = [];
+
+    let needsNow = false;
+    if (freshness) needsNow = true;
+    if (sort === 'priority') needsNow = true;
+
+    let nowIdx = -1;
+    if (needsNow) {
+      params.push(nowSeconds);
+      nowIdx = params.length;
+    }
 
     if (severity) {
       params.push(severity);
@@ -163,11 +173,11 @@ export class DbClient {
     }
 
     if (freshness === 'developing') {
-      conditions.push(`s.last_published_at > (?1 - 86400) AND s.article_count > 1`);
+      conditions.push(`s.last_published_at > (?${nowIdx} - 86400) AND s.article_count > 1`);
     } else if (freshness === 'stale') {
-      conditions.push(`s.last_published_at <= (?1 - 172800)`);
+      conditions.push(`s.last_published_at <= (?${nowIdx} - 172800)`);
     } else if (freshness === 'active') {
-      conditions.push(`(s.last_published_at IS NULL OR (s.last_published_at > (?1 - 172800) AND NOT (s.last_published_at > (?1 - 86400) AND s.article_count > 1)))`);
+      conditions.push(`(s.last_published_at IS NULL OR (s.last_published_at > (?${nowIdx} - 172800) AND NOT (s.last_published_at > (?${nowIdx} - 86400) AND s.article_count > 1)))`);
     }
 
     let orderClause = '';
@@ -178,8 +188,8 @@ export class DbClient {
     } else {
       orderClause = `ORDER BY
         CASE
-          WHEN s.last_published_at > (?1 - 86400) AND s.article_count > 1 THEN 1
-          WHEN s.last_published_at <= (?1 - 172800) THEN 3
+          WHEN s.last_published_at > (?${nowIdx} - 86400) AND s.article_count > 1 THEN 1
+          WHEN s.last_published_at <= (?${nowIdx} - 172800) THEN 3
           ELSE 2
         END ASC,
         CASE s.severity

@@ -167,6 +167,136 @@ describe('DbClient', () => {
       expect(res.summary.total).toBe(5);
     });
   });
+
+    it('recent sort does not fail because of parameter mismatch', async () => {
+      const { createMockD1Database } = await import('./setup');
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+      
+      let queryStr = '';
+      let bindParams: any[] = [];
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        if (!sql.includes('COUNT(*) as total')) {
+          queryStr = sql;
+        }
+        return {
+          bind: (...args: any[]) => {
+            if (!sql.includes('COUNT(*) as total')) {
+              bindParams = args;
+            }
+            return {
+              first: async () => null,
+              all: async () => ({ results: [], success: true, meta: {} }),
+              run: async () => ({ success: true, meta: { changes: 0 } })
+            } as any;
+          }
+        } as any;
+      });
+      db.batch = vi.fn().mockResolvedValue([{ results: [] }, { results: [] }]);
+
+      await client.getActiveEvents(Math.floor(Date.now() / 1000), { sort: 'recent' });
+      
+      // recent with no other filters has 0 parameters for itemsQuery!
+      // The itemsQuery should have NO placeholders like ?1
+      expect(queryStr).not.toMatch(/\?\d+/);
+      expect(bindParams.length).toBe(0);
+    });
+
+    it('coverage sort does not fail because of parameter mismatch', async () => {
+      const { createMockD1Database } = await import('./setup');
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+      
+      let bindParams: any[] = [];
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => ({
+        bind: (...args: any[]) => {
+          if (!sql.includes('COUNT(*) as total')) bindParams = args;
+          return { first: async () => null, all: async () => ({results:[]}), run: async () => ({}) } as any;
+        }
+      }) as any);
+      db.batch = vi.fn().mockResolvedValue([{ results: [] }, { results: [] }]);
+
+      await client.getActiveEvents(Math.floor(Date.now() / 1000), { sort: 'coverage' });
+      expect(bindParams.length).toBe(0);
+    });
+
+    it('recent + severity works and binds parameters correctly', async () => {
+      const { createMockD1Database } = await import('./setup');
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+      
+      let queryStr = '';
+      let bindParams: any[] = [];
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        if (!sql.includes('COUNT(*) as total')) queryStr = sql;
+        return {
+          bind: (...args: any[]) => {
+            if (!sql.includes('COUNT(*) as total')) bindParams = args;
+            return { first: async () => null, all: async () => ({results:[]}), run: async () => ({}) } as any;
+          }
+        } as any;
+      });
+      db.batch = vi.fn().mockResolvedValue([{ results: [] }, { results: [] }]);
+
+      await client.getActiveEvents(Math.floor(Date.now() / 1000), { sort: 'recent', severity: 'critical' });
+      
+      expect(bindParams.length).toBe(1);
+      expect(bindParams[0]).toBe('critical');
+      expect(queryStr).toContain('?1');
+      expect(queryStr).not.toContain('?2');
+    });
+
+    it('coverage + min_articles works and binds parameters correctly', async () => {
+      const { createMockD1Database } = await import('./setup');
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+      
+      let bindParams: any[] = [];
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => ({
+        bind: (...args: any[]) => {
+          if (!sql.includes('COUNT(*) as total')) bindParams = args;
+          return { first: async () => null, all: async () => ({results:[]}), run: async () => ({}) } as any;
+        }
+      }) as any);
+      db.batch = vi.fn().mockResolvedValue([{ results: [] }, { results: [] }]);
+
+      await client.getActiveEvents(Math.floor(Date.now() / 1000), { sort: 'coverage', min_articles: 5 });
+      
+      expect(bindParams.length).toBe(1);
+      expect(bindParams[0]).toBe(5);
+    });
+
+    it('combined freshness + severity + min_articles + sort works and binds correctly', async () => {
+      const { createMockD1Database } = await import('./setup');
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+      
+      let queryStr = '';
+      let bindParams: any[] = [];
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        if (!sql.includes('COUNT(*) as total')) queryStr = sql;
+        return {
+          bind: (...args: any[]) => {
+            if (!sql.includes('COUNT(*) as total')) bindParams = args;
+            return { first: async () => null, all: async () => ({results:[]}), run: async () => ({}) } as any;
+          }
+        } as any;
+      });
+      db.batch = vi.fn().mockResolvedValue([{ results: [] }, { results: [] }]);
+
+      const now = Math.floor(Date.now() / 1000);
+      await client.getActiveEvents(now, { freshness: 'developing', severity: 'warning', min_articles: 2, sort: 'priority' });
+      
+      // parameters should be: now, severity, min_articles
+      expect(bindParams.length).toBe(3);
+      expect(bindParams[0]).toBe(now);
+      expect(bindParams[1]).toBe('warning');
+      expect(bindParams[2]).toBe(2);
+      expect(queryStr).toContain('?1');
+      expect(queryStr).toContain('?2');
+      expect(queryStr).toContain('?3');
+      expect(queryStr).not.toContain('?4');
+    });
   function makeClient(): DbClient {
     return createDbClient(createMockEnv({ DB: createMockD1Database() }));
   }
