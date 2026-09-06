@@ -19,6 +19,7 @@ describe('Article Processor', () => {
       getTopicBySlug: vi.fn().mockResolvedValue(null),
       createTopic: vi.fn().mockResolvedValue(20),
       linkArticleTopic: vi.fn(),
+      getRecentActiveEvents: vi.fn().mockResolvedValue([]),
       getEventByHash: vi.fn().mockResolvedValue(null),
       createEvent: vi.fn().mockResolvedValue(30),
       linkArticleEvent: vi.fn(),
@@ -137,6 +138,7 @@ describe('Article Processor', () => {
       getTopicBySlug: vi.fn().mockResolvedValue(null),
       createTopic: vi.fn().mockResolvedValue(20),
       linkArticleTopic: vi.fn(),
+      getRecentActiveEvents: vi.fn().mockResolvedValue([]),
       getEventByHash: vi.fn().mockResolvedValue(null),
       createEvent: vi.fn().mockResolvedValue(30),
       linkArticleEvent: vi.fn(),
@@ -151,5 +153,153 @@ describe('Article Processor', () => {
 
     await processArticle(env, article);
     expect(geminiSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses matched event on semantic match', async () => {
+    const env = createMockEnv();
+    const article: ArticleRaw = {
+      id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
+      raw_content: 'content', published_at: null, fetched_at: 0, language: 'en', status: 'pending', created_at: 0
+    };
+
+    const mockDbClient = {
+      createAiJob: vi.fn().mockResolvedValue({ id: 10 }),
+      createArticleContent: vi.fn(),
+      getTopicBySlug: vi.fn().mockResolvedValue(null),
+      createTopic: vi.fn().mockResolvedValue(20),
+      linkArticleTopic: vi.fn(),
+      getRecentActiveEvents: vi.fn().mockResolvedValue([{ id: 99, event_hash: 'abc', title: 'Old Title', description: 'Old desc', severity: 'high' }]),
+      getEventByHash: vi.fn().mockResolvedValue(null),
+      createEvent: vi.fn().mockResolvedValue(30),
+      linkArticleEvent: vi.fn(),
+      updateArticleStatus: vi.fn(),
+      updateAiJobStatus: vi.fn(),
+      createAiLog: vi.fn(),
+    };
+    vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+
+    const mockEnrichment = {
+      summary: 'summary',
+      topics: [],
+      events: [{ title: 'New Title', description: 'New desc', severity: 'high' }]
+    };
+    vi.spyOn(geminiModule, 'generateEnrichment').mockResolvedValue(mockEnrichment as any);
+    vi.spyOn(geminiModule, 'matchEventToCluster').mockResolvedValue({ match: true, event_id: 99 });
+
+    await processArticle(env, article);
+
+    expect(mockDbClient.createEvent).not.toHaveBeenCalled();
+    expect(mockDbClient.linkArticleEvent).toHaveBeenCalledWith(1, 99, 1.0);
+  });
+
+  it('creates new event on semantic no-match', async () => {
+    const env = createMockEnv();
+    const article: ArticleRaw = {
+      id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
+      raw_content: 'content', published_at: null, fetched_at: 0, language: 'en', status: 'pending', created_at: 0
+    };
+
+    const mockDbClient = {
+      createAiJob: vi.fn().mockResolvedValue({ id: 10 }),
+      createArticleContent: vi.fn(),
+      getTopicBySlug: vi.fn().mockResolvedValue(null),
+      createTopic: vi.fn().mockResolvedValue(20),
+      linkArticleTopic: vi.fn(),
+      getRecentActiveEvents: vi.fn().mockResolvedValue([{ id: 99, event_hash: 'abc', title: 'Old Title', description: 'Old desc', severity: 'high' }]),
+      getEventByHash: vi.fn().mockResolvedValue(null),
+      createEvent: vi.fn().mockResolvedValue(30),
+      linkArticleEvent: vi.fn(),
+      updateArticleStatus: vi.fn(),
+      updateAiJobStatus: vi.fn(),
+      createAiLog: vi.fn(),
+    };
+    vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+
+    const mockEnrichment = {
+      summary: 'summary',
+      topics: [],
+      events: [{ title: 'New Title', description: 'New desc', severity: 'high' }]
+    };
+    vi.spyOn(geminiModule, 'generateEnrichment').mockResolvedValue(mockEnrichment as any);
+    vi.spyOn(geminiModule, 'matchEventToCluster').mockResolvedValue({ match: false, event_id: null });
+
+    await processArticle(env, article);
+
+    expect(mockDbClient.createEvent).toHaveBeenCalled();
+    expect(mockDbClient.linkArticleEvent).toHaveBeenCalledWith(1, 30, 1.0);
+  });
+
+  it('falls back to new event if semantic matcher fails', async () => {
+    const env = createMockEnv();
+    const article: ArticleRaw = {
+      id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
+      raw_content: 'content', published_at: null, fetched_at: 0, language: 'en', status: 'pending', created_at: 0
+    };
+
+    const mockDbClient = {
+      createAiJob: vi.fn().mockResolvedValue({ id: 10 }),
+      createArticleContent: vi.fn(),
+      getTopicBySlug: vi.fn().mockResolvedValue(null),
+      createTopic: vi.fn().mockResolvedValue(20),
+      linkArticleTopic: vi.fn(),
+      getRecentActiveEvents: vi.fn().mockResolvedValue([{ id: 99, event_hash: 'abc', title: 'Old Title', description: 'Old desc', severity: 'high' }]),
+      getEventByHash: vi.fn().mockResolvedValue(null),
+      createEvent: vi.fn().mockResolvedValue(30),
+      linkArticleEvent: vi.fn(),
+      updateArticleStatus: vi.fn(),
+      updateAiJobStatus: vi.fn(),
+      createAiLog: vi.fn(),
+    };
+    vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+
+    const mockEnrichment = {
+      summary: 'summary',
+      topics: [],
+      events: [{ title: 'New Title', description: 'New desc', severity: 'high' }]
+    };
+    vi.spyOn(geminiModule, 'generateEnrichment').mockResolvedValue(mockEnrichment as any);
+    vi.spyOn(geminiModule, 'matchEventToCluster').mockRejectedValue(new Error('AI matching failed'));
+
+    await processArticle(env, article);
+
+    expect(mockDbClient.createEvent).toHaveBeenCalled();
+    expect(mockDbClient.linkArticleEvent).toHaveBeenCalledWith(1, 30, 1.0);
+  });
+
+  it('falls back to new event if matcher returns unknown ID', async () => {
+    const env = createMockEnv();
+    const article: ArticleRaw = {
+      id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
+      raw_content: 'content', published_at: null, fetched_at: 0, language: 'en', status: 'pending', created_at: 0
+    };
+
+    const mockDbClient = {
+      createAiJob: vi.fn().mockResolvedValue({ id: 10 }),
+      createArticleContent: vi.fn(),
+      getTopicBySlug: vi.fn().mockResolvedValue(null),
+      createTopic: vi.fn().mockResolvedValue(20),
+      linkArticleTopic: vi.fn(),
+      getRecentActiveEvents: vi.fn().mockResolvedValue([{ id: 99, event_hash: 'abc', title: 'Old Title', description: 'Old desc', severity: 'high' }]),
+      getEventByHash: vi.fn().mockResolvedValue(null),
+      createEvent: vi.fn().mockResolvedValue(30),
+      linkArticleEvent: vi.fn(),
+      updateArticleStatus: vi.fn(),
+      updateAiJobStatus: vi.fn(),
+      createAiLog: vi.fn(),
+    };
+    vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+
+    const mockEnrichment = {
+      summary: 'summary',
+      topics: [],
+      events: [{ title: 'New Title', description: 'New desc', severity: 'high' }]
+    };
+    vi.spyOn(geminiModule, 'generateEnrichment').mockResolvedValue(mockEnrichment as any);
+    vi.spyOn(geminiModule, 'matchEventToCluster').mockResolvedValue({ match: true, event_id: 12345 });
+
+    await processArticle(env, article);
+
+    expect(mockDbClient.createEvent).toHaveBeenCalled();
+    expect(mockDbClient.linkArticleEvent).toHaveBeenCalledWith(1, 30, 1.0);
   });
 });

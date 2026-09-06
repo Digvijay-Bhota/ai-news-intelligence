@@ -537,9 +537,21 @@ export class DbClient {
 
   async linkArticleEvent(article_raw_id: number, event_id: number, relevance_score: number): Promise<void> {
     await this.db
-      .prepare('INSERT INTO article_events (article_raw_id, event_id, relevance_score) VALUES (?1, ?2, ?3)')
+      .prepare('INSERT OR IGNORE INTO article_events (article_raw_id, event_id, relevance_score) VALUES (?1, ?2, ?3)')
       .bind(article_raw_id, event_id, relevance_score)
       .run();
+  }
+
+  async getRecentActiveEvents(limit: number): Promise<{ id: number; event_hash: string; title: string; description: string | null; severity: string }[]> {
+    const query = `
+      SELECT id, event_hash, title, description, severity
+      FROM events
+      WHERE status = 'active'
+      ORDER BY created_at DESC
+      LIMIT ?1
+    `;
+    const r = await this.db.prepare(query).bind(limit).all<{ id: number; event_hash: string; title: string; description: string | null; severity: string }>();
+    return r.results ?? [];
   }
 
   async getEventByHash(event_hash: string): Promise<Event | null> {

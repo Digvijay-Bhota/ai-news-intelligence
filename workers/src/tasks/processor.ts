@@ -4,7 +4,7 @@
 
 import type { Env, ArticleRaw } from '../types';
 import { createDbClient } from '../db/client';
-import { generateEnrichment, type GeminiResponse } from './gemini';
+import { generateEnrichment, matchEventToCluster, type GeminiResponse } from './gemini';
 
 export async function processArticle(env: Env, article: ArticleRaw): Promise<void> {
   const db = createDbClient(env);
@@ -62,23 +62,54 @@ Article Content: ${article.raw_content?.slice(0, 2000) ?? 'N/A'}`;
       await db.linkArticleTopic(article.id, topic.id, 1.0);
     }
 
+    // Pre-fetch candidate events for semantic matching (bounded to 30)
+    let candidateEvents: { id: number; event_hash: string; title: string; description: string | null; severity: string }[] = [];
+    if (enrichment.events.length > 0) {
+      candidateEvents = await db.getRecentActiveEvents(30);
+    }
+
     // Save events
     for (const eventData of enrichment.events) {
-      const eventHash = await generateEventHash(eventData.title, eventData.description ?? '');
-      let event = await db.getEventByHash(eventHash);
-      if (!event) {
-        const id = await db.createEvent({
-          event_hash: eventHash,
-          title: eventData.title,
-          description: eventData.description,
-          severity: eventData.severity,
-          started_at: null,
-          ended_at: null,
-          status: 'active',
-        });
-        event = { id, event_hash: eventHash, ...eventData, started_at: null, ended_at: null, status: 'active', created_at: 0 };
+      let matchedEventId: number | null = null;
+      let eventHash = '';
+
+      if (candidateEvents.length > 0) {
+        try {
+          const matchResult = await retryWithBackoff(() =>
+            matchEventToCluster(env, { title: eventData.title, description: eventData.description }, candidateEvents)
+          );
+
+          if (matchResult.match && matchResult.event_id) {
+            // Verify event_id is actually in candidates
+            if (candidateEvents.some(c => c.id === matchResult.event_id)) {
+              matchedEventId = matchResult.event_id;
+            }
+          }
+        } catch (error) {
+          // Failure in matching should gracefully fallback to new event creation
+          console.warn('Semantic matching failed, falling back to new event creation', error);
+        }
       }
-      await db.linkArticleEvent(article.id, event.id, 1.0);
+
+      if (matchedEventId !== null) {
+        await db.linkArticleEvent(article.id, matchedEventId, 1.0);
+      } else {
+        eventHash = await generateEventHash(eventData.title, eventData.description ?? '');
+        let event = await db.getEventByHash(eventHash);
+        if (!event) {
+          const id = await db.createEvent({
+            event_hash: eventHash,
+            title: eventData.title,
+            description: eventData.description,
+            severity: eventData.severity,
+            started_at: null,
+            ended_at: null,
+            status: 'active',
+          });
+          event = { id, event_hash: eventHash, ...eventData, started_at: null, ended_at: null, status: 'active', created_at: 0 };
+        }
+        await db.linkArticleEvent(article.id, event.id, 1.0);
+      }
     }
 
     await db.updateArticleStatus(article.id, 'processed');
