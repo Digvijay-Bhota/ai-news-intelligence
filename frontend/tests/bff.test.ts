@@ -77,7 +77,7 @@ describe('BFF /api/feed Route', () => {
   it('calls BACKEND_API.fetch with signed HMAC headers', async () => {
     (env as any).HMAC_SECRET = 'test-secret';
     const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
+      ok: true, headers: new Headers(),
       json: async () => ({ success: true, data: { items: [] } }),
     });
 
@@ -101,7 +101,7 @@ describe('BFF /api/saved Route', () => {
     (env as any).HMAC_SECRET = 'test-secret';
     (env as any).BACKEND_API = {
       fetch: vi.fn().mockResolvedValue({
-        ok: true,
+        ok: true, headers: new Headers(),
         json: async () => ({ id: 123 })
       })
     };
@@ -144,7 +144,7 @@ describe('BFF /api/hide Route', () => {
     (env as any).HMAC_SECRET = 'test-secret';
     (env as any).BACKEND_API = {
       fetch: vi.fn().mockResolvedValue({
-        ok: true,
+        ok: true, headers: new Headers(),
         json: async () => ({ id: 456 })
       })
     };
@@ -165,5 +165,102 @@ describe('BFF /api/hide Route', () => {
     expect(sentReq.url).toBe('http://backend/api/v1/hide');
     expect(sentReq.method).toBe('POST');
     expect(sentReq.headers.get('X-HMAC-Signature')).toBeTruthy();
+  });
+});
+
+describe('BFF Header Hardening', () => {
+  beforeEach(() => {
+    (env as any).HMAC_SECRET = 'test-secret';
+    (env as any).BACKEND_API = {
+      fetch: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({
+          'X-RateLimit-Limit': '100',
+          'X-RateLimit-Remaining': '99',
+          'X-RateLimit-Reset': '1234567890',
+          'Content-Type': 'application/json'
+        }),
+        json: async () => ({ success: true }),
+        text: async () => '{"success":true}'
+      })
+    };
+  });
+
+  function makeRequest(url = 'http://localhost/api/feed', headers: Record<string, string> = {}) {
+    const req = new Request(url, { headers });
+    return Object.assign(req, { nextUrl: new URL(url) }) as unknown as import('next/server').NextRequest;
+  }
+
+  it('forwards CF-Connecting-IP to backend', async () => {
+    const req = makeRequest('http://localhost/api/feed', { 'cf-connecting-ip': '1.2.3.4' });
+    await GET(req);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq: Request = mockFetch.mock.calls[0][0];
+
+    expect(sentReq.headers.get('cf-connecting-ip')).toBe('1.2.3.4');
+  });
+
+  it('forwards X-Forwarded-For to backend when CF-Connecting-IP is absent', async () => {
+    const req = makeRequest('http://localhost/api/feed', { 'x-forwarded-for': '5.6.7.8' });
+    await GET(req);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq: Request = mockFetch.mock.calls[0][0];
+
+    expect(sentReq.headers.get('cf-connecting-ip')).toBeNull();
+    expect(sentReq.headers.get('x-forwarded-for')).toBe('5.6.7.8');
+  });
+
+  it('does not fabricate client IP headers when none exist', async () => {
+    const req = makeRequest('http://localhost/api/feed', {});
+    await GET(req);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq: Request = mockFetch.mock.calls[0][0];
+
+    expect(sentReq.headers.get('cf-connecting-ip')).toBeNull();
+    expect(sentReq.headers.get('x-forwarded-for')).toBeNull();
+  });
+
+  it('propagates backend X-RateLimit-* response headers to the client', async () => {
+    const req = makeRequest('http://localhost/api/feed', {});
+    const res = await GET(req);
+
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('100');
+    expect(res.headers.get('X-RateLimit-Remaining')).toBe('99');
+    expect(res.headers.get('X-RateLimit-Reset')).toBe('1234567890');
+    expect(res.headers.get('Content-Type')).toBe('application/json');
+  });
+
+  it('preserves response status', async () => {
+    (env as any).BACKEND_API = {
+      fetch: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        headers: new Headers({
+          'X-RateLimit-Limit': '100',
+          'X-RateLimit-Remaining': '0',
+          'X-RateLimit-Reset': '1234567890',
+        }),
+        json: async () => ({ error: 'Too Many Requests' }),
+        text: async () => '{"error":"Too Many Requests"}'
+      })
+    };
+
+    const req = makeRequest('http://localhost/api/feed', {});
+    const res = await GET(req);
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('X-RateLimit-Remaining')).toBe('0');
+  });
+
+  it('existing JSON body behavior is unchanged', async () => {
+    const req = makeRequest('http://localhost/api/feed', {});
+    const res = await GET(req);
+
+    const json = await res.json() as any;
+    expect(json.success).toBe(true);
   });
 });

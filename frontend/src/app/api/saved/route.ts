@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateHmac } from '../../../utils/hmac';
 import { env } from 'cloudflare:workers';
 import { getOrCreateUserId } from '../../../lib/session';
+import { getClientIpHeaders, withRateLimitHeaders } from '../../../utils/bff';
+
 
 export const runtime = 'edge';
 
@@ -44,6 +46,7 @@ export async function POST(request: NextRequest) {
         'X-HMAC-Signature': signature,
         'X-Nonce': nonce,
         'X-Timestamp': String(ts),
+      ...getClientIpHeaders(request),
       },
       body: payloadBody,
     });
@@ -52,14 +55,14 @@ export async function POST(request: NextRequest) {
 
     if (!backendRes.ok) {
       const errorText = await backendRes.text();
-      return NextResponse.json(
+      return withRateLimitHeaders(NextResponse.json(
         { error: `Backend error: ${backendRes.status}`, details: errorText },
         { status: backendRes.status }
-      );
+      ), backendRes);
     }
 
     const data = await backendRes.json();
-    return NextResponse.json(data);
+    return withRateLimitHeaders(NextResponse.json(data), backendRes);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('BFF POST /saved Error:', message);
