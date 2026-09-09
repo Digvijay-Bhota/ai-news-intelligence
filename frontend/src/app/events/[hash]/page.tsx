@@ -3,10 +3,10 @@ import Link from 'next/link';
 import { env } from 'cloudflare:workers';
 import { generateHmac } from '../../../utils/hmac';
 import { EventDetailResponse } from '../../../types';
-import { ArticleCard } from '../../../components/ArticleCard';
 import { ErrorState } from '../../../components/ErrorState';
 import { EmptyState } from '../../../components/EmptyState';
-import { ChevronLeftIcon } from '../../../components/icons';
+import { ChevronLeftIcon, ClockIcon, RadarIcon, ActivityIcon, TrendingUpIcon } from '../../../components/icons';
+import { EventTimeline } from '../../../components/EventTimeline';
 
 export const runtime = 'edge';
 
@@ -50,9 +50,9 @@ async function getEvent(hash: string): Promise<EventDetailResponse> {
 }
 
 function freshnessLabel(freshness: 'developing' | 'active' | 'stale'): string {
-  if (freshness === 'developing') return 'New coverage arriving in the last 24 hours.';
-  if (freshness === 'stale') return 'No new coverage in over 48 hours. This story may have concluded.';
-  return 'Coverage is ongoing.';
+  if (freshness === 'developing') return 'High-velocity active development. New articles and sources reported within the last 24 hours.';
+  if (freshness === 'stale') return 'No new coverage reported in over 48 hours. This event cluster appears to have concluded or matured into follow-up stories.';
+  return 'Ongoing story with continuous multi-source reporting across newsrooms.';
 }
 
 function freshnessClasses(freshness: 'developing' | 'active' | 'stale'): string {
@@ -67,19 +67,30 @@ function freshnessClasses(freshness: 'developing' | 'active' | 'stale'): string 
 
 function freshnessBadgeClasses(freshness: 'developing' | 'active' | 'stale'): string {
   if (freshness === 'developing') {
-    return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-400';
+    return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20';
   }
   if (freshness === 'stale') {
-    return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400';
+    return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 border border-gray-200 dark:border-gray-600';
   }
-  return 'bg-blue-100 text-blue-800 dark:bg-blue-500/10 dark:text-blue-400';
+  return 'bg-blue-100 text-blue-800 dark:bg-blue-500/10 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20';
 }
 
 function severityBadgeClasses(severity: string): string {
-  if (severity === 'critical') return 'bg-red-100 text-red-800 dark:bg-red-500/10 dark:text-red-400';
-  if (severity === 'warning') return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/10 dark:text-yellow-400';
-  return 'bg-blue-100 text-blue-800 dark:bg-blue-500/10 dark:text-blue-400';
+  if (severity === 'critical') return 'bg-red-100 text-red-800 dark:bg-red-500/10 dark:text-red-400 border border-red-200 dark:border-red-500/20';
+  if (severity === 'high' || severity === 'warning') return 'bg-amber-100 text-amber-800 dark:bg-amber-500/10 dark:text-amber-400 border border-amber-200 dark:border-amber-500/20';
+  return 'bg-blue-100 text-blue-800 dark:bg-blue-500/10 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20';
 }
+
+const SOURCE_COLORS = [
+  'bg-indigo-500',
+  'bg-emerald-500',
+  'bg-amber-500',
+  'bg-rose-500',
+  'bg-cyan-500',
+  'bg-purple-500',
+  'bg-blue-500',
+  'bg-teal-500',
+];
 
 export default async function EventPage({ params }: { params: Promise<{ hash: string }> }) {
   const { hash } = await params;
@@ -89,7 +100,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
     eventDetail = await getEvent(hash);
   } catch (_error) {
     return (
-      <div className="max-w-4xl mx-auto py-8">
+      <div className="max-w-5xl mx-auto py-8">
         <ErrorState message="Failed to load the event timeline." />
       </div>
     );
@@ -97,9 +108,9 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
 
   if (!eventDetail.success || !eventDetail.data) {
     return (
-      <div className="max-w-4xl mx-auto py-8 text-center">
+      <div className="max-w-5xl mx-auto py-8 text-center">
         <EmptyState title="Event Not Found" message="This event does not exist or has been removed." />
-        <Link href="/" className="mt-4 inline-block text-indigo-600 hover:text-indigo-800">
+        <Link href="/" className="mt-4 inline-block text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
           Return to Feed
         </Link>
       </div>
@@ -120,297 +131,333 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
       })()
     : null;
 
-  // Cap topic display at 12, track overflow count
-  const TOPIC_DISPLAY_LIMIT = 12;
+  // Formatted date string for first and last report
+  const firstReportFormatted = coverage?.first_published_at
+    ? new Date(coverage.first_published_at * 1000).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : 'Unknown';
+
+  const lastReportFormatted = event.last_published_at
+    ? new Date(event.last_published_at * 1000).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : 'Unknown';
+
+  // Cap topic display at 16, track overflow count
+  const TOPIC_DISPLAY_LIMIT = 16;
   const displayedTopics = intelligence?.unique_topics?.slice(0, TOPIC_DISPLAY_LIMIT) ?? [];
   const hiddenTopicCount = Math.max(0, (intelligence?.unique_topics?.length ?? 0) - TOPIC_DISPLAY_LIMIT);
 
   return (
-    <div className="max-w-4xl mx-auto">
-
-      {/* Back + events navigation */}
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+      {/* ── Breadcrumb Navigation ────────────────────────────────────── */}
       <nav className="flex items-center gap-3 mb-6" aria-label="Breadcrumb">
         <Link
           href="/"
           className="inline-flex items-center text-sm font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
         >
           <ChevronLeftIcon className="w-4 h-4 mr-1" />
-          Back to Feed
+          Feed
         </Link>
-        <span className="text-gray-300 dark:text-gray-700" aria-hidden="true">·</span>
+        <span className="text-gray-300 dark:text-gray-700" aria-hidden="true">/</span>
         <Link
           href="/events"
           className="text-sm font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
         >
-          All Events
+          Event Radar
         </Link>
+        <span className="text-gray-300 dark:text-gray-700" aria-hidden="true">/</span>
+        <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate max-w-xs" aria-current="page">
+          {event.title}
+        </span>
       </nav>
 
-      {/* ── 1. Event Overview ────────────────────────────────────── */}
+      {/* ── 1. Event Overview & Title ──────────────────────────────── */}
       <header className="mb-8 pb-6 border-b border-gray-200 dark:border-gray-800">
         <div className="flex flex-wrap items-center gap-2 mb-3">
           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide ${severityBadgeClasses(event.severity)}`}>
             {event.severity}
           </span>
-          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${freshnessBadgeClasses(event.freshness)}`}>
-            {event.freshness}
+          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${freshnessBadgeClasses(event.freshness)}`}>
+            {event.freshness === 'developing' && (
+              <span className="relative flex h-2 w-2 mr-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+            )}
+            {event.freshness.toUpperCase()}
           </span>
+          {intelligence?.top_source && (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-700">
+              Lead Source: {intelligence.top_source}
+            </span>
+          )}
         </div>
 
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-3 tracking-tight">
+        <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-gray-100 mb-3 tracking-tight">
           {event.title}
         </h1>
 
         {event.description && (
-          <p className="text-lg text-gray-600 dark:text-gray-300 leading-relaxed max-w-3xl mb-4">
+          <p className="text-lg text-gray-600 dark:text-gray-300 leading-relaxed max-w-4xl mb-6">
             {event.description}
           </p>
         )}
 
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          {lastCoverageDisplay ? (
-            <>Last coverage: <time dateTime={new Date(event.last_published_at! * 1000).toISOString()}>{lastCoverageDisplay}</time></>
-          ) : (
-            'Last coverage time unavailable'
-          )}
-        </p>
+        {/* Telemetry HUD Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="p-3.5 bg-gray-50 dark:bg-gray-850 rounded-xl border border-gray-200 dark:border-gray-800">
+            <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+              Total Articles
+            </span>
+            <span className="text-2xl font-black text-gray-900 dark:text-gray-100 mt-0.5 block font-mono">
+              {coverage?.total_articles ?? articles.length}
+            </span>
+          </div>
+
+          <div className="p-3.5 bg-gray-50 dark:bg-gray-850 rounded-xl border border-gray-200 dark:border-gray-800">
+            <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+              Sources Reporting
+            </span>
+            <span className="text-2xl font-black text-gray-900 dark:text-gray-100 mt-0.5 block font-mono">
+              {coverage?.total_sources ?? '—'}
+            </span>
+          </div>
+
+          <div className="p-3.5 bg-gray-50 dark:bg-gray-850 rounded-xl border border-gray-200 dark:border-gray-800">
+            <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+              Days Active
+            </span>
+            <span className="text-2xl font-black text-gray-900 dark:text-gray-100 mt-0.5 block font-mono">
+              {intelligence?.days_active !== null && intelligence?.days_active !== undefined
+                ? intelligence.days_active
+                : 1}
+            </span>
+          </div>
+
+          <div className="p-3.5 bg-gray-50 dark:bg-gray-850 rounded-xl border border-gray-200 dark:border-gray-800">
+            <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+              Coverage Density
+            </span>
+            <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-0.5 block font-mono">
+              {intelligence?.coverage_density !== null && intelligence?.coverage_density !== undefined
+                ? `${intelligence.coverage_density}/d`
+                : '—'}
+            </span>
+          </div>
+
+          <div className="p-3.5 bg-gray-50 dark:bg-gray-850 rounded-xl border border-gray-200 dark:border-gray-800">
+            <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+              First Report
+            </span>
+            <span className="text-xs font-bold text-gray-800 dark:text-gray-200 mt-1 block truncate" title={firstReportFormatted}>
+              {firstReportFormatted}
+            </span>
+          </div>
+
+          <div className="p-3.5 bg-gray-50 dark:bg-gray-850 rounded-xl border border-gray-200 dark:border-gray-800">
+            <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+              Latest Activity
+            </span>
+            <span className="text-xs font-bold text-gray-800 dark:text-gray-200 mt-1 block truncate" title={lastReportFormatted}>
+              {lastCoverageDisplay ?? lastReportFormatted}
+            </span>
+          </div>
+        </div>
       </header>
 
-      {/* ── 2. Freshness / Lifecycle Explanation ─────────────────── */}
+      {/* ── 2. Freshness / Lifecycle Banner ──────────────────────────── */}
       <section
         aria-label="Story freshness status"
-        className={`mb-8 px-5 py-4 rounded-lg border text-sm leading-relaxed ${freshnessClasses(event.freshness)}`}
+        className={`mb-8 px-5 py-3.5 rounded-xl border text-sm leading-relaxed flex items-center gap-3 ${freshnessClasses(event.freshness)}`}
       >
-        <span className="font-semibold capitalize">{event.freshness}:</span>{' '}
-        {freshnessLabel(event.freshness)}
+        <ActivityIcon className="w-5 h-5 shrink-0" />
+        <div>
+          <span className="font-bold capitalize">{event.freshness} Status:</span>{' '}
+          {freshnessLabel(event.freshness)}
+        </div>
       </section>
 
-      {/* ── 3. Story Intelligence ─────────────────────────────────── */}
-      {intelligence && (
-        <section
-          aria-label="Story intelligence summary"
-          className="mb-10 p-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm"
-        >
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center gap-2">
-            <svg className="w-5 h-5 text-indigo-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-            Story Intelligence
+      {/* ── 3. What Changed? / Story Evolution Intelligence Panel ──── */}
+      <section
+        aria-label="Story evolution intelligence"
+        className="mb-8 p-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+            <RadarIcon className="w-5 h-5 text-indigo-500 shrink-0" />
+            What Changed? — Story Evolution Intelligence
           </h2>
-
-          {/* Metrics grid */}
-          <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-            <div>
-              <dt className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Topics Tracked</dt>
-              <dd className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">{intelligence.topic_count}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Days Active</dt>
-              <dd className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
-                {intelligence.days_active !== null ? intelligence.days_active : '—'}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Articles / Day</dt>
-              <dd className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
-                {intelligence.coverage_density !== null ? intelligence.coverage_density : '—'}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Top Source</dt>
-              <dd className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-1 truncate" title={intelligence.top_source ?? undefined}>
-                {intelligence.top_source ?? '—'}
-              </dd>
-            </div>
-          </dl>
-
-          {/* Topic badges */}
-          {displayedTopics.length > 0 && (
-            <div>
-              <h3 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
-                Topics in This Story
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {displayedTopics.map((topic) => (
-                  <span
-                    key={topic}
-                    className="inline-flex items-center px-2.5 py-1 rounded-md text-sm bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/20"
-                  >
-                    {topic}
-                  </span>
-                ))}
-                {hiddenTopicCount > 0 && (
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-md text-sm bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
-                    +{hiddenTopicCount} more
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* ── 4. Source Coverage ───────────────────────────────────── */}
-      {coverage && (
-        <section
-          aria-label="Source coverage summary"
-          className="mb-10 p-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm"
-        >
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center gap-2">
-            <svg className="w-5 h-5 text-indigo-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9.5a2.5 2.5 0 00-2.5-2.5H15" />
-            </svg>
-            Coverage Summary
-          </h2>
-
-          <dl className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-            <div>
-              <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Sources</dt>
-              <dd className="text-2xl font-bold text-gray-900 dark:text-gray-100">{coverage.total_sources}</dd>
-            </div>
-            <div>
-              <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Articles</dt>
-              <dd className="text-2xl font-bold text-gray-900 dark:text-gray-100">{coverage.total_articles}</dd>
-            </div>
-            <div>
-              <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">First Report</dt>
-              <dd className="text-lg font-medium text-gray-900 dark:text-gray-100">
-                {coverage.first_published_at
-                  ? new Date(coverage.first_published_at * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-                  : 'Unknown'}
-              </dd>
-            </div>
-          </dl>
-
-          <div>
-            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Sources Covering This Event</h3>
-            <div className="flex flex-wrap gap-2">
-              {coverage.sources.map((src) => (
-                <span
-                  key={src.name}
-                  className="inline-flex items-center px-2.5 py-1 rounded-md text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700"
-                >
-                  {src.name}
-                  <span className="ml-1.5 px-1.5 py-0.5 rounded text-xs bg-gray-200 dark:bg-gray-700 font-medium">
-                    {src.article_count}
-                  </span>
-                </span>
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ── 5. Story Evolution Timeline ──────────────────────────── */}
-      {articles.length === 0 ? (
-        <EmptyState title="No articles found" message="There are no articles associated with this event timeline." />
-      ) : (
-        <div className="relative">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6 flex items-center gap-2">
-            <svg className="w-5 h-5 text-indigo-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Story Evolution
-          </h2>
-
-          {/* Vertical timeline line */}
-          <div className="hidden md:block absolute left-8 top-14 bottom-0 w-px bg-gray-200 dark:bg-gray-800" aria-hidden="true" />
-
-          <div className="space-y-12">
-            {Object.entries(
-              articles.reduce((acc, article, index) => {
-                const isBreaking = index === 0;
-
-                if (!acc.seenSources) acc.seenSources = new Set();
-                const isFirstForSource = !acc.seenSources.has(article.source);
-                if (isFirstForSource) acc.seenSources.add(article.source);
-
-                // What Changed? — new topics introduced by this article
-                if (!acc.seenTopics) acc.seenTopics = new Set();
-                const newTopics: string[] = [];
-                if (article.extracted_entities?.topics) {
-                  for (const topic of article.extracted_entities.topics) {
-                    if (!acc.seenTopics.has(topic.toLowerCase())) {
-                      newTopics.push(topic);
-                      acc.seenTopics.add(topic.toLowerCase());
-                    }
-                  }
-                }
-
-                const dateStr = article.published_at
-                  ? new Date(article.published_at * 1000).toLocaleDateString(undefined, {
-                      weekday: 'long',
-                      year: 'numeric',
-                      month: 'long',
-                      day: 'numeric',
-                    })
-                  : 'Unknown Date';
-
-                if (!acc.groups) acc.groups = {};
-                if (!acc.groups[dateStr]) acc.groups[dateStr] = [];
-                acc.groups[dateStr].push({ ...article, isBreaking, isFirstForSource, newTopics });
-                return acc;
-              }, { seenSources: new Set<string>(), seenTopics: new Set<string>(), groups: {} as Record<string, any[]> }).groups
-            ).map(([dateStr, dayArticles]) => (
-              <div key={dateStr} className="relative">
-                {/* Date heading */}
-                <div className="sticky top-4 z-10 mb-8 md:pl-20 flex items-center">
-                  <div className="hidden md:flex absolute left-8 -translate-x-1/2 w-6 h-6 rounded-full bg-white dark:bg-gray-900 border-4 border-gray-200 dark:border-gray-800 items-center justify-center z-10" aria-hidden="true" />
-                  <h3 className="inline-flex items-center px-4 py-1.5 rounded-full text-sm font-bold bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-sm">
-                    {dateStr}
-                  </h3>
-                </div>
-
-                <div className="space-y-8">
-                  {dayArticles.map((article) => (
-                    <div key={article.id} className="relative md:pl-20">
-                      {/* Timeline dot */}
-                      <div className="hidden md:flex absolute left-8 -translate-x-1/2 top-6 w-4 h-4 rounded-full bg-indigo-100 dark:bg-indigo-900/50 border-2 border-indigo-500 items-center justify-center" aria-hidden="true">
-                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
-                      </div>
-
-                      {/* What Changed? badges */}
-                      {(article.isBreaking || article.isFirstForSource || article.newTopics.length > 0) && (
-                        <div className="flex flex-wrap gap-2 mb-3">
-                          {article.isBreaking && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 dark:bg-red-500/10 dark:text-red-400 border border-red-200 dark:border-red-500/20">
-                              🔥 Breaking Report
-                            </span>
-                          )}
-                          {!article.isBreaking && article.isFirstForSource && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-500/10 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20">
-                              📰 First report by {article.source}
-                            </span>
-                          )}
-                          {article.newTopics.length > 0 && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
-                              🏷️ New Topics: {article.newTopics.join(', ')}
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      <ArticleCard article={article} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Truncation notice */}
-          {coverage && articles.length < coverage.total_articles && (
-            <div className="mt-8 md:pl-20">
-              <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg text-center border border-gray-200 dark:border-gray-800">
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Showing the first {articles.length} of {coverage.total_articles} total articles.
-                  Topics, source markers, and &ldquo;What Changed?&rdquo; badges reflect only the visible window.
-                </p>
-              </div>
-            </div>
-          )}
+          <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+            {coverage?.total_articles} articles &middot; {coverage?.total_sources} newsrooms
+          </span>
         </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="p-4 bg-gray-50 dark:bg-gray-850 rounded-lg border border-gray-200 dark:border-gray-800">
+            <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+              Coverage Velocity
+            </div>
+            <div className="text-base font-bold text-gray-900 dark:text-gray-100">
+              {intelligence?.coverage_density ?? 1} articles per day
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Active across {intelligence?.days_active ?? 1} calendar day{intelligence?.days_active !== 1 ? 's' : ''} since initial reporting.
+            </p>
+          </div>
+
+          <div className="p-4 bg-gray-50 dark:bg-gray-850 rounded-lg border border-gray-200 dark:border-gray-800">
+            <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+              Newsroom Consensus
+            </div>
+            <div className="text-base font-bold text-gray-900 dark:text-gray-100">
+              {coverage?.total_sources} Distinct Newsrooms
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              {intelligence?.top_source ? (
+                <>Top contributor: <span className="font-semibold text-gray-700 dark:text-gray-300">{intelligence.top_source}</span></>
+              ) : (
+                'Cross-checked across global feeds.'
+              )}
+            </p>
+          </div>
+
+          <div className="p-4 bg-gray-50 dark:bg-gray-850 rounded-lg border border-gray-200 dark:border-gray-800">
+            <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+              Thematic Breadth
+            </div>
+            <div className="text-base font-bold text-gray-900 dark:text-gray-100">
+              {intelligence?.topic_count ?? displayedTopics.length} Topics Tracked
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Extracted entities and semantic tags mapped across reporting.
+            </p>
+          </div>
+        </div>
+
+        {/* Topics Introduced Across Story */}
+        {displayedTopics.length > 0 && (
+          <div>
+            <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2.5">
+              Thematic Topics Detected in Coverage
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {displayedTopics.map((topic) => (
+                <Link
+                  key={topic}
+                  href={`/topics?q=${encodeURIComponent(topic)}`}
+                  className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/20 transition-colors"
+                >
+                  #{topic}
+                </Link>
+              ))}
+              {hiddenTopicCount > 0 && (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
+                  +{hiddenTopicCount} more topics
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ── 4. Source Diversity Breakdown ──────────────────────────── */}
+      {coverage && coverage.sources && coverage.sources.length > 0 && (
+        <section
+          aria-label="Source diversity breakdown"
+          className="mb-10 p-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+              <TrendingUpIcon className="w-5 h-5 text-indigo-500 shrink-0" />
+              Source Diversity Breakdown
+            </h2>
+            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+              {coverage.total_sources} sources &middot; {coverage.total_articles} reports
+            </span>
+          </div>
+
+          {/* Visual Source Distribution Bar */}
+          <div className="mb-6">
+            <div className="h-3.5 w-full bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden flex shadow-inner">
+              {coverage.sources.map((src, index) => {
+                const pct = coverage.total_articles > 0
+                  ? (src.article_count / coverage.total_articles) * 100
+                  : 0;
+                const color = SOURCE_COLORS[index % SOURCE_COLORS.length];
+                return (
+                  <div
+                    key={src.name}
+                    className={`${color} h-full transition-all duration-300`}
+                    style={{ width: `${pct}%` }}
+                    title={`${src.name}: ${src.article_count} articles (${Math.round(pct)}%)`}
+                  />
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Source Cards Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {coverage.sources.map((src, index) => {
+              const pct = coverage.total_articles > 0
+                ? Math.round((src.article_count / coverage.total_articles) * 100)
+                : 0;
+              const colorDot = SOURCE_COLORS[index % SOURCE_COLORS.length];
+              const firstSourceDate = src.first_published_at
+                ? new Date(src.first_published_at * 1000).toLocaleDateString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                  })
+                : null;
+
+              return (
+                <div
+                  key={src.name}
+                  className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-850 border border-gray-200 dark:border-gray-800"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className={`w-2.5 h-2.5 rounded-full ${colorDot} shrink-0`} aria-hidden="true" />
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold text-gray-900 dark:text-gray-100 truncate block">
+                        {src.name}
+                      </span>
+                      {firstSourceDate && (
+                        <span className="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
+                          First: {firstSourceDate}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0 ml-2">
+                    <span className="text-xs font-mono font-bold text-gray-900 dark:text-gray-100">
+                      {src.article_count} {src.article_count === 1 ? 'article' : 'articles'}
+                    </span>
+                    <span className="text-[10px] text-gray-400 font-mono block">
+                      ({pct}%)
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
+
+      {/* ── 5. Story Evolution Timeline ────────────────────────────── */}
+      <section aria-label="Story evolution timeline">
+        <EventTimeline
+          articles={articles}
+          totalArticles={coverage?.total_articles}
+        />
+      </section>
     </div>
   );
 }

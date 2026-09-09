@@ -222,7 +222,39 @@ it('GET /api/v1/events returns active events', async () => {
       spy.mockRestore();
     });
 
+    it('GET /api/v1/events/:hash returns days_active = 1 when first and last published are identical', async () => {
+      const env = makeEnv();
 
+      const dbClientModule = await import('../src/db/client');
+      const mockClient = {
+        getEventDetailByHash: async (_hash: string) => ({
+          event: { hash: 'hash-single-day', title: 'Single Day Event', description: 'Happened today', severity: 'medium', started_at: 1000 },
+          coverage: {
+            total_articles: 3,
+            total_sources: 2,
+            first_published_at: 1700000000,
+            last_published_at: 1700000000,
+            sources: [{ name: 'Source A', article_count: 3, first_published_at: 1700000000, last_published_at: 1700000000 }]
+          },
+          articles: [],
+        }),
+        getSourcesBatch: async () => new Map(),
+        getIntelligenceBatch: async () => new Map(),
+      };
+      const spy = vitest.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockClient as any);
+
+      const req = await signedRequest('http://localhost/api/v1/events/hash-single-day', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(200);
+      const json = await res.json() as any;
+      expect(json.success).toBe(true);
+
+      // Must be 1, not 0
+      expect(json.data.intelligence.days_active).toBe(1);
+      expect(json.data.intelligence.coverage_density).toBe(3);
+
+      spy.mockRestore();
+    });
 
   function makeEnv() {
     return createMockEnv({ DB: createMockD1Database(true), CACHE: createMockKVNamespace() });
@@ -237,7 +269,7 @@ it('GET /api/v1/events returns active events', async () => {
   }
 
   describe('Health', () => {
-    it('returns healthy status', async () => {
+    it('returns healthy status with version and environment metadata', async () => {
       const env = makeEnv();
       const req = await signedRequest('http://localhost/api/v1/health', 'GET');
       const res = await route(req, env);
@@ -245,6 +277,19 @@ it('GET /api/v1/events returns active events', async () => {
       const json = (await res.json()) as ApiResponse<any>;
       expect(json.success).toBe(true);
       expect(json.data.status).toBe('healthy');
+      expect(json.data.environment).toBe('test');
+      expect(json.data.version).toBe('0.8.0');
+    });
+
+    it('returns custom version and environment when provided in env', async () => {
+      const env = { ...makeEnv(), ENVIRONMENT: 'production', VERSION: '0.8.0-custom' };
+      const req = await signedRequest('http://localhost/api/v1/health', 'GET');
+      const res = await route(req, env);
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as ApiResponse<any>;
+      expect(json.success).toBe(true);
+      expect(json.data.environment).toBe('production');
+      expect(json.data.version).toBe('0.8.0-custom');
     });
   });
 

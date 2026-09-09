@@ -23,11 +23,11 @@ export function Header() {
   const toggleMenu = () => setMobileMenuOpen(!mobileMenuOpen);
   const closeMenu = () => setMobileMenuOpen(false);
 
-  const navLinks = [
+  const navLinks: { name: string; href: string; disabled?: boolean }[] = [
     { name: 'Feed', href: '/' },
-    { name: 'For You', href: '/foryou' },
     { name: 'Top Events', href: '/events' },
-    { name: 'Topics', href: '#', disabled: true },
+    { name: 'For You', href: '/foryou' },
+    { name: 'Topics', href: '/topics' },
     { name: 'Saved', href: '/saved' },
     { name: 'Settings', href: '/settings' },
   ];

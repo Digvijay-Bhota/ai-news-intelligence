@@ -21,6 +21,7 @@ export interface Env {
   NONCE_HEADER: string;
   TIMESTAMP_HEADER: string;
   REPLAY_WINDOW_SECONDS: string;
+  VERSION?: string;
 }
 
 // ─── Entities ──────────────────────────────────────────────
@@ -261,6 +262,8 @@ export interface EventSummary {
   article_count: number;
   last_published_at: number | null;
   freshness: "developing" | "active" | "stale";
+  source_count?: number;
+  first_published_at?: number | null;
 }
 
 /** Deterministic intelligence derived from existing event coverage data. No AI, no new DB queries. */

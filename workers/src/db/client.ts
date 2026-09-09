@@ -215,6 +215,8 @@ export class DbClient {
         e.severity,
         e.started_at,
         COUNT(ae.article_raw_id) as article_count,
+        COUNT(DISTINCT a.source_id) as source_count,
+        MIN(a.published_at) as first_published_at,
         MAX(a.published_at) as last_published_at
       FROM events e
       LEFT JOIN article_events ae ON e.id = ae.event_id
@@ -255,7 +257,7 @@ export class DbClient {
     };
 
     return {
-      items: (itemsRes.results as { hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number; last_published_at: number | null }[]) ?? [],
+      items: (itemsRes.results as { hash: string; title: string; description: string | null; severity: string; started_at: number | null; article_count: number; source_count?: number; first_published_at?: number | null; last_published_at: number | null }[]) ?? [],
       summary
     };
   }

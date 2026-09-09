@@ -104,6 +104,8 @@ export interface EventSummary {
   article_count: number;
   last_published_at: number | null;
   freshness: "developing" | "active" | "stale";
+  source_count?: number;
+  first_published_at?: number | null;
 }
 
 export interface GlobalFreshnessSummary {

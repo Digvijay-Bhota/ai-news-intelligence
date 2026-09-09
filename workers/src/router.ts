@@ -78,9 +78,9 @@ async function buildFeedItemsBatch(db: ReturnType<typeof createDbClient>, articl
 async function handleHealth(_request: Request, env: Env): Promise<Response> {
   return success({
     status: 'healthy',
-    version: '0.1.0-phase0',
+    version: env.VERSION ?? '0.8.0',
     timestamp: Math.floor(Date.now() / 1000),
-    environment: env.ENVIRONMENT ?? 'unknown',
+    environment: env.ENVIRONMENT ?? 'development',
   });
 }
 async function handleGetArticleDetail(_request: Request, env: Env, id: number): Promise<Response> {
@@ -217,8 +217,8 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
   let days_active: number | null = null;
   let coverage_density: number | null = null;
   if (first_published_at !== null && last_published_at !== null) {
-    days_active = Math.ceil((last_published_at - first_published_at) / 86400);
-    coverage_density = Math.round((total_articles / Math.max(days_active, 1)) * 10) / 10;
+    days_active = Math.max(1, Math.ceil((last_published_at - first_published_at) / 86400));
+    coverage_density = Math.round((total_articles / days_active) * 10) / 10;
   }
 
   const top_source: string | null = sources.length > 0

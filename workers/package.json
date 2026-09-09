@@ -1,7 +1,7 @@
 {
   "name": "ai-news-workers",
-  "version": "0.1.0-phase0",
-  "description": "AI News Intelligence — Cloudflare Workers API (Phase 0)",
+  "version": "0.8.0",
+  "description": "AI News Intelligence — Cloudflare Workers API",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

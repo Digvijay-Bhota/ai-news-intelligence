@@ -41,3 +41,31 @@ export const ChevronLeftIcon = ({ className }: { className?: string }) => (
     <polyline points="15 18 9 12 15 6"></polyline>
   </svg>
 );
+
+export const ChevronRightIcon = ({ className }: { className?: string }) => (
+  <svg role="presentation" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polyline points="9 18 15 12 9 6"></polyline>
+  </svg>
+);
+
+export const ActivityIcon = ({ className }: { className?: string }) => (
+  <svg role="presentation" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+  </svg>
+);
+
+export const RadarIcon = ({ className }: { className?: string }) => (
+  <svg role="presentation" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <circle cx="12" cy="12" r="10"></circle>
+    <path d="M12 2a10 10 0 0 1 10 10"></path>
+    <path d="M12 6a6 6 0 0 1 6 6"></path>
+    <circle cx="12" cy="12" r="2"></circle>
+  </svg>
+);
+
+export const TrendingUpIcon = ({ className }: { className?: string }) => (
+  <svg role="presentation" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+    <polyline points="17 6 23 6 23 12"></polyline>
+  </svg>
+);
