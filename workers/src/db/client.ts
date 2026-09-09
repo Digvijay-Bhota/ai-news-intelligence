@@ -2,7 +2,7 @@
  * D1 Database Access Layer — Phase 0 (Canonical)
  */
 
-import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, UserPreference, SavedArticle, HiddenStory, PipelineToken } from '../types';
+import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow } from '../types';
 
 export class DbClient {
   constructor(private readonly db: D1Database) {}
@@ -262,10 +262,10 @@ export class DbClient {
     };
   }
 
-  async getEventDetailByHash(hash: string): Promise<{ event: { hash: string; title: string; description: string | null; severity: string; started_at: number | null }; coverage: { total_articles: number; total_sources: number; first_published_at: number | null; last_published_at: number | null; sources: { name: string; article_count: number; first_published_at: number | null; }[] }; articles: (ArticleRaw & { extracted_entities?: string | null })[] } | null> {
+  async getEventDetailByHash(hash: string): Promise<{ event: { id?: number; hash: string; title: string; description: string | null; severity: string; started_at: number | null }; coverage: { total_articles: number; total_sources: number; first_published_at: number | null; last_published_at: number | null; sources: { name: string; article_count: number; first_published_at: number | null; }[] }; articles: (ArticleRaw & { extracted_entities?: string | null })[] } | null> {
     const event = await this.db.prepare(
-      'SELECT event_hash as hash, title, description, severity, started_at FROM events WHERE event_hash = ?1'
-    ).bind(hash).first<{ hash: string; title: string; description: string | null; severity: string; started_at: number | null }>();
+      'SELECT id, event_hash as hash, title, description, severity, started_at FROM events WHERE event_hash = ?1'
+    ).bind(hash).first<{ id: number; hash: string; title: string; description: string | null; severity: string; started_at: number | null }>();
 
     if (!event) return null;
 
@@ -813,6 +813,87 @@ export class DbClient {
        VALUES (?1, 1, ?2)
        ON CONFLICT(date) DO UPDATE SET ${field} = ${field} + 1`
     ).bind(date, Math.floor(Date.now() / 1000)).run();
+  }
+
+  // ─── Event Briefs (Grounded AI Summaries) ──────────────────
+  async hasEventBriefsTable(): Promise<boolean> {
+    try {
+      const res = await this.db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='event_briefs'")
+        .first<{ name: string }>();
+      return !!res;
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  async getLatestEventBrief(eventId: number): Promise<EventBriefRow | null> {
+    try {
+      return await this.db
+        .prepare('SELECT * FROM event_briefs WHERE event_id = ?1 ORDER BY version DESC, id DESC LIMIT 1')
+        .bind(eventId)
+        .first<EventBriefRow>();
+    } catch (_err) {
+      // Table may not exist yet if migration pending
+      return null;
+    }
+  }
+
+  async getEventBriefByFingerprint(eventId: number, fingerprint: string): Promise<EventBriefRow | null> {
+    try {
+      return await this.db
+        .prepare('SELECT * FROM event_briefs WHERE event_id = ?1 AND article_fingerprint = ?2 ORDER BY version DESC, id DESC LIMIT 1')
+        .bind(eventId, fingerprint)
+        .first<EventBriefRow>();
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async saveEventBrief(brief: Omit<EventBriefRow, 'id' | 'created_at' | 'updated_at'>): Promise<EventBriefRow> {
+    const now = Math.floor(Date.now() / 1000);
+    const result = await this.db
+      .prepare(
+        `INSERT INTO event_briefs (
+           event_id, content, article_fingerprint, article_ids, source_count, article_count,
+           model, version, status, error_message, created_at, updated_at
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         ON CONFLICT(event_id, article_fingerprint) DO UPDATE SET
+           content = excluded.content,
+           article_ids = excluded.article_ids,
+           source_count = excluded.source_count,
+           article_count = excluded.article_count,
+           model = excluded.model,
+           version = excluded.version,
+           status = excluded.status,
+           error_message = excluded.error_message,
+           updated_at = excluded.updated_at
+         WHERE event_briefs.status != 'completed' OR excluded.status = 'completed'
+         RETURNING *`
+      )
+      .bind(
+        brief.event_id,
+        brief.content,
+        brief.article_fingerprint,
+        brief.article_ids,
+        brief.source_count,
+        brief.article_count,
+        brief.model,
+        brief.version,
+        brief.status,
+        brief.error_message ?? null,
+        now,
+        now
+      )
+      .first<EventBriefRow>();
+
+    if (!result) {
+      const existing = await this.getEventBriefByFingerprint(brief.event_id, brief.article_fingerprint);
+      if (existing) return existing;
+      throw new Error('Failed to save event brief');
+    }
+    return result;
   }
 }
 

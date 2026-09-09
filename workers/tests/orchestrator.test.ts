@@ -4,6 +4,7 @@ import { createMockEnv } from './setup';
 import * as dbClientModule from '../src/db/client';
 import * as fetcherModule from '../src/tasks/fetcher';
 import * as processorModule from '../src/tasks/processor';
+import * as briefGenModule from '../src/tasks/brief-generator';
 
 describe('Orchestrator', () => {
   it('runs successful pipeline', async () => {
@@ -168,6 +169,123 @@ describe('Orchestrator', () => {
       await runPipeline(env);
 
       expect(mockDbClient.updateArticleStatus).toHaveBeenCalledWith(100, 'failed');
+    });
+  });
+
+  describe('Phase 9 Event Brief Synthesis', () => {
+    it('skips brief generation if event_briefs table is not yet migrated', async () => {
+      const env = createMockEnv();
+      const mockDbClient = {
+        createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        listSources: vi.fn().mockResolvedValue([]),
+        listArticles: vi.fn().mockResolvedValue({ articles: [] }),
+        listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
+        updatePipelineJobStatus: vi.fn(),
+        recoverStaleProcessingArticles: vi.fn(),
+        hasEventBriefsTable: vi.fn().mockResolvedValue(false),
+        getRecentActiveEvents: vi.fn().mockResolvedValue([{ id: 1, event_hash: 'hash-1' }]),
+      };
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+      const briefSpy = vi.spyOn(briefGenModule, 'generateAndSaveEventBrief');
+
+      await runPipeline(env);
+
+      expect(mockDbClient.hasEventBriefsTable).toHaveBeenCalled();
+      expect(mockDbClient.getRecentActiveEvents).not.toHaveBeenCalled();
+      expect(briefSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips brief generation if completed brief already matches current fingerprint', async () => {
+      const env = createMockEnv();
+      const mockArticles = [{ id: 1, title: 'A', source_id: 1, published_at: 1000 }];
+      const fp = 'deterministic-fp-123';
+      const mockDbClient = {
+        createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        listSources: vi.fn().mockResolvedValue([]),
+        listArticles: vi.fn().mockResolvedValue({ articles: [] }),
+        listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
+        updatePipelineJobStatus: vi.fn(),
+        recoverStaleProcessingArticles: vi.fn(),
+        hasEventBriefsTable: vi.fn().mockResolvedValue(true),
+        getRecentActiveEvents: vi.fn().mockResolvedValue([{ id: 1, event_hash: 'hash-1' }]),
+        getEventDetailByHash: vi.fn().mockResolvedValue({
+          articles: mockArticles,
+        }),
+        getLatestEventBrief: vi.fn().mockResolvedValue({
+          article_fingerprint: fp,
+          status: 'completed',
+        }),
+      };
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+      vi.spyOn(briefGenModule, 'computeArticleFingerprint').mockResolvedValue(fp);
+      const briefSpy = vi.spyOn(briefGenModule, 'generateAndSaveEventBrief').mockResolvedValue({} as any);
+
+      await runPipeline(env);
+
+      expect(mockDbClient.getLatestEventBrief).toHaveBeenCalledWith(1);
+      expect(briefSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips brief generation if previous attempt failed recently (cooldown active)', async () => {
+      const env = createMockEnv();
+      const mockArticles = [{ id: 1, title: 'A', source_id: 1, published_at: 1000 }];
+      const fp = 'deterministic-fp-123';
+      const now = Math.floor(Date.now() / 1000);
+      const mockDbClient = {
+        createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        listSources: vi.fn().mockResolvedValue([]),
+        listArticles: vi.fn().mockResolvedValue({ articles: [] }),
+        listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
+        updatePipelineJobStatus: vi.fn(),
+        recoverStaleProcessingArticles: vi.fn(),
+        hasEventBriefsTable: vi.fn().mockResolvedValue(true),
+        getRecentActiveEvents: vi.fn().mockResolvedValue([{ id: 1, event_hash: 'hash-1' }]),
+        getEventDetailByHash: vi.fn().mockResolvedValue({
+          articles: mockArticles,
+        }),
+        getLatestEventBrief: vi.fn().mockResolvedValue({
+          article_fingerprint: fp,
+          status: 'failed',
+          updated_at: now - 300, // failed 5 minutes ago (within 1-hr cooldown)
+        }),
+      };
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+      vi.spyOn(briefGenModule, 'computeArticleFingerprint').mockResolvedValue(fp);
+      const briefSpy = vi.spyOn(briefGenModule, 'generateAndSaveEventBrief').mockResolvedValue({} as any);
+
+      await runPipeline(env);
+
+      expect(briefSpy).not.toHaveBeenCalled();
+    });
+
+    it('triggers brief generation when fingerprint has changed', async () => {
+      const env = createMockEnv();
+      const mockArticles = [{ id: 1, title: 'A', source_id: 1, published_at: 1000 }];
+      const newFp = 'new-fp-456';
+      const mockDbClient = {
+        createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        listSources: vi.fn().mockResolvedValue([]),
+        listArticles: vi.fn().mockResolvedValue({ articles: [] }),
+        listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
+        updatePipelineJobStatus: vi.fn(),
+        recoverStaleProcessingArticles: vi.fn(),
+        hasEventBriefsTable: vi.fn().mockResolvedValue(true),
+        getRecentActiveEvents: vi.fn().mockResolvedValue([{ id: 1, event_hash: 'hash-1', title: 'T', description: 'D', severity: 'info' }]),
+        getEventDetailByHash: vi.fn().mockResolvedValue({
+          articles: mockArticles,
+        }),
+        getLatestEventBrief: vi.fn().mockResolvedValue({
+          article_fingerprint: 'old-fp-123',
+          status: 'completed',
+        }),
+      };
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+      vi.spyOn(briefGenModule, 'computeArticleFingerprint').mockResolvedValue(newFp);
+      const briefSpy = vi.spyOn(briefGenModule, 'generateAndSaveEventBrief').mockResolvedValue({} as any);
+
+      await runPipeline(env);
+
+      expect(briefSpy).toHaveBeenCalledTimes(1);
     });
   });
 });

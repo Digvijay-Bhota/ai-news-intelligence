@@ -302,3 +302,60 @@ export interface EventListResponse {
   items: EventSummary[];
   summary: GlobalFreshnessSummary;
 }
+
+// ─── Phase 9: Grounded AI Event Briefing & Change Detection ───
+
+export interface EventBriefSourceReference {
+  article_id: number;
+  claim_context: string;
+}
+
+export interface EventBriefKeyEntity {
+  name: string;
+  type: string;
+  relevance: string;
+}
+
+export interface EventBrief {
+  summary: string;
+  why_it_matters: string;
+  key_developments: string[];
+  key_entities: EventBriefKeyEntity[];
+  uncertainties: string[];
+  source_references: EventBriefSourceReference[];
+}
+
+export interface EventBriefRow {
+  id: number;
+  event_id: number;
+  content: string;
+  article_fingerprint: string;
+  article_ids: string;
+  source_count: number;
+  article_count: number;
+  model: string;
+  version: number;
+  status: 'completed' | 'generating' | 'failed';
+  error_message: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface EventBriefMetadata {
+  version: number;
+  status: 'completed' | 'generating' | 'failed' | 'unavailable';
+  generated_at: number | null;
+  model: string | null;
+  article_fingerprint: string | null;
+  article_count: number;
+  source_count: number;
+  is_stale: boolean;
+  unincorporated_article_count: number;
+}
+
+export interface ChangeSummary {
+  has_changed: boolean;
+  article_delta: number;
+  source_delta: number;
+  latest_activity_at: number | null;
+}

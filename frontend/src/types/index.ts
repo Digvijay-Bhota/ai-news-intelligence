@@ -91,8 +91,52 @@ export interface EventDetailResponse {
       }[];
     };
     intelligence: EventIntelligence;
+    brief: EventBrief | null;
+    brief_metadata: EventBriefMetadata | null;
+    change_summary: ChangeSummary | null;
     articles: Article[];
   };
+}
+
+// ─── Phase 9: Grounded AI Event Briefing & Change Detection ───
+
+export interface EventBriefSourceReference {
+  article_id: number;
+  claim_context: string;
+}
+
+export interface EventBriefKeyEntity {
+  name: string;
+  type: string;
+  relevance: string;
+}
+
+export interface EventBrief {
+  summary: string;
+  why_it_matters: string;
+  key_developments: string[];
+  key_entities: EventBriefKeyEntity[];
+  uncertainties: string[];
+  source_references: EventBriefSourceReference[];
+}
+
+export interface EventBriefMetadata {
+  version: number;
+  status: 'completed' | 'generating' | 'failed' | 'unavailable';
+  generated_at: number | null;
+  model: string | null;
+  article_fingerprint: string | null;
+  article_count: number;
+  source_count: number;
+  is_stale: boolean;
+  unincorporated_article_count: number;
+}
+
+export interface ChangeSummary {
+  has_changed: boolean;
+  article_delta: number;
+  source_delta: number;
+  latest_activity_at: number | null;
 }
 
 export interface EventSummary {

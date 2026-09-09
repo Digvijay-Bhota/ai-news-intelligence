@@ -5,8 +5,10 @@ import { generateHmac } from '../../../utils/hmac';
 import { EventDetailResponse } from '../../../types';
 import { ErrorState } from '../../../components/ErrorState';
 import { EmptyState } from '../../../components/EmptyState';
-import { ChevronLeftIcon, ClockIcon, RadarIcon, ActivityIcon, TrendingUpIcon } from '../../../components/icons';
+import { ChevronLeftIcon, RadarIcon, ActivityIcon, TrendingUpIcon } from '../../../components/icons';
 import { EventTimeline } from '../../../components/EventTimeline';
+import { EventBriefCard } from '../../../components/EventBriefCard';
+
 
 export const runtime = 'edge';
 
@@ -117,7 +119,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
     );
   }
 
-  const { event, coverage, intelligence, articles } = eventDetail.data;
+  const { event, coverage, intelligence, articles, brief, brief_metadata, change_summary: _change_summary } = eventDetail.data;
   const nowSeconds = Math.floor(Date.now() / 1000);
 
   // Human-readable last coverage elapsed time
@@ -285,7 +287,14 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
         </div>
       </section>
 
-      {/* ── 3. What Changed? / Story Evolution Intelligence Panel ──── */}
+      {/* ── 3. Grounded AI Intelligence Brief ─────────────────────── */}
+      <EventBriefCard
+        brief={brief ?? null}
+        brief_metadata={brief_metadata ?? null}
+        articles={articles}
+      />
+
+      {/* ── 4. What Changed? / Story Evolution Intelligence Panel ──── */}
       <section
         aria-label="Story evolution intelligence"
         className="mb-8 p-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm"

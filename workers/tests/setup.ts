@@ -83,6 +83,28 @@ export function createMockD1Database(seed = false): D1Database {
     } as T;
   }
 
+  if (upperQuery.includes('INSERT INTO EVENT_BRIEFS')) {
+    return {
+      id: 1,
+      event_id: values[0],
+      content: values[1],
+      article_fingerprint: values[2],
+      article_ids: values[3],
+      source_count: values[4],
+      article_count: values[5],
+      model: values[6],
+      version: values[7],
+      status: values[8],
+      error_message: values[9] ?? null,
+      created_at: values[10],
+      updated_at: values[11],
+    } as T;
+  }
+
+  if (upperQuery.includes('FROM SQLITE_MASTER') && upperQuery.includes('EVENT_BRIEFS')) {
+    return { name: 'event_briefs' } as T;
+  }
+
   if (seed && upperQuery.includes('SELECT * FROM ARTICLES_RAW WHERE ID = ?') && values[0] === 1) {
     return {
       id: 1, external_id: 'ext-1', source_id: 1, title: 'Integration Test Article',

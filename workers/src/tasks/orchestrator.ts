@@ -6,6 +6,7 @@ import type { Env } from '../types';
 import { createDbClient } from '../db/client';
 import { fetchAndIngest } from './fetcher';
 import { processArticle } from './processor';
+import { computeArticleFingerprint, generateAndSaveEventBrief } from './brief-generator';
 
 const MAX_SOURCES = 10;
 const MAX_ARTICLES = 20;
@@ -85,6 +86,54 @@ export async function runPipeline(env: Env): Promise<void> {
           await db.updateArticleStatus(article.id, 'failed');
         }
       }
+    }
+
+    // 4. Grounded AI Event Brief Generation
+    try {
+      const tableReady = typeof db.hasEventBriefsTable === 'function' ? await db.hasEventBriefsTable() : true;
+      if (tableReady && typeof db.getRecentActiveEvents === 'function') {
+        const activeEvents = await db.getRecentActiveEvents(5);
+        if (Array.isArray(activeEvents)) {
+          const now = Math.floor(Date.now() / 1000);
+          for (const event of activeEvents) {
+            if (!event.id || !event.event_hash) continue;
+            try {
+              const detail = await db.getEventDetailByHash(event.event_hash);
+              if (!detail || !detail.articles || detail.articles.length === 0) continue;
+
+              const currentFingerprint = await computeArticleFingerprint(event.id, detail.articles);
+              const latestBrief = await db.getLatestEventBrief(event.id);
+
+              const isMatch = latestBrief && latestBrief.article_fingerprint === currentFingerprint;
+              // Skip if already completed for this exact event state
+              if (isMatch && latestBrief.status === 'completed') {
+                continue;
+              }
+
+              // Cooldown: if previous generation for this exact state failed within the last hour, do not retry storm
+              if (isMatch && latestBrief.status === 'failed' && (now - latestBrief.updated_at) < 3600) {
+                continue;
+              }
+
+              await generateAndSaveEventBrief(
+                env,
+                {
+                  id: event.id,
+                  hash: event.event_hash,
+                  title: event.title,
+                  description: event.description,
+                  severity: event.severity,
+                },
+                detail.articles
+              );
+            } catch (_briefErr) {
+              // Failure on individual event brief does not block other events
+            }
+          }
+        }
+      }
+    } catch (_e) {
+      // Pipeline continues safely even if brief stage encounters unexpected schema state
     }
   } catch (e) {
     error = e instanceof Error ? e : new Error(String(e));

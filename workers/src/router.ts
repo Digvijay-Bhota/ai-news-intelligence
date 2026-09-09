@@ -19,7 +19,7 @@
  */
 
 import { getEventFreshness } from "./utils/freshness";
-import type { Env, ApiResponse, ArticleRaw, FeedItem } from './types';
+import type { Env, ApiResponse, ArticleRaw, FeedItem, EventBrief, EventBriefMetadata, ChangeSummary } from './types';
 import { NotFoundError, BadRequestError } from './utils/errors';
 import { authenticate, authenticateInternal, requireScopes } from './middleware/auth';
 import { applyPublicRateLimit, applyInternalRateLimit, rateLimitHeaders } from './middleware/rate-limit';
@@ -28,6 +28,7 @@ import { parseBody } from './middleware/body-limit';
 import { createDbClient } from './db/client';
 import { withCache, generateCacheKey } from './utils/cache';
 import { requireString, optionalString, optionalNumber } from './middleware/validate';
+import { computeArticleFingerprint, generateAndSaveEventBrief } from './tasks/brief-generator';
 
 // ─── Response Helpers ─────────────────────────────────────
 
@@ -233,6 +234,64 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
     top_source,
   };
 
+  // Phase 9: Grounded AI Event Brief & Change Detection
+  let brief: EventBrief | null = null;
+  let brief_metadata: EventBriefMetadata | null = null;
+  let change_summary: ChangeSummary | null = null;
+
+  if (eventDetail.event.id) {
+    try {
+      const latestBrief = await db.getLatestEventBrief(eventDetail.event.id);
+      const currentFingerprint = await computeArticleFingerprint(
+        eventDetail.event.id,
+        eventDetail.articles
+      );
+
+      if (latestBrief && latestBrief.status === 'completed') {
+        try {
+          brief = JSON.parse(latestBrief.content) as EventBrief;
+          const is_stale = latestBrief.article_fingerprint !== currentFingerprint;
+          const unincorporated_article_count = Math.max(0, eventDetail.coverage.total_articles - latestBrief.article_count);
+
+          brief_metadata = {
+            version: latestBrief.version,
+            status: 'completed',
+            generated_at: latestBrief.created_at,
+            model: latestBrief.model,
+            article_fingerprint: latestBrief.article_fingerprint,
+            article_count: latestBrief.article_count,
+            source_count: latestBrief.source_count,
+            is_stale,
+            unincorporated_article_count,
+          };
+
+          change_summary = {
+            has_changed: is_stale,
+            article_delta: eventDetail.coverage.total_articles - latestBrief.article_count,
+            source_delta: eventDetail.coverage.total_sources - latestBrief.source_count,
+            latest_activity_at: eventDetail.coverage.last_published_at,
+          };
+        } catch (_parseErr) {
+          brief = null;
+        }
+      } else if (latestBrief) {
+        brief_metadata = {
+          version: latestBrief.version,
+          status: latestBrief.status as 'generating' | 'failed',
+          generated_at: latestBrief.created_at,
+          model: latestBrief.model,
+          article_fingerprint: latestBrief.article_fingerprint,
+          article_count: latestBrief.article_count,
+          source_count: latestBrief.source_count,
+          is_stale: false,
+          unincorporated_article_count: 0,
+        };
+      }
+    } catch (_briefErr) {
+      // Graceful degradation if table does not exist or brief fetch fails
+    }
+  }
+
   return success({
     event: {
       ...eventDetail.event,
@@ -241,8 +300,53 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
     },
     coverage: eventDetail.coverage,
     intelligence,
+    brief,
+    brief_metadata,
+    change_summary,
     articles: itemsWithEntities,
   });
+}
+
+async function handleGenerateEventBrief(_request: Request, env: Env, hash: string): Promise<Response> {
+  const db = createDbClient(env);
+  const eventDetail = await db.getEventDetailByHash(hash);
+  if (!eventDetail || !eventDetail.event.id) {
+    throw new NotFoundError('Event not found');
+  }
+
+  const briefRow = await generateAndSaveEventBrief(
+    env,
+    {
+      id: eventDetail.event.id,
+      hash,
+      title: eventDetail.event.title,
+      description: eventDetail.event.description,
+      severity: eventDetail.event.severity,
+    },
+    eventDetail.articles
+  );
+
+  // Invalidate cached event detail
+  const cacheKey = generateCacheKey('event_detail', { hash });
+  try {
+    await env.CACHE?.delete(cacheKey);
+  } catch (_e) {}
+
+  const parsedBrief = JSON.parse(briefRow.content);
+  return success({
+    brief: parsedBrief,
+    brief_metadata: {
+      version: briefRow.version,
+      status: briefRow.status,
+      generated_at: briefRow.created_at,
+      model: briefRow.model,
+      article_fingerprint: briefRow.article_fingerprint,
+      article_count: briefRow.article_count,
+      source_count: briefRow.source_count,
+      is_stale: false,
+      unincorporated_article_count: 0,
+    }
+  }, 200);
 }
 
 async function handleFeed(request: Request, env: Env): Promise<Response> {
@@ -668,6 +772,24 @@ export async function route(request: Request, env: Env): Promise<Response> {
       requireScopes(auth, ['internal', 'admin']);
       const rateInfo = await applyInternalRateLimit(auth.identifier, '/internal/v1/pipeline-log', env);
       response = await handleInternalPipelineLog(request, env);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    const internalBriefMatch = path.match(/^\/internal\/v1\/events\/([a-zA-Z0-9_-]+)\/brief$/);
+    if (internalBriefMatch && request.method === 'POST') {
+      const auth = await authenticateInternal(request, env);
+      requireScopes(auth, ['internal', 'admin']);
+      const rateInfo = await applyInternalRateLimit(auth.identifier, '/internal/v1/events/:hash/brief', env);
+      response = await handleGenerateEventBrief(request, env, internalBriefMatch[1]);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    const apiBriefMatch = path.match(/^\/api\/v1\/events\/([a-zA-Z0-9_-]+)\/brief$/);
+    if (apiBriefMatch && request.method === 'POST') {
+      const auth = await authenticateInternal(request, env);
+      requireScopes(auth, ['internal', 'admin']);
+      const rateInfo = await applyInternalRateLimit(auth.identifier, '/api/v1/events/:hash/brief', env);
+      response = await handleGenerateEventBrief(request, env, apiBriefMatch[1]);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 

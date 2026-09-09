@@ -67,6 +67,27 @@ CREATE TABLE IF NOT EXISTS article_events (
   PRIMARY KEY (article_raw_id, event_id)
 );
 
+-- ─── Event Briefs (Grounded AI Summaries) ──────────────────
+CREATE TABLE IF NOT EXISTS event_briefs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  article_fingerprint TEXT NOT NULL,
+  article_ids TEXT NOT NULL,
+  source_count INTEGER NOT NULL DEFAULT 0,
+  article_count INTEGER NOT NULL DEFAULT 0,
+  model TEXT DEFAULT 'gemini-3.6-flash',
+  version INTEGER NOT NULL DEFAULT 1,
+  status TEXT DEFAULT 'completed', -- generating, completed, failed
+  error_message TEXT,
+  created_at INTEGER DEFAULT (unixepoch()),
+  updated_at INTEGER DEFAULT (unixepoch()),
+  UNIQUE(event_id, article_fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_briefs_event_version ON event_briefs(event_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_event_briefs_event_fingerprint ON event_briefs(event_id, article_fingerprint);
+
 -- ─── Topics ────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS topics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
