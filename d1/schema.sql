@@ -31,13 +31,14 @@ CREATE TABLE IF NOT EXISTS articles_raw (
   fetched_at INTEGER DEFAULT (unixepoch()),
   language TEXT DEFAULT 'en',
   status TEXT DEFAULT 'pending', -- pending, processed, failed
-  created_at INTEGER DEFAULT (unixepoch())
+  created_at INTEGER DEFAULT (unixepoch()),
+  updated_at INTEGER DEFAULT (unixepoch())
 );
 
 -- ─── Article Content (processed / enriched) ────────────────
 CREATE TABLE IF NOT EXISTS article_content (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  article_raw_id INTEGER NOT NULL REFERENCES articles_raw(id) ON DELETE CASCADE,
+  article_raw_id INTEGER NOT NULL UNIQUE REFERENCES articles_raw(id) ON DELETE CASCADE,
   cleaned_text TEXT,
   extracted_entities TEXT, -- JSON
   readability_score REAL,
@@ -137,7 +138,7 @@ CREATE TABLE IF NOT EXISTS dedup_hashes (
 -- ─── Source Health ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS source_health (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  source_id INTEGER NOT NULL UNIQUE REFERENCES sources(id) ON DELETE CASCADE,
   status TEXT DEFAULT 'healthy', -- healthy, degraded, down
   last_success_at INTEGER,
   last_failure_at INTEGER,

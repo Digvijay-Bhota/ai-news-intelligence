@@ -35,7 +35,7 @@ export async function recordNonce(
   env: Env
 ): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO request_logs (nonce, key_id, endpoint, method, timestamp)
+    `INSERT INTO request_logs (nonce, identifier, endpoint, method, timestamp)
      VALUES (?1, ?2, ?3, ?4, ?5)`
   )
     .bind(nonce, keyId, endpoint, method, Math.floor(Date.now() / 1000))

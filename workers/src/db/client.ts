@@ -430,7 +430,7 @@ export class DbClient {
   }
 
   async updateArticleStatus(id: number, status: string): Promise<void> {
-    await this.db.prepare('UPDATE articles_raw SET status = ?1 WHERE id = ?2').bind(status, id).run();
+    await this.db.prepare('UPDATE articles_raw SET status = ?1, updated_at = unixepoch() WHERE id = ?2').bind(status, id).run();
   }
 
   // ─── Topics ───────────────────────────────────────────────
@@ -494,7 +494,12 @@ export class DbClient {
   }): Promise<void> {
     await this.db
       .prepare(
-        'INSERT INTO article_content (article_raw_id, cleaned_text, extracted_entities) VALUES (?1, ?2, ?3)'
+        `INSERT INTO article_content (article_raw_id, cleaned_text, extracted_entities)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(article_raw_id) DO UPDATE SET
+           cleaned_text = excluded.cleaned_text,
+           extracted_entities = excluded.extracted_entities,
+           processed_at = unixepoch()`
       )
       .bind(data.article_raw_id, data.cleaned_text, data.extracted_entities)
       .run();
@@ -511,7 +516,7 @@ export class DbClient {
 
   async linkArticleTopic(article_raw_id: number, topic_id: number, confidence: number): Promise<void> {
     await this.db
-      .prepare('INSERT INTO article_topics (article_raw_id, topic_id, confidence) VALUES (?1, ?2, ?3)')
+      .prepare('INSERT OR IGNORE INTO article_topics (article_raw_id, topic_id, confidence) VALUES (?1, ?2, ?3)')
       .bind(article_raw_id, topic_id, confidence)
       .run();
   }
@@ -519,7 +524,7 @@ export class DbClient {
   async createEvent(event: Omit<Event, 'id' | 'created_at'>): Promise<number> {
     const result = await this.db
       .prepare(
-        'INSERT INTO events (event_hash, title, description, severity, started_at, ended_at, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id'
+        'INSERT OR IGNORE INTO events (event_hash, title, description, severity, started_at, ended_at, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id'
       )
       .bind(
         event.event_hash,
@@ -531,8 +536,20 @@ export class DbClient {
         event.status
       )
       .first<{ id: number }>();
-    if (!result) throw new Error('Failed to create event');
-    return result.id;
+
+    if (result) {
+      return result.id;
+    }
+
+    // If ignored, the event_hash already exists
+    const existing = await this.db
+      .prepare('SELECT id FROM events WHERE event_hash = ?1')
+      .bind(event.event_hash)
+      .first<{ id: number }>();
+
+    if (!existing) throw new Error('Failed to create or retrieve event');
+
+    return existing.id;
   }
 
   async linkArticleEvent(article_raw_id: number, event_id: number, relevance_score: number): Promise<void> {
@@ -544,10 +561,13 @@ export class DbClient {
 
   async getRecentActiveEvents(limit: number): Promise<{ id: number; event_hash: string; title: string; description: string | null; severity: string }[]> {
     const query = `
-      SELECT id, event_hash, title, description, severity
-      FROM events
-      WHERE status = 'active'
-      ORDER BY created_at DESC
+      SELECT e.id, e.event_hash, e.title, e.description, e.severity
+      FROM events e
+      LEFT JOIN article_events ae ON e.id = ae.event_id
+      LEFT JOIN articles_raw a ON ae.article_raw_id = a.id
+      WHERE e.status = 'active'
+      GROUP BY e.id
+      ORDER BY COALESCE(MAX(a.published_at), e.created_at) DESC
       LIMIT ?1
     `;
     const r = await this.db.prepare(query).bind(limit).all<{ id: number; event_hash: string; title: string; description: string | null; severity: string }>();
@@ -578,7 +598,7 @@ export class DbClient {
   async claimArticle(id: number): Promise<boolean> {
     const result = await this.db
       .prepare(
-        'UPDATE articles_raw SET status = "processing" WHERE id = ?1 AND status = "pending"'
+        'UPDATE articles_raw SET status = "processing", updated_at = unixepoch() WHERE id = ?1 AND status = "pending"'
       )
       .bind(id)
       .run();
@@ -588,11 +608,24 @@ export class DbClient {
   async claimFailedArticle(id: number): Promise<boolean> {
     const result = await this.db
       .prepare(
-        'UPDATE articles_raw SET status = "processing" WHERE id = ?1 AND status = "failed"'
+        'UPDATE articles_raw SET status = "processing", updated_at = unixepoch() WHERE id = ?1 AND status = "failed"'
       )
       .bind(id)
       .run();
     return result.meta.changes === 1;
+  }
+
+  async recoverStaleProcessingArticles(timeoutSeconds: number = 900): Promise<number> {
+    const result = await this.db
+      .prepare(
+        `UPDATE articles_raw
+         SET status = 'failed', updated_at = unixepoch()
+         WHERE status = 'processing'
+           AND updated_at < unixepoch() - ?1`
+      )
+      .bind(timeoutSeconds)
+      .run();
+    return result.meta.changes;
   }
 
   async listRetryableFailedArticles(limit: number): Promise<ArticleRaw[]> {
@@ -647,16 +680,24 @@ export class DbClient {
     const now = Math.floor(Date.now() / 1000);
     await this.db
       .prepare(
-        'UPDATE source_health SET status = ?1, last_success_at = ?2, last_failure_at = ?3, consecutive_failures = ?4, error_message = ?5, checked_at = ?6 WHERE source_id = ?7'
+        `INSERT INTO source_health (source_id, status, last_success_at, last_failure_at, consecutive_failures, error_message, checked_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(source_id) DO UPDATE SET
+           status = excluded.status,
+           last_success_at = excluded.last_success_at,
+           last_failure_at = excluded.last_failure_at,
+           consecutive_failures = excluded.consecutive_failures,
+           error_message = excluded.error_message,
+           checked_at = excluded.checked_at`
       )
       .bind(
+        source_id,
         data.status,
         data.last_success_at ?? null,
         data.last_failure_at ?? null,
         data.consecutive_failures,
         data.error_message,
-        now,
-        source_id
+        now
       )
       .run();
   }
@@ -680,29 +721,21 @@ export class DbClient {
 
   async upsertUserPreferences(prefs: Omit<UserPreference, 'id' | 'created_at' | 'updated_at'>): Promise<UserPreference> {
     const now = Math.floor(Date.now() / 1000);
-    const existing = await this.getUserPreferences(prefs.user_id);
-    if (existing) {
-      const result = await this.db
-        .prepare(
-          `UPDATE user_preferences
-           SET preferred_topics = ?1, preferred_sources = ?2, digest_frequency = ?3, email = ?4, updated_at = ?5
-           WHERE user_id = ?6
-           RETURNING *`
-        )
-        .bind(prefs.preferred_topics ?? null, prefs.preferred_sources ?? null, prefs.digest_frequency, prefs.email ?? null, now, prefs.user_id)
-        .first<UserPreference>();
-      if (!result) throw new Error('Failed to update preferences');
-      return result;
-    }
     const result = await this.db
       .prepare(
         `INSERT INTO user_preferences (user_id, preferred_topics, preferred_sources, digest_frequency, email, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(user_id) DO UPDATE SET
+           preferred_topics = excluded.preferred_topics,
+           preferred_sources = excluded.preferred_sources,
+           digest_frequency = excluded.digest_frequency,
+           email = excluded.email,
+           updated_at = excluded.updated_at
          RETURNING *`
       )
       .bind(prefs.user_id, prefs.preferred_topics ?? null, prefs.preferred_sources ?? null, prefs.digest_frequency, prefs.email ?? null, now, now)
       .first<UserPreference>();
-    if (!result) throw new Error('Failed to create preferences');
+    if (!result) throw new Error('Failed to upsert preferences');
     return result;
   }
 
@@ -750,7 +783,16 @@ export class DbClient {
       )
       .bind(userId, articleRawId, reason ?? 'user_hidden', now)
       .first<HiddenStory>();
-    if (!result) throw new Error('Failed to hide story');
+
+    if (!result) {
+      const existing = await this.db
+        .prepare('SELECT * FROM hidden_stories WHERE user_id = ?1 AND article_raw_id = ?2')
+        .bind(userId, articleRawId)
+        .first<HiddenStory>();
+      if (!existing) throw new Error('Failed to hide story');
+      return existing;
+    }
+
     return result;
   }
 

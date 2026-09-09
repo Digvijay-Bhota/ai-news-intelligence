@@ -172,7 +172,7 @@ describe('DbClient', () => {
       const { createMockD1Database } = await import('./setup');
       const db = createMockD1Database();
       const client = new DbClient(db);
-      
+
       let queryStr = '';
       let bindParams: any[] = [];
       vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
@@ -195,7 +195,7 @@ describe('DbClient', () => {
       db.batch = vi.fn().mockResolvedValue([{ results: [] }, { results: [] }]);
 
       await client.getActiveEvents(Math.floor(Date.now() / 1000), { sort: 'recent' });
-      
+
       // recent with no other filters has 0 parameters for itemsQuery!
       // The itemsQuery should have NO placeholders like ?1
       expect(queryStr).not.toMatch(/\?\d+/);
@@ -206,7 +206,7 @@ describe('DbClient', () => {
       const { createMockD1Database } = await import('./setup');
       const db = createMockD1Database();
       const client = new DbClient(db);
-      
+
       let bindParams: any[] = [];
       vi.spyOn(db, 'prepare').mockImplementation((sql: string) => ({
         bind: (...args: any[]) => {
@@ -224,7 +224,7 @@ describe('DbClient', () => {
       const { createMockD1Database } = await import('./setup');
       const db = createMockD1Database();
       const client = new DbClient(db);
-      
+
       let queryStr = '';
       let bindParams: any[] = [];
       vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
@@ -239,7 +239,7 @@ describe('DbClient', () => {
       db.batch = vi.fn().mockResolvedValue([{ results: [] }, { results: [] }]);
 
       await client.getActiveEvents(Math.floor(Date.now() / 1000), { sort: 'recent', severity: 'critical' });
-      
+
       expect(bindParams.length).toBe(1);
       expect(bindParams[0]).toBe('critical');
       expect(queryStr).toContain('?1');
@@ -250,7 +250,7 @@ describe('DbClient', () => {
       const { createMockD1Database } = await import('./setup');
       const db = createMockD1Database();
       const client = new DbClient(db);
-      
+
       let bindParams: any[] = [];
       vi.spyOn(db, 'prepare').mockImplementation((sql: string) => ({
         bind: (...args: any[]) => {
@@ -261,7 +261,7 @@ describe('DbClient', () => {
       db.batch = vi.fn().mockResolvedValue([{ results: [] }, { results: [] }]);
 
       await client.getActiveEvents(Math.floor(Date.now() / 1000), { sort: 'coverage', min_articles: 5 });
-      
+
       expect(bindParams.length).toBe(1);
       expect(bindParams[0]).toBe(5);
     });
@@ -270,7 +270,7 @@ describe('DbClient', () => {
       const { createMockD1Database } = await import('./setup');
       const db = createMockD1Database();
       const client = new DbClient(db);
-      
+
       let queryStr = '';
       let bindParams: any[] = [];
       vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
@@ -286,7 +286,7 @@ describe('DbClient', () => {
 
       const now = Math.floor(Date.now() / 1000);
       await client.getActiveEvents(now, { freshness: 'developing', severity: 'warning', min_articles: 2, sort: 'priority' });
-      
+
       // parameters should be: now, severity, min_articles
       expect(bindParams.length).toBe(3);
       expect(bindParams[0]).toBe(now);
@@ -385,6 +385,23 @@ describe('DbClient', () => {
       const result = await client.claimFailedArticle(10);
       expect(result).toBe(true);
       expect(bindMock).toHaveBeenCalledWith(10);
+    });
+
+    it('recoverStaleProcessingArticles updates old processing rows', async () => {
+      const db = createMockD1Database();
+      const client = new DbClient(db);
+      const runMock = vi.fn().mockResolvedValue({ meta: { changes: 2 } });
+      const bindMock = vi.fn().mockReturnValue({ run: runMock });
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        expect(sql).toContain("status = 'failed'");
+        expect(sql).toContain("WHERE status = 'processing'");
+        expect(sql).toContain('updated_at < unixepoch() - ?1');
+        return { bind: bindMock } as any;
+      });
+
+      const recovered = await client.recoverStaleProcessingArticles(900);
+      expect(recovered).toBe(2);
+      expect(bindMock).toHaveBeenCalledWith(900);
     });
 
     it('listRetryableFailedArticles executes correctly', async () => {
@@ -504,5 +521,116 @@ describe('listArticles Filters', () => {
     expect(bindArgs).toContain(1);
     expect(bindArgs).toContain('%test%');
     expect(bindArgs).toContain('ai');
+  });
+});
+
+describe('Fix Pass 1 Idempotency', () => {
+  it('duplicate article_topics link succeeds idempotently', async () => {
+    const { createMockD1Database } = await import('./setup');
+    const db = createMockD1Database();
+    const client = new DbClient(db);
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      expect(sql).toContain('INSERT OR IGNORE INTO article_topics');
+      return { bind: () => ({ run: runMock }) } as any;
+    });
+
+    await expect(client.linkArticleTopic(1, 1, 0.9)).resolves.toBeUndefined();
+    expect(runMock).toHaveBeenCalled();
+  });
+
+  it('duplicate article_content write succeeds idempotently (upsert)', async () => {
+    const { createMockD1Database } = await import('./setup');
+    const db = createMockD1Database();
+    const client = new DbClient(db);
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      expect(sql).toContain('ON CONFLICT(article_raw_id) DO UPDATE SET');
+      return { bind: () => ({ run: runMock }) } as any;
+    });
+
+    await expect(client.createArticleContent({ article_raw_id: 1, cleaned_text: 't', extracted_entities: '{}' })).resolves.toBeUndefined();
+    expect(runMock).toHaveBeenCalled();
+  });
+
+  it('source_health update acts as upsert', async () => {
+    const { createMockD1Database } = await import('./setup');
+    const db = createMockD1Database();
+    const client = new DbClient(db);
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      expect(sql).toContain('INSERT INTO source_health');
+      expect(sql).toContain('ON CONFLICT(source_id) DO UPDATE SET');
+      return { bind: () => ({ run: runMock }) } as any;
+    });
+
+    await expect(client.updateSourceHealth(1, { status: 'down', consecutive_failures: 1, error_message: 'err' })).resolves.toBeUndefined();
+    expect(runMock).toHaveBeenCalled();
+  });
+
+  it('createEvent TOCTOU fallback works on duplicate', async () => {
+    const { createMockD1Database } = await import('./setup');
+    const db = createMockD1Database();
+    const client = new DbClient(db);
+
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      if (sql.includes('INSERT OR IGNORE')) {
+        return { bind: () => ({ first: async () => null }) } as any; // simulate IGNORE
+      }
+      if (sql.includes('SELECT id FROM events WHERE event_hash')) {
+        return { bind: () => ({ first: async () => ({ id: 42 }) }) } as any;
+      }
+      return { bind: () => ({ first: async () => null }) } as any;
+    });
+
+    const id = await client.createEvent({ event_hash: 'hash123', title: 't', description: 'd', severity: 'low', started_at: null, ended_at: null, status: 'active' });
+    expect(id).toBe(42);
+  });
+
+  it('hidden_stories idempotency uses fallback on duplicate', async () => {
+    const { createMockD1Database } = await import('./setup');
+    const db = createMockD1Database();
+    const client = new DbClient(db);
+
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      if (sql.includes('INSERT INTO hidden_stories')) {
+        return { bind: () => ({ first: async () => null }) } as any; // simulate DO NOTHING
+      }
+      if (sql.includes('SELECT * FROM hidden_stories')) {
+        return { bind: () => ({ first: async () => ({ id: 99, reason: 'old_reason' }) }) } as any;
+      }
+      return { bind: () => ({ first: async () => null }) } as any;
+    });
+
+    const res = await client.createHiddenStory('user1', 1, 'new_reason');
+    expect(res.id).toBe(99);
+    expect((res as any).reason).toBe('old_reason');
+  });
+
+  it('getRecentActiveEvents sorts by latest article published_at', async () => {
+    const { createMockD1Database } = await import('./setup');
+    const db = createMockD1Database();
+    const client = new DbClient(db);
+
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      expect(sql).toContain('ORDER BY COALESCE(MAX(a.published_at), e.created_at) DESC');
+      return { bind: () => ({ all: async () => ({ results: [] }) }) } as any;
+    });
+
+    await client.getRecentActiveEvents(30);
+  });
+
+  it('upsertUserPreferences uses ON CONFLICT DO UPDATE', async () => {
+    const { createMockD1Database } = await import('./setup');
+    const db = createMockD1Database();
+    const client = new DbClient(db);
+
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      expect(sql).toContain('ON CONFLICT(user_id) DO UPDATE SET');
+      return { bind: () => ({ first: async () => ({ id: 1, user_id: 'user1' }) }) } as any;
+    });
+
+    const res = await client.upsertUserPreferences({ user_id: 'user1', preferred_topics: null, preferred_sources: null, digest_frequency: 'daily', email: null });
+    expect(res.id).toBe(1);
   });
 });

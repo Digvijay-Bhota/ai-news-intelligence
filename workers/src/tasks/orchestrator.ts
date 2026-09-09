@@ -12,9 +12,9 @@ const MAX_ARTICLES = 20;
 
 export async function runPipeline(env: Env): Promise<void> {
   const db = createDbClient(env);
-  const pipelineJob = await db.createPipelineJob({ 
-    job_type: 'pipeline-run', 
-    status: 'running', 
+  const pipelineJob = await db.createPipelineJob({
+    job_type: 'pipeline-run',
+    status: 'running',
     payload: null,
     result: null,
     error_message: null
@@ -57,7 +57,7 @@ export async function runPipeline(env: Env): Promise<void> {
       if (totalAttempts >= MAX_ARTICLES) break;
       const claimed = await db.claimArticle(article.id);
       if (!claimed) continue;
-      
+
       totalAttempts++;
       try {
         await processArticle(env, article);
@@ -68,6 +68,8 @@ export async function runPipeline(env: Env): Promise<void> {
     }
 
     // 3. Retry Processing (Failed)
+    await db.recoverStaleProcessingArticles(900); // 15 minutes
+
     const remainingSlots = MAX_ARTICLES - totalAttempts;
     if (remainingSlots > 0) {
       const retryCandidates = await db.listRetryableFailedArticles(remainingSlots);

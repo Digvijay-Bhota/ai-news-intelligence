@@ -5,6 +5,7 @@
 import type { Env, ArticleRaw } from '../types';
 import { createDbClient } from '../db/client';
 import { generateEnrichment, matchEventToCluster, type GeminiResponse } from './gemini';
+import { ApiError } from '../utils/errors';
 
 export async function processArticle(env: Env, article: ArticleRaw): Promise<void> {
   const db = createDbClient(env);
@@ -161,17 +162,14 @@ async function generateEventHash(title: string, description: string): Promise<st
   return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function retryWithBackoff<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+export async function retryWithBackoff<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn();
     } catch (e) {
       if (i === retries - 1) throw e;
-      const message = (e as Error).message;
-      const statusMatch = message.match(/(\d{3})/);
-      if (statusMatch) {
-        const status = parseInt(statusMatch[1], 10);
-        if (status === 429 || (status >= 500 && status <= 599)) {
+      if (e instanceof ApiError) {
+        if (e.status === 429 || (e.status >= 500 && e.status <= 599)) {
           await new Promise((resolve) => setTimeout(resolve, Math.pow(2, i) * 100)); // Using 100ms for testing performance
           continue;
         }

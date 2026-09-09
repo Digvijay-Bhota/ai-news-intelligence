@@ -18,6 +18,7 @@ describe('Orchestrator', () => {
       listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
       claimFailedArticle: vi.fn().mockResolvedValue(true),
       updatePipelineJobStatus: vi.fn(),
+      recoverStaleProcessingArticles: vi.fn(),
     };
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
     const fetchSpy = vi.spyOn(fetcherModule, 'fetchAndIngest').mockResolvedValue(1);
@@ -44,6 +45,7 @@ describe('Orchestrator', () => {
       claimFailedArticle: vi.fn().mockResolvedValue(true),
       updateArticleStatus: vi.fn(),
       updatePipelineJobStatus: vi.fn(),
+      recoverStaleProcessingArticles: vi.fn(),
     };
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
     vi.spyOn(fetcherModule, 'fetchAndIngest').mockRejectedValue(new Error('Fetch fail'));
@@ -62,6 +64,7 @@ describe('Orchestrator', () => {
       createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
       listSources: vi.fn().mockRejectedValue(new Error('Fatal DB Error')),
       updatePipelineJobStatus: vi.fn(),
+      recoverStaleProcessingArticles: vi.fn(),
     };
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
 
@@ -81,6 +84,7 @@ describe('Orchestrator', () => {
         listRetryableFailedArticles: vi.fn(),
         claimFailedArticle: vi.fn(),
         updatePipelineJobStatus: vi.fn(),
+      recoverStaleProcessingArticles: vi.fn(),
       };
       vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
       const processSpy = vi.spyOn(processorModule, 'processArticle').mockResolvedValue(undefined);
@@ -103,6 +107,7 @@ describe('Orchestrator', () => {
         listRetryableFailedArticles: vi.fn().mockResolvedValue(mockRetries),
         claimFailedArticle: vi.fn().mockResolvedValue(true),
         updatePipelineJobStatus: vi.fn(),
+      recoverStaleProcessingArticles: vi.fn(),
       };
       vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
       const processSpy = vi.spyOn(processorModule, 'processArticle').mockResolvedValue(undefined);
@@ -130,6 +135,7 @@ describe('Orchestrator', () => {
         // First retry claim fails, second succeeds
         claimFailedArticle: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
         updatePipelineJobStatus: vi.fn(),
+      recoverStaleProcessingArticles: vi.fn(),
       };
       vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
       const processSpy = vi.spyOn(processorModule, 'processArticle').mockResolvedValue(undefined);
@@ -154,6 +160,7 @@ describe('Orchestrator', () => {
         claimFailedArticle: vi.fn().mockResolvedValue(true),
         updateArticleStatus: vi.fn(),
         updatePipelineJobStatus: vi.fn(),
+      recoverStaleProcessingArticles: vi.fn(),
       };
       vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
       vi.spyOn(processorModule, 'processArticle').mockRejectedValue(new Error('Retry fail'));

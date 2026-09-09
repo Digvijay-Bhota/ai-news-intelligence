@@ -56,25 +56,42 @@ export async function fetchAndIngest(env: Env, source: Source): Promise<number> 
  * Minimal RSS/Atom parser without extra dependencies.
  * Extracts: title, link, description/summary, pubDate/published
  */
-function parseRss(xml: string): IngestedArticle[] {
+export function parseRss(xml: string): IngestedArticle[] {
   const articles: IngestedArticle[] = [];
-  // Very simplistic regex-based item extraction
-  const itemMatches = xml.matchAll(/<item>([\s\S]*?)<\/item>/gi);
+  const seenIds = new Set<string>();
+
+  // Match both <item> (RSS) and <entry> (Atom)
+  const itemMatches = xml.matchAll(/<(item|entry)[\s>]([\s\S]*?)<\/\1>/gi);
+
   for (const match of itemMatches) {
-    const item = match[1];
+    const item = match[2];
     const title = extractTag(item, 'title');
-    const link = extractTag(item, 'link');
-    const summary = extractTag(item, 'description') || extractTag(item, 'summary');
-    const pubDate = extractTag(item, 'pubDate') || extractTag(item, 'published') || extractTag(item, 'updated');
+
+    // Atom <link href="..."/> or RSS <link>...</link>
+    let link = extractTag(item, 'link');
+    if (!link) {
+      const linkMatch = item.match(/<link[^>]*href=["']([^"']+)["'][^>]*>/i);
+      if (linkMatch) link = linkMatch[1];
+    }
+
+    const summary = extractTag(item, 'description') || extractTag(item, 'summary') || extractTag(item, 'content');
+    const pubDateStr = extractTag(item, 'pubDate') || extractTag(item, 'published') || extractTag(item, 'updated');
+    const guid = extractTag(item, 'guid') || extractTag(item, 'id');
 
     if (link && title) {
+      const external_id = (guid || link).trim();
+      if (seenIds.has(external_id)) continue;
+      seenIds.add(external_id);
+
+      const parsedDate = pubDateStr ? new Date(pubDateStr).getTime() : NaN;
+
       articles.push({
-        external_id: link, // Use URL as unique ID
-        title: title.replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1'),
-        summary: summary ? summary.replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1') : null,
-        url: link,
-        published_at: pubDate ? Math.floor(new Date(pubDate).getTime() / 1000) : null,
-        raw_content: item, // Store full XML item for potential future enrichment
+        external_id,
+        title: title.replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1').trim(),
+        summary: summary ? summary.replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1').trim() : null,
+        url: link.trim(),
+        published_at: !isNaN(parsedDate) ? Math.floor(parsedDate / 1000) : null,
+        raw_content: match[0],
       });
     }
   }
@@ -82,7 +99,7 @@ function parseRss(xml: string): IngestedArticle[] {
 }
 
 function extractTag(xml: string, tag: string): string | null {
-  const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\/${tag}>`, 'i');
+  const regex = new RegExp(`<${tag}(?:\\s[^>]*?)?>([\\s\\S]*?)<\\/${tag}>`, 'i');
   const match = xml.match(regex);
   return match ? match[1].trim() : null;
 }

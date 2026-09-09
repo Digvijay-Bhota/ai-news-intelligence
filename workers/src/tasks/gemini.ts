@@ -3,6 +3,7 @@
  */
 
 import type { Env } from '../types';
+import { ApiError } from '../utils/errors';
 
 export interface GeminiResponse {
   summary: string;
@@ -32,7 +33,7 @@ export async function generateEnrichment(
   });
 
   if (!response.ok) {
-    throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+    throw new ApiError(response.status, `Gemini API error: ${response.status} ${response.statusText}`, 'GEMINI_ERROR');
   }
 
   const data = (await response.json()) as any;
@@ -97,7 +98,7 @@ CRITICAL INSTRUCTIONS:
   });
 
   if (!response.ok) {
-    throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+    throw new ApiError(response.status, `Gemini API error: ${response.status} ${response.statusText}`, 'GEMINI_ERROR');
   }
 
   const data = (await response.json()) as any;

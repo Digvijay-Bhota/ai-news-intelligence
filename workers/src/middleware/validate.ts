@@ -6,12 +6,17 @@ import { BadRequestError } from '../utils/errors';
 
 export function requireString(
   value: unknown,
-  field: string
+  field: string,
+  maxLength: number = 1000
 ): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new BadRequestError(`${field} is required`);
   }
-  return value.trim();
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) {
+    throw new BadRequestError(`${field} must be at most ${maxLength} characters`);
+  }
+  return trimmed;
 }
 
 export function requireNumber(
@@ -26,11 +31,15 @@ export function requireNumber(
   throw new BadRequestError(`${field} must be a number`);
 }
 
-export function optionalString(value: unknown): string | undefined {
+export function optionalString(value: unknown, maxLength: number = 1000): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  if (trimmed.length === 0) return undefined;
+  if (trimmed.length > maxLength) {
+    throw new BadRequestError(`Field must be at most ${maxLength} characters`);
+  }
+  return trimmed;
 }
 
 export function optionalNumber(value: unknown): number | undefined {

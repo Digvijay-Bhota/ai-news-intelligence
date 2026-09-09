@@ -148,7 +148,7 @@ describe('Article Processor', () => {
     };
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
     const geminiSpy = vi.spyOn(geminiModule, 'generateEnrichment')
-      .mockRejectedValueOnce(new Error('429 Too Many Requests'))
+      .mockRejectedValueOnce(new ApiError(429, '429 Too Many Requests'))
       .mockResolvedValue({ summary: 's', topics: [], events: [] } as any);
 
     await processArticle(env, article);
@@ -301,5 +301,58 @@ describe('Article Processor', () => {
 
     expect(mockDbClient.createEvent).toHaveBeenCalled();
     expect(mockDbClient.linkArticleEvent).toHaveBeenCalledWith(1, 30, 1.0);
+  });
+});
+
+import { retryWithBackoff } from '../src/tasks/processor';
+import { ApiError } from '../src/utils/errors';
+
+describe('retryWithBackoff', () => {
+  it('retries on 429', async () => {
+    let calls = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      calls++;
+      if (calls < 2) throw new ApiError(429, 'Rate limit');
+      return 'success';
+    });
+
+    await expect(retryWithBackoff(fn)).resolves.toBe('success');
+    expect(calls).toBe(2);
+  });
+
+  it('retries on 500', async () => {
+    let calls = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      calls++;
+      if (calls < 3) throw new ApiError(500, 'Internal Server Error');
+      return 'success';
+    });
+
+    await expect(retryWithBackoff(fn)).resolves.toBe('success');
+    expect(calls).toBe(3);
+  });
+
+  it('retries on 503', async () => {
+    let calls = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      calls++;
+      if (calls < 2) throw new ApiError(503, 'Service Unavailable');
+      return 'success';
+    });
+
+    await expect(retryWithBackoff(fn)).resolves.toBe('success');
+    expect(calls).toBe(2);
+  });
+
+  it('does not retry on 400', async () => {
+    const fn = vi.fn().mockRejectedValue(new ApiError(400, 'Bad Request'));
+    await expect(retryWithBackoff(fn)).rejects.toThrow(ApiError);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry on unclassified errors', async () => {
+    const fn = vi.fn().mockRejectedValue(new Error('Some random error 500'));
+    await expect(retryWithBackoff(fn)).rejects.toThrow('Some random error 500');
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

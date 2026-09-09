@@ -270,21 +270,23 @@ async function handleFeed(request: Request, env: Env): Promise<Response> {
 
   const result = await withCache(
     cacheKey,
-    () => createDbClient(env).listArticles({
-      limit, offset,
-      source_id: sourceId ? parseInt(sourceId, 10) : undefined,
-      source_names: sourceNames,
-      q: q ? q.slice(0, 100) : undefined, // Safe truncation
-      topic_slug: topic ? topic.slice(0, 100) : undefined,
-      topics,
-      status: 'processed',
-    }),
+    async () => {
+      const db = createDbClient(env);
+      const res = await db.listArticles({
+        limit, offset,
+        source_id: sourceId ? parseInt(sourceId, 10) : undefined,
+        source_names: sourceNames,
+        q: q ? q.slice(0, 100) : undefined, // Safe truncation
+        topic_slug: topic ? topic.slice(0, 100) : undefined,
+        topics,
+        status: 'processed',
+      });
+      const items = await buildFeedItemsBatch(db, res.articles);
+      return { total: res.total, items };
+    },
     env,
     60
   );
-
-  const db = createDbClient(env);
-  const items = await buildFeedItemsBatch(db, result.articles);
 
   return success({
     meta: {
@@ -292,7 +294,7 @@ async function handleFeed(request: Request, env: Env): Promise<Response> {
       offset,
       total: result.total,
     },
-    items,
+    items: result.items,
   });
 }
 
@@ -322,6 +324,7 @@ async function handleGetPreferences(request: Request, env: Env): Promise<Respons
   const url = new URL(request.url);
   const userId = url.searchParams.get('user_id');
   if (!userId) throw new BadRequestError('user_id required');
+  if (userId.length > 255) throw new BadRequestError('user_id too long');
 
   const db = createDbClient(env);
   const prefs = await db.getUserPreferences(userId);
@@ -377,6 +380,7 @@ async function handleGetSaved(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const userId = url.searchParams.get('user_id');
   if (!userId) throw new BadRequestError('user_id required');
+  if (userId.length > 255) throw new BadRequestError('user_id too long');
 
   const db = createDbClient(env);
   const saved = await db.listSavedArticles(userId);
@@ -402,6 +406,7 @@ async function handleDeleteSaved(request: Request, env: Env, id: number): Promis
   const url = new URL(request.url);
   const userId = url.searchParams.get('user_id');
   if (!userId) throw new BadRequestError('user_id required');
+  if (userId.length > 255) throw new BadRequestError('user_id too long');
 
   const db = createDbClient(env);
   const deleted = await db.deleteSavedArticle(id, userId);
