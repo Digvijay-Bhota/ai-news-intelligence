@@ -8,6 +8,8 @@ import { EmptyState } from '../../../components/EmptyState';
 import { ChevronLeftIcon, RadarIcon, ActivityIcon, TrendingUpIcon } from '../../../components/icons';
 import { EventTimeline } from '../../../components/EventTimeline';
 import { EventBriefCard } from '../../../components/EventBriefCard';
+import { NarrativeDeltaCard } from '../../../components/NarrativeDeltaCard';
+import { ClaimComparisonCard } from '../../../components/ClaimComparisonCard';
 
 
 export const runtime = 'edge';
@@ -119,7 +121,19 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
     );
   }
 
-  const { event, coverage, intelligence, articles, brief, brief_metadata, change_summary: _change_summary } = eventDetail.data;
+  const {
+    event,
+    coverage,
+    intelligence,
+    articles,
+    brief,
+    brief_metadata,
+    narrative_delta,
+    narrative_delta_metadata,
+    claim_comparisons,
+    claim_comparison_metadata,
+    change_summary: _change_summary
+  } = eventDetail.data;
   const nowSeconds = Math.floor(Date.now() / 1000);
 
   // Human-readable last coverage elapsed time
@@ -291,6 +305,21 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
       <EventBriefCard
         brief={brief ?? null}
         brief_metadata={brief_metadata ?? null}
+        articles={articles}
+      />
+
+      {/* ── 4. Narrative Evolution (What Changed v1 → v2) ─────────── */}
+      <NarrativeDeltaCard
+        narrative_delta={narrative_delta ?? null}
+        narrative_delta_metadata={narrative_delta_metadata ?? null}
+        brief_version={brief_metadata?.version ?? 1}
+        articles={articles}
+      />
+
+      {/* ── 5. Cross-Source Intelligence (Consensus & Disagreement) ─── */}
+      <ClaimComparisonCard
+        claim_comparisons={claim_comparisons ?? []}
+        claim_comparison_metadata={claim_comparison_metadata ?? null}
         articles={articles}
       />
 

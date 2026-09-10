@@ -88,6 +88,44 @@ CREATE TABLE IF NOT EXISTS event_briefs (
 CREATE INDEX IF NOT EXISTS idx_event_briefs_event_version ON event_briefs(event_id, version DESC);
 CREATE INDEX IF NOT EXISTS idx_event_briefs_event_fingerprint ON event_briefs(event_id, article_fingerprint);
 
+-- ─── Event Narrative Deltas (Phase 10: What Changed) ───────
+CREATE TABLE IF NOT EXISTS event_narrative_deltas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  previous_version INTEGER NOT NULL,
+  current_version INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  article_fingerprint TEXT NOT NULL,
+  model TEXT DEFAULT 'gemini-3.6-flash',
+  status TEXT DEFAULT 'completed', -- generating, completed, failed
+  error_message TEXT,
+  created_at INTEGER DEFAULT (unixepoch()),
+  updated_at INTEGER DEFAULT (unixepoch()),
+  UNIQUE(event_id, previous_version, current_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_narrative_deltas_event ON event_narrative_deltas(event_id, current_version DESC);
+CREATE INDEX IF NOT EXISTS idx_event_narrative_deltas_fingerprint ON event_narrative_deltas(event_id, article_fingerprint);
+
+-- ─── Event Claim Comparisons (Phase 10: Cross-Source) ──────
+CREATE TABLE IF NOT EXISTS event_claim_comparisons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL DEFAULT 1,
+  content TEXT NOT NULL,
+  article_fingerprint TEXT NOT NULL,
+  model TEXT DEFAULT 'gemini-3.6-flash',
+  status TEXT DEFAULT 'completed', -- generating, completed, failed
+  error_message TEXT,
+  created_at INTEGER DEFAULT (unixepoch()),
+  updated_at INTEGER DEFAULT (unixepoch()),
+  UNIQUE(event_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_claim_comp_event_version ON event_claim_comparisons(event_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_event_claim_comp_fingerprint ON event_claim_comparisons(event_id, article_fingerprint);
+
+
 -- ─── Topics ────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS topics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

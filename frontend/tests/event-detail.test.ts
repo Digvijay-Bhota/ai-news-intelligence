@@ -258,4 +258,85 @@ describe('BFF /api/events/:hash Route — Phase 9 Intelligence Brief', () => {
     const json = await res.json() as any;
     expect(json.error).toBe('Missing HMAC_SECRET');
   });
+
+  it('returns narrative_delta and claim_comparisons for Version 2 event', async () => {
+    const v2Response: EventDetailResponse = {
+      ...mockEventDetailResponse,
+      data: {
+        ...mockEventDetailResponse.data,
+        brief_metadata: {
+          ...mockEventDetailResponse.data.brief_metadata!,
+          version: 2,
+        },
+        narrative_delta: {
+          previous_version: 1,
+          current_version: 2,
+          summary: 'Reporting evolved with confirmed resignation and regulatory filings.',
+          newly_confirmed: [
+            { statement: 'CEO resignation was officially filed.', source_references: [1] },
+          ],
+          changed_claims: [
+            {
+              previous_statement: 'Acquisition price estimated at $1B',
+              current_statement: 'Deal confirmed at $1.4B in filings',
+              change_type: 'refined',
+              source_references: [1],
+            },
+          ],
+          removed_or_no_longer_supported: [],
+          unchanged_core: ['Company remains under antitrust scrutiny.'],
+          open_questions: ['Successor appointment timeline.'],
+        },
+        narrative_delta_metadata: {
+          previous_version: 1,
+          current_version: 2,
+          status: 'completed',
+          model: 'gemini-3.6-flash',
+          generated_at: 1700020000,
+          article_fingerprint: 'sha256-v2',
+        },
+        claim_comparisons: [
+          {
+            claim: 'Deal valuation',
+            status: 'consensus',
+            sources: [
+              {
+                source_id: 1,
+                source_name: 'Source A',
+                position: 'Reports $1.4B confirmed valuation.',
+                article_ids: [1],
+              },
+            ],
+          },
+        ],
+        claim_comparison_metadata: {
+          version: 2,
+          status: 'completed',
+          model: 'gemini-3.6-flash',
+          generated_at: 1700020000,
+          claim_count: 1,
+          article_fingerprint: 'sha256-v2',
+        },
+      },
+    };
+
+    (env as any).BACKEND_API.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+      json: async () => v2Response,
+    });
+
+    const req = makeRequest();
+    const res = await GET(req, { params: Promise.resolve({ hash: 'test-hash' }) });
+
+    const json = (await res.json()) as EventDetailResponse;
+    expect(json.data.narrative_delta).toBeDefined();
+    expect(json.data.narrative_delta?.previous_version).toBe(1);
+    expect(json.data.narrative_delta?.current_version).toBe(2);
+    expect(json.data.narrative_delta?.newly_confirmed).toHaveLength(1);
+    expect(json.data.narrative_delta?.changed_claims).toHaveLength(1);
+    expect(json.data.claim_comparisons).toHaveLength(1);
+    expect(json.data.claim_comparisons![0].status).toBe('consensus');
+  });
 });

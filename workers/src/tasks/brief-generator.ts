@@ -201,6 +201,22 @@ export async function generateAndSaveEventBrief(
   const latestBrief = await db.getLatestEventBrief(event.id);
   const nextVersion = existing ? existing.version : (latestBrief ? latestBrief.version + 1 : 1);
 
+  // 3b. Atomic generation lease to prevent duplicate external Gemini calls across workers
+  const lease = await db.acquireEventBriefLease({
+    event_id: event.id,
+    article_fingerprint: fingerprint,
+    article_ids: JSON.stringify(Array.from(validArticleIds)),
+    source_count: distinctSources.size,
+    article_count: articles.length,
+    model: 'gemini-3.6-flash',
+    version: nextVersion,
+  });
+
+  if (!lease) {
+    if (existing && existing.status === 'completed') return existing;
+    throw new Error(`Generation in progress: another worker holds active lease for event ${event.id}`);
+  }
+
   try {
     // 4. Synthesize with Gemini
     const rawBrief = await retryWithBackoff(() =>

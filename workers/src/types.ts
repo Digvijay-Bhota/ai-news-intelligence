@@ -359,3 +359,91 @@ export interface ChangeSummary {
   source_delta: number;
   latest_activity_at: number | null;
 }
+
+// ─── Phase 10: Narrative Evolution & Cross-Source Intelligence ─
+
+export interface NewlyConfirmedFact {
+  statement: string;
+  source_references: number[];
+}
+
+export interface ChangedClaim {
+  previous_statement: string;
+  current_statement: string;
+  change_type: 'refined' | 'expanded' | 'contradicted' | 'retracted' | 'uncertain';
+  source_references: number[];
+}
+
+export interface RemovedClaim {
+  statement: string;
+  source_references: number[];
+}
+
+export interface NarrativeDelta {
+  previous_version: number;
+  current_version: number;
+  summary: string;
+  newly_confirmed: NewlyConfirmedFact[];
+  changed_claims: ChangedClaim[];
+  removed_or_no_longer_supported: RemovedClaim[];
+  unchanged_core: string[];
+  open_questions: string[];
+}
+
+export interface EventNarrativeDeltaRow {
+  id: number;
+  event_id: number;
+  previous_version: number;
+  current_version: number;
+  content: string; // JSON string of NarrativeDelta
+  article_fingerprint: string;
+  model: string;
+  status: 'completed' | 'generating' | 'failed';
+  error_message: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface NarrativeDeltaMetadata {
+  previous_version: number;
+  current_version: number;
+  status: 'completed' | 'generating' | 'failed' | 'unavailable';
+  model: string | null;
+  generated_at: number | null;
+  article_fingerprint: string | null;
+}
+
+export interface ClaimSourcePosition {
+  source_id: number;
+  source_name: string;
+  position: string;
+  article_ids: number[];
+}
+
+export interface ClaimComparison {
+  claim: string;
+  status: 'consensus' | 'disputed' | 'unconfirmed' | 'evolving';
+  sources: ClaimSourcePosition[];
+}
+
+export interface EventClaimComparisonRow {
+  id: number;
+  event_id: number;
+  version: number;
+  content: string; // JSON string of ClaimComparison[]
+  article_fingerprint: string;
+  model: string;
+  status: 'completed' | 'generating' | 'failed';
+  error_message: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ClaimComparisonMetadata {
+  version: number;
+  status: 'completed' | 'generating' | 'failed' | 'unavailable';
+  model: string | null;
+  generated_at: number | null;
+  claim_count: number;
+  article_fingerprint: string | null;
+}

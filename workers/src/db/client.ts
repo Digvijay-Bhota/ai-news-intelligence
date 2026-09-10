@@ -2,7 +2,7 @@
  * D1 Database Access Layer — Phase 0 (Canonical)
  */
 
-import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow } from '../types';
+import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow, EventNarrativeDeltaRow, EventClaimComparisonRow } from '../types';
 
 export class DbClient {
   constructor(private readonly db: D1Database) {}
@@ -850,6 +850,52 @@ export class DbClient {
     }
   }
 
+  async acquireEventBriefLease(params: {
+    event_id: number;
+    article_fingerprint: string;
+    article_ids: string;
+    source_count: number;
+    article_count: number;
+    model?: string;
+    version: number;
+    leaseTimeoutSeconds?: number;
+  }): Promise<EventBriefRow | null> {
+    const now = Math.floor(Date.now() / 1000);
+    const timeout = params.leaseTimeoutSeconds ?? 300;
+    try {
+      return await this.db
+        .prepare(
+          `INSERT INTO event_briefs (
+             event_id, content, article_fingerprint, article_ids, source_count, article_count,
+             model, version, status, error_message, created_at, updated_at
+           )
+           VALUES (?1, '{}', ?2, ?3, ?4, ?5, ?6, ?7, 'generating', NULL, ?8, ?8)
+           ON CONFLICT(event_id, article_fingerprint) DO UPDATE SET
+             status = 'generating',
+             updated_at = ?8,
+             model = excluded.model,
+             version = excluded.version
+           WHERE (event_briefs.status = 'failed')
+              OR (event_briefs.status = 'generating' AND event_briefs.updated_at < ?8 - ?9)
+           RETURNING *`
+        )
+        .bind(
+          params.event_id,
+          params.article_fingerprint,
+          params.article_ids,
+          params.source_count,
+          params.article_count,
+          params.model || 'gemini-3.6-flash',
+          params.version,
+          now,
+          timeout
+        )
+        .first<EventBriefRow>();
+    } catch (_err) {
+      return null;
+    }
+  }
+
   async saveEventBrief(brief: Omit<EventBriefRow, 'id' | 'created_at' | 'updated_at'>): Promise<EventBriefRow> {
     const now = Math.floor(Date.now() / 1000);
     const result = await this.db
@@ -892,6 +938,237 @@ export class DbClient {
       const existing = await this.getEventBriefByFingerprint(brief.event_id, brief.article_fingerprint);
       if (existing) return existing;
       throw new Error('Failed to save event brief');
+    }
+    return result;
+  }
+
+  // ─── Phase 10: Event Narrative Deltas (What Changed) ───────
+  async hasNarrativeDeltasTable(): Promise<boolean> {
+    try {
+      const res = await this.db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='event_narrative_deltas'")
+        .first<{ name: string }>();
+      return !!res;
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  async getNarrativeDelta(eventId: number, currentVersion: number): Promise<EventNarrativeDeltaRow | null> {
+    try {
+      return await this.db
+        .prepare('SELECT * FROM event_narrative_deltas WHERE event_id = ?1 AND current_version = ?2 ORDER BY id DESC LIMIT 1')
+        .bind(eventId, currentVersion)
+        .first<EventNarrativeDeltaRow>();
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async getLatestNarrativeDelta(eventId: number): Promise<EventNarrativeDeltaRow | null> {
+    try {
+      return await this.db
+        .prepare('SELECT * FROM event_narrative_deltas WHERE event_id = ?1 ORDER BY current_version DESC, id DESC LIMIT 1')
+        .bind(eventId)
+        .first<EventNarrativeDeltaRow>();
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async acquireNarrativeDeltaLease(params: {
+    event_id: number;
+    previous_version: number;
+    current_version: number;
+    article_fingerprint: string;
+    model?: string;
+    leaseTimeoutSeconds?: number;
+  }): Promise<EventNarrativeDeltaRow | null> {
+    const now = Math.floor(Date.now() / 1000);
+    const timeout = params.leaseTimeoutSeconds ?? 300;
+    try {
+      return await this.db
+        .prepare(
+          `INSERT INTO event_narrative_deltas (
+             event_id, previous_version, current_version, content, article_fingerprint,
+             model, status, error_message, created_at, updated_at
+           )
+           VALUES (?1, ?2, ?3, '{}', ?4, ?5, 'generating', NULL, ?6, ?6)
+           ON CONFLICT(event_id, previous_version, current_version) DO UPDATE SET
+             status = 'generating',
+             updated_at = ?6,
+             article_fingerprint = excluded.article_fingerprint,
+             model = excluded.model
+           WHERE (event_narrative_deltas.status = 'failed')
+              OR (event_narrative_deltas.status = 'generating' AND event_narrative_deltas.updated_at < ?6 - ?7)
+           RETURNING *`
+        )
+        .bind(
+          params.event_id,
+          params.previous_version,
+          params.current_version,
+          params.article_fingerprint,
+          params.model || 'gemini-3.6-flash',
+          now,
+          timeout
+        )
+        .first<EventNarrativeDeltaRow>();
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async saveNarrativeDelta(delta: Omit<EventNarrativeDeltaRow, 'id' | 'created_at' | 'updated_at'>): Promise<EventNarrativeDeltaRow> {
+    const now = Math.floor(Date.now() / 1000);
+    const result = await this.db
+      .prepare(
+        `INSERT INTO event_narrative_deltas (
+           event_id, previous_version, current_version, content, article_fingerprint,
+           model, status, error_message, created_at, updated_at
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(event_id, previous_version, current_version) DO UPDATE SET
+           content = excluded.content,
+           article_fingerprint = excluded.article_fingerprint,
+           model = excluded.model,
+           status = excluded.status,
+           error_message = excluded.error_message,
+           updated_at = excluded.updated_at
+         WHERE event_narrative_deltas.status != 'completed' OR excluded.status = 'completed'
+         RETURNING *`
+      )
+      .bind(
+        delta.event_id,
+        delta.previous_version,
+        delta.current_version,
+        delta.content,
+        delta.article_fingerprint,
+        delta.model,
+        delta.status,
+        delta.error_message ?? null,
+        now,
+        now
+      )
+      .first<EventNarrativeDeltaRow>();
+
+    if (!result) {
+      const existing = await this.getNarrativeDelta(delta.event_id, delta.current_version);
+      if (existing) return existing;
+      throw new Error('Failed to save event narrative delta');
+    }
+    return result;
+  }
+
+  // ─── Phase 10: Event Claim Comparisons (Cross-Source) ──────
+  async hasClaimComparisonsTable(): Promise<boolean> {
+    try {
+      const res = await this.db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='event_claim_comparisons'")
+        .first<{ name: string }>();
+      return !!res;
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  async getClaimComparisons(eventId: number, version: number): Promise<EventClaimComparisonRow | null> {
+    try {
+      return await this.db
+        .prepare('SELECT * FROM event_claim_comparisons WHERE event_id = ?1 AND version = ?2 ORDER BY id DESC LIMIT 1')
+        .bind(eventId, version)
+        .first<EventClaimComparisonRow>();
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async getLatestClaimComparisons(eventId: number): Promise<EventClaimComparisonRow | null> {
+    try {
+      return await this.db
+        .prepare('SELECT * FROM event_claim_comparisons WHERE event_id = ?1 ORDER BY version DESC, id DESC LIMIT 1')
+        .bind(eventId)
+        .first<EventClaimComparisonRow>();
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async acquireClaimComparisonsLease(params: {
+    event_id: number;
+    version: number;
+    article_fingerprint: string;
+    model?: string;
+    leaseTimeoutSeconds?: number;
+  }): Promise<EventClaimComparisonRow | null> {
+    const now = Math.floor(Date.now() / 1000);
+    const timeout = params.leaseTimeoutSeconds ?? 300;
+    try {
+      return await this.db
+        .prepare(
+          `INSERT INTO event_claim_comparisons (
+             event_id, version, content, article_fingerprint,
+             model, status, error_message, created_at, updated_at
+           )
+           VALUES (?1, ?2, '[]', ?3, ?4, 'generating', NULL, ?5, ?5)
+           ON CONFLICT(event_id, version) DO UPDATE SET
+             status = 'generating',
+             updated_at = ?5,
+             article_fingerprint = excluded.article_fingerprint,
+             model = excluded.model
+           WHERE (event_claim_comparisons.status = 'failed')
+              OR (event_claim_comparisons.status = 'generating' AND event_claim_comparisons.updated_at < ?5 - ?6)
+           RETURNING *`
+        )
+        .bind(
+          params.event_id,
+          params.version,
+          params.article_fingerprint,
+          params.model || 'gemini-3.6-flash',
+          now,
+          timeout
+        )
+        .first<EventClaimComparisonRow>();
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async saveClaimComparisons(comp: Omit<EventClaimComparisonRow, 'id' | 'created_at' | 'updated_at'>): Promise<EventClaimComparisonRow> {
+    const now = Math.floor(Date.now() / 1000);
+    const result = await this.db
+      .prepare(
+        `INSERT INTO event_claim_comparisons (
+           event_id, version, content, article_fingerprint,
+           model, status, error_message, created_at, updated_at
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(event_id, version) DO UPDATE SET
+           content = excluded.content,
+           article_fingerprint = excluded.article_fingerprint,
+           model = excluded.model,
+           status = excluded.status,
+           error_message = excluded.error_message,
+           updated_at = excluded.updated_at
+         WHERE event_claim_comparisons.status != 'completed' OR excluded.status = 'completed'
+         RETURNING *`
+      )
+      .bind(
+        comp.event_id,
+        comp.version,
+        comp.content,
+        comp.article_fingerprint,
+        comp.model,
+        comp.status,
+        comp.error_message ?? null,
+        now,
+        now
+      )
+      .first<EventClaimComparisonRow>();
+
+    if (!result) {
+      const existing = await this.getClaimComparisons(comp.event_id, comp.version);
+      if (existing) return existing;
+      throw new Error('Failed to save event claim comparisons');
     }
     return result;
   }

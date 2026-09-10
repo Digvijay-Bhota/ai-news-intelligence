@@ -7,6 +7,8 @@ import { createDbClient } from '../db/client';
 import { fetchAndIngest } from './fetcher';
 import { processArticle } from './processor';
 import { computeArticleFingerprint, generateAndSaveEventBrief } from './brief-generator';
+import { generateAndSaveNarrativeDelta } from './narrative-delta-generator';
+import { generateAndSaveClaimComparisons } from './claim-comparison-generator';
 
 const MAX_SOURCES = 10;
 const MAX_ARTICLES = 20;
@@ -110,12 +112,17 @@ export async function runPipeline(env: Env): Promise<void> {
                 continue;
               }
 
+              // Skip if another worker is actively generating for this exact state within lease timeout
+              if (isMatch && latestBrief.status === 'generating' && (now - latestBrief.updated_at) < 300) {
+                continue;
+              }
+
               // Cooldown: if previous generation for this exact state failed within the last hour, do not retry storm
               if (isMatch && latestBrief.status === 'failed' && (now - latestBrief.updated_at) < 3600) {
                 continue;
               }
 
-              await generateAndSaveEventBrief(
+              const newBrief = await generateAndSaveEventBrief(
                 env,
                 {
                   id: event.id,
@@ -126,6 +133,37 @@ export async function runPipeline(env: Env): Promise<void> {
                 },
                 detail.articles
               );
+
+              // Phase 10: Narrative Delta (if Version >= 2 and previous brief exists)
+              if (latestBrief && latestBrief.status === 'completed' && latestBrief.version < newBrief.version) {
+                await generateAndSaveNarrativeDelta(
+                  env,
+                  {
+                    id: event.id,
+                    hash: event.event_hash,
+                    title: event.title,
+                    description: event.description,
+                    severity: event.severity,
+                  },
+                  latestBrief,
+                  newBrief,
+                  detail.articles
+                ).catch(() => null);
+              }
+
+              // Phase 10: Cross-Source Claim Comparisons
+              await generateAndSaveClaimComparisons(
+                env,
+                {
+                  id: event.id,
+                  hash: event.event_hash,
+                  title: event.title,
+                  description: event.description,
+                  severity: event.severity,
+                },
+                newBrief,
+                detail.articles
+              ).catch(() => null);
             } catch (_briefErr) {
               // Failure on individual event brief does not block other events
             }

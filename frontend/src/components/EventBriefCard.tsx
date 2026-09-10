@@ -131,6 +131,9 @@ export function EventBriefCard({ brief, brief_metadata, articles = [] }: EventBr
           <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">Intelligence Brief</h2>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold font-mono bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-700 uppercase">
+            Version {brief_metadata?.version ?? 1}
+          </span>
           <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/20 uppercase tracking-wide">
             AI Synthesis
           </span>

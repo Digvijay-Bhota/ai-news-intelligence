@@ -6,6 +6,7 @@ import type { Env, ArticleRaw } from '../types';
 import { createDbClient } from '../db/client';
 import { generateEnrichment, matchEventToCluster, type GeminiResponse } from './gemini';
 import { ApiError } from '../utils/errors';
+import { formatSandboxedArticleForEnrichment, PROMPT_SANDBOX_SECURITY_RULES } from './prompt-sandbox';
 
 export async function processArticle(env: Env, article: ArticleRaw): Promise<void> {
   const db = createDbClient(env);
@@ -17,6 +18,15 @@ export async function processArticle(env: Env, article: ArticleRaw): Promise<voi
   });
 
   try {
+    const sandboxedArticle = formatSandboxedArticleForEnrichment({
+      id: article.id,
+      source: `Source #${article.source_id}`,
+      published_at: article.published_at,
+      title: article.title,
+      summary: article.summary,
+      raw_content: article.raw_content,
+    });
+
     const prompt = `Analyze this article and return ONLY a JSON object with exactly the following structure:
 {
   "summary": "string",
@@ -30,6 +40,8 @@ export async function processArticle(env: Env, article: ArticleRaw): Promise<voi
   ]
 }
 
+${PROMPT_SANDBOX_SECURITY_RULES}
+
 CRITICAL INSTRUCTIONS:
 - Output JSON ONLY. No markdown formatting, no code fences (\`\`\`json).
 - If there are no meaningful events, return an empty array for events: []
@@ -38,9 +50,10 @@ CRITICAL INSTRUCTIONS:
 - severity must be exactly one of: low, medium, high, critical.
 - Do NOT use null for any event fields.
 
-Article Title: ${article.title}
-Article Summary: ${article.summary ?? 'N/A'}
-Article Content: ${article.raw_content?.slice(0, 2000) ?? 'N/A'}`;
+UNTRUSTED ARTICLE EVIDENCE:
+<grounded_evidence>
+${sandboxedArticle}
+</grounded_evidence>`;
 
     const enrichment = await retryWithBackoff(() => generateEnrichment(env, prompt));
     validateEnrichment(enrichment);

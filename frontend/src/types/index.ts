@@ -93,6 +93,10 @@ export interface EventDetailResponse {
     intelligence: EventIntelligence;
     brief: EventBrief | null;
     brief_metadata: EventBriefMetadata | null;
+    narrative_delta?: NarrativeDelta | null;
+    narrative_delta_metadata?: NarrativeDeltaMetadata | null;
+    claim_comparisons?: ClaimComparison[];
+    claim_comparison_metadata?: ClaimComparisonMetadata | null;
     change_summary: ChangeSummary | null;
     articles: Article[];
   };
@@ -162,4 +166,65 @@ export interface GlobalFreshnessSummary {
 export interface EventListResponse {
   items: EventSummary[];
   summary: GlobalFreshnessSummary;
+}
+
+// ─── Phase 10: Narrative Evolution & Cross-Source Intelligence ─
+
+export interface NewlyConfirmedFact {
+  statement: string;
+  source_references: number[];
+}
+
+export interface ChangedClaim {
+  previous_statement: string;
+  current_statement: string;
+  change_type: 'refined' | 'expanded' | 'contradicted' | 'retracted' | 'uncertain';
+  source_references: number[];
+}
+
+export interface RemovedClaim {
+  statement: string;
+  source_references: number[];
+}
+
+export interface NarrativeDelta {
+  previous_version: number;
+  current_version: number;
+  summary: string;
+  newly_confirmed: NewlyConfirmedFact[];
+  changed_claims: ChangedClaim[];
+  removed_or_no_longer_supported: RemovedClaim[];
+  unchanged_core: string[];
+  open_questions: string[];
+}
+
+export interface NarrativeDeltaMetadata {
+  previous_version: number;
+  current_version: number;
+  status: 'completed' | 'generating' | 'failed' | 'unavailable';
+  model: string | null;
+  generated_at: number | null;
+  article_fingerprint: string | null;
+}
+
+export interface ClaimSourcePosition {
+  source_id: number;
+  source_name: string;
+  position: string;
+  article_ids: number[];
+}
+
+export interface ClaimComparison {
+  claim: string;
+  status: 'consensus' | 'disputed' | 'unconfirmed' | 'evolving';
+  sources: ClaimSourcePosition[];
+}
+
+export interface ClaimComparisonMetadata {
+  version: number;
+  status: 'completed' | 'generating' | 'failed' | 'unavailable';
+  model: string | null;
+  generated_at: number | null;
+  claim_count: number;
+  article_fingerprint: string | null;
 }

@@ -19,7 +19,10 @@
  */
 
 import { getEventFreshness } from "./utils/freshness";
-import type { Env, ApiResponse, ArticleRaw, FeedItem, EventBrief, EventBriefMetadata, ChangeSummary } from './types';
+import type {
+  Env, ApiResponse, ArticleRaw, FeedItem, EventBrief, EventBriefMetadata, ChangeSummary,
+  NarrativeDelta, NarrativeDeltaMetadata, ClaimComparison, ClaimComparisonMetadata
+} from './types';
 import { NotFoundError, BadRequestError } from './utils/errors';
 import { authenticate, authenticateInternal, requireScopes } from './middleware/auth';
 import { applyPublicRateLimit, applyInternalRateLimit, rateLimitHeaders } from './middleware/rate-limit';
@@ -29,6 +32,8 @@ import { createDbClient } from './db/client';
 import { withCache, generateCacheKey } from './utils/cache';
 import { requireString, optionalString, optionalNumber } from './middleware/validate';
 import { computeArticleFingerprint, generateAndSaveEventBrief } from './tasks/brief-generator';
+import { generateAndSaveNarrativeDelta } from './tasks/narrative-delta-generator';
+import { generateAndSaveClaimComparisons } from './tasks/claim-comparison-generator';
 
 // ─── Response Helpers ─────────────────────────────────────
 
@@ -234,9 +239,13 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
     top_source,
   };
 
-  // Phase 9: Grounded AI Event Brief & Change Detection
+  // Phase 9 & 10: Grounded AI Event Brief, Narrative Delta & Cross-Source Intelligence
   let brief: EventBrief | null = null;
   let brief_metadata: EventBriefMetadata | null = null;
+  let narrative_delta: NarrativeDelta | null = null;
+  let narrative_delta_metadata: NarrativeDeltaMetadata | null = null;
+  let claim_comparisons: ClaimComparison[] = [];
+  let claim_comparison_metadata: ClaimComparisonMetadata | null = null;
   let change_summary: ChangeSummary | null = null;
 
   if (eventDetail.event.id) {
@@ -271,6 +280,62 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
             source_delta: eventDetail.coverage.total_sources - latestBrief.source_count,
             latest_activity_at: eventDetail.coverage.last_published_at,
           };
+
+          // Phase 10: Narrative Delta (only for Version >= 2)
+          if (latestBrief.version >= 2) {
+            try {
+              const deltaRow = await db.getNarrativeDelta(eventDetail.event.id, latestBrief.version);
+              if (deltaRow && deltaRow.status === 'completed') {
+                narrative_delta = JSON.parse(deltaRow.content) as NarrativeDelta;
+                narrative_delta_metadata = {
+                  previous_version: deltaRow.previous_version,
+                  current_version: deltaRow.current_version,
+                  status: 'completed',
+                  model: deltaRow.model,
+                  generated_at: deltaRow.created_at,
+                  article_fingerprint: deltaRow.article_fingerprint,
+                };
+              } else if (deltaRow) {
+                narrative_delta_metadata = {
+                  previous_version: deltaRow.previous_version,
+                  current_version: deltaRow.current_version,
+                  status: deltaRow.status,
+                  model: deltaRow.model,
+                  generated_at: deltaRow.created_at,
+                  article_fingerprint: deltaRow.article_fingerprint,
+                };
+              }
+            } catch (_deltaErr) {
+              narrative_delta = null;
+            }
+          }
+
+          // Phase 10: Claim Comparisons
+          try {
+            const compRow = await db.getClaimComparisons(eventDetail.event.id, latestBrief.version);
+            if (compRow && compRow.status === 'completed') {
+              claim_comparisons = JSON.parse(compRow.content) as ClaimComparison[];
+              claim_comparison_metadata = {
+                version: compRow.version,
+                status: 'completed',
+                model: compRow.model,
+                generated_at: compRow.created_at,
+                claim_count: claim_comparisons.length,
+                article_fingerprint: compRow.article_fingerprint,
+              };
+            } else if (compRow) {
+              claim_comparison_metadata = {
+                version: compRow.version,
+                status: compRow.status,
+                model: compRow.model,
+                generated_at: compRow.created_at,
+                claim_count: 0,
+                article_fingerprint: compRow.article_fingerprint,
+              };
+            }
+          } catch (_compErr) {
+            claim_comparisons = [];
+          }
         } catch (_parseErr) {
           brief = null;
         }
@@ -288,7 +353,7 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
         };
       }
     } catch (_briefErr) {
-      // Graceful degradation if table does not exist or brief fetch fails
+      // Graceful degradation if tables do not exist or query fails
     }
   }
 
@@ -302,6 +367,10 @@ async function handleGetEvent(_request: Request, env: Env, hash: string): Promis
     intelligence,
     brief,
     brief_metadata,
+    narrative_delta,
+    narrative_delta_metadata,
+    claim_comparisons,
+    claim_comparison_metadata,
     change_summary,
     articles: itemsWithEntities,
   });
@@ -314,6 +383,8 @@ async function handleGenerateEventBrief(_request: Request, env: Env, hash: strin
     throw new NotFoundError('Event not found');
   }
 
+  const previousBrief = await db.getLatestEventBrief(eventDetail.event.id);
+
   const briefRow = await generateAndSaveEventBrief(
     env,
     {
@@ -325,6 +396,37 @@ async function handleGenerateEventBrief(_request: Request, env: Env, hash: strin
     },
     eventDetail.articles
   );
+
+  // Generate Narrative Delta if Version >= 2 and previous brief completed
+  if (previousBrief && previousBrief.status === 'completed' && previousBrief.version < briefRow.version) {
+    await generateAndSaveNarrativeDelta(
+      env,
+      {
+        id: eventDetail.event.id,
+        hash,
+        title: eventDetail.event.title,
+        description: eventDetail.event.description,
+        severity: eventDetail.event.severity,
+      },
+      previousBrief,
+      briefRow,
+      eventDetail.articles
+    ).catch(() => null);
+  }
+
+  // Generate Cross-Source Claim Comparisons
+  await generateAndSaveClaimComparisons(
+    env,
+    {
+      id: eventDetail.event.id,
+      hash,
+      title: eventDetail.event.title,
+      description: eventDetail.event.description,
+      severity: eventDetail.event.severity,
+    },
+    briefRow,
+    eventDetail.articles
+  ).catch(() => null);
 
   // Invalidate cached event detail
   const cacheKey = generateCacheKey('event_detail', { hash });
