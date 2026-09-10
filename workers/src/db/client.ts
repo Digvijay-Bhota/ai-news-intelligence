@@ -2,7 +2,9 @@
  * D1 Database Access Layer — Phase 0 (Canonical)
  */
 
-import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, User, UserFollow, FollowTargetType, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow, EventNarrativeDeltaRow, EventClaimComparisonRow } from '../types';
+import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, User, UserFollow, FollowTargetType, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow, EventNarrativeDeltaRow, EventClaimComparisonRow, PersonalizedFeedItem, PersonalizedFeedResult } from '../types';
+import { getEventFreshness } from '../utils/freshness';
+import { RankingEvent, FollowContext, rankEvents } from '../utils/ranking';
 
 export class DbClient {
   constructor(private readonly db: D1Database) {}
@@ -803,6 +805,205 @@ export class DbClient {
       .bind(userId, targetType, targetId)
       .first();
     return !!res;
+  }
+
+  // ─── Personalized Intelligence Feed (Phase 11B) ───────────
+  async getPersonalizedFeedEvents(
+    userId: string,
+    nowSeconds: number,
+    options: { limit?: number; offset?: number } = {}
+  ): Promise<PersonalizedFeedResult> {
+    const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
+    const offset = Math.max(options.offset ?? 0, 0);
+
+    // 1. Fetch user follows (single indexed query)
+    const follows = await this.listUserFollows(userId);
+    const followContext: FollowContext = {
+      eventIds: new Set<string>(),
+      topicSlugs: new Set<string>(),
+      sourceNames: new Set<string>(),
+    };
+
+    for (const f of follows) {
+      if (f.target_type === 'event') {
+        followContext.eventIds.add(f.target_id);
+      } else if (f.target_type === 'topic') {
+        followContext.topicSlugs.add(f.target_id.trim().toLowerCase());
+      } else if (f.target_type === 'source') {
+        followContext.sourceNames.add(f.target_id.trim().toLowerCase());
+      }
+    }
+
+    const user_has_follows =
+      followContext.eventIds.size > 0 ||
+      followContext.topicSlugs.size > 0 ||
+      followContext.sourceNames.size > 0;
+
+    // 2. Candidate query (bounded CTE aggregation avoiding row multiplication)
+    const candidateQuery = `
+      WITH active_events AS (
+        SELECT
+          e.id,
+          e.event_hash as hash,
+          e.title,
+          e.description,
+          e.severity,
+          e.status,
+          e.started_at,
+          COUNT(DISTINCT ae.article_raw_id) as article_count,
+          COUNT(DISTINCT a.source_id) as source_count,
+          MAX(a.published_at) as last_published_at
+        FROM events e
+        LEFT JOIN article_events ae ON e.id = ae.event_id
+        LEFT JOIN articles_raw a ON ae.article_raw_id = a.id
+        WHERE e.status = 'active'
+        GROUP BY e.id
+      ),
+      event_topics_agg AS (
+        SELECT ae.event_id, GROUP_CONCAT(DISTINCT t.slug) as topic_slugs
+        FROM article_events ae
+        JOIN article_topics at ON ae.article_raw_id = at.article_raw_id
+        JOIN topics t ON at.topic_id = t.id
+        GROUP BY ae.event_id
+      ),
+      event_sources_agg AS (
+        SELECT ae.event_id, GROUP_CONCAT(DISTINCT s.name) as source_names
+        FROM article_events ae
+        JOIN articles_raw a ON ae.article_raw_id = a.id
+        JOIN sources s ON a.source_id = s.id
+        GROUP BY ae.event_id
+      ),
+      event_intel_agg AS (
+        SELECT event_id, MAX(version) as brief_version
+        FROM event_briefs
+        WHERE status = 'completed'
+        GROUP BY event_id
+      ),
+      event_deltas_agg AS (
+        SELECT event_id, COUNT(*) as delta_count
+        FROM event_narrative_deltas
+        WHERE status = 'completed'
+        GROUP BY event_id
+      ),
+      event_claims_agg AS (
+        SELECT event_id, COUNT(*) as claim_comp_count
+        FROM event_claim_comparisons
+        WHERE status = 'completed'
+        GROUP BY event_id
+      )
+      SELECT
+        ae.id,
+        ae.hash,
+        ae.title,
+        ae.description,
+        ae.severity,
+        ae.status,
+        ae.started_at,
+        ae.article_count,
+        ae.source_count,
+        ae.last_published_at,
+        COALESCE(eta.topic_slugs, '') as topic_slugs_raw,
+        COALESCE(esa.source_names, '') as source_names_raw,
+        COALESCE(eia.brief_version, 0) as brief_version,
+        CASE WHEN eda.delta_count > 0 THEN 1 ELSE 0 END as has_narrative_delta,
+        CASE WHEN eca.claim_comp_count > 0 THEN 1 ELSE 0 END as has_claim_comparison
+      FROM active_events ae
+      LEFT JOIN event_topics_agg eta ON ae.id = eta.event_id
+      LEFT JOIN event_sources_agg esa ON ae.id = esa.event_id
+      LEFT JOIN event_intel_agg eia ON ae.id = eia.event_id
+      LEFT JOIN event_deltas_agg eda ON ae.id = eda.event_id
+      LEFT JOIN event_claims_agg eca ON ae.id = eca.event_id
+      ORDER BY ae.last_published_at DESC, ae.id DESC
+      LIMIT 50;
+    `;
+
+    interface CandidateRow {
+      id: number;
+      hash: string;
+      title: string;
+      description: string | null;
+      severity: string | null;
+      status: string;
+      started_at: number | null;
+      article_count: number;
+      source_count: number;
+      last_published_at: number | null;
+      topic_slugs_raw: string;
+      source_names_raw: string;
+      brief_version: number;
+      has_narrative_delta: number;
+      has_claim_comparison: number;
+    }
+
+    const candidateRes = await this.db.prepare(candidateQuery).bind().all<CandidateRow>();
+    const rows = candidateRes.results ?? [];
+
+    // 3. Map to RankingEvent with canonical freshness
+    const candidateEvents: (RankingEvent & { title: string; description: string | null; started_at: number | null })[] = rows.map(r => {
+      const topic_slugs = r.topic_slugs_raw ? r.topic_slugs_raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const source_names = r.source_names_raw ? r.source_names_raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const freshness = getEventFreshness(r.last_published_at, r.article_count, nowSeconds);
+
+      return {
+        id: r.id,
+        hash: r.hash,
+        title: r.title,
+        description: r.description,
+        severity: r.severity ?? 'info',
+        started_at: r.started_at,
+        last_published_at: r.last_published_at,
+        article_count: r.article_count,
+        source_count: r.source_count,
+        freshness,
+        brief_version: r.brief_version,
+        has_narrative_delta: r.has_narrative_delta === 1,
+        has_claim_comparison: r.has_claim_comparison === 1,
+        topic_slugs,
+        source_names,
+      };
+    });
+
+    // 4. Deterministic ranking in Worker memory
+    const ranked = rankEvents(candidateEvents, followContext, nowSeconds);
+
+    // 5. Determine fallback status
+    const anyFollowMatched = ranked.some(r => r.follow_score > 0);
+    const fallback_applied = user_has_follows && !anyFollowMatched;
+
+    // 6. Pagination
+    const total = ranked.length;
+    const paginated = ranked.slice(offset, offset + limit);
+
+    const items: PersonalizedFeedItem[] = paginated.map(r => ({
+      id: r.event.id,
+      hash: r.event.hash,
+      title: r.event.title,
+      description: r.event.description,
+      severity: r.event.severity ?? 'info',
+      freshness: r.event.freshness,
+      article_count: r.event.article_count,
+      source_count: r.event.source_count,
+      started_at: r.event.started_at,
+      last_published_at: r.event.last_published_at,
+      topics: r.event.topic_slugs,
+      sources: r.event.source_names,
+      brief_version: r.event.brief_version,
+      has_narrative_delta: r.event.has_narrative_delta,
+      has_claim_comparison: r.event.has_claim_comparison,
+      score: r.score,
+      rank_reasons: r.rank_reasons,
+    }));
+
+    return {
+      items,
+      meta: {
+        total,
+        limit,
+        offset,
+        user_has_follows,
+        fallback_applied,
+      },
+    };
   }
 
   // ─── User Preferences ─────────────────────────────────────

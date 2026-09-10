@@ -184,6 +184,37 @@ export interface UserFollow {
   created_at: number;
 }
 
+export interface PersonalizedFeedItem {
+  id: number;
+  hash: string;
+  title: string;
+  description: string | null;
+  severity: string;
+  freshness: string;
+  article_count: number;
+  source_count: number;
+  started_at: number | null;
+  last_published_at: number | null;
+  topics: string[];
+  sources: string[];
+  brief_version: number;
+  has_narrative_delta: boolean;
+  has_claim_comparison: boolean;
+  score: number;
+  rank_reasons: string[];
+}
+
+export interface PersonalizedFeedResult {
+  items: PersonalizedFeedItem[];
+  meta: {
+    total: number;
+    limit: number;
+    offset: number;
+    user_has_follows: boolean;
+    fallback_applied: boolean;
+  };
+}
+
 export interface UserPreference {
   id: number;
   user_id: string;

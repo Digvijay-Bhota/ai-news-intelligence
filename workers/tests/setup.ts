@@ -43,8 +43,8 @@ export function createMockD1Database(seed = false): D1Database {
   ];
 
   return {
-    prepare: (query: string) => ({
-      bind: (...values: unknown[]) => ({
+    prepare: (query: string) => {
+      const bind = (...values: unknown[]) => ({
         first: async <T>() => {
   const upperQuery = query.toUpperCase();
 
@@ -63,10 +63,6 @@ export function createMockD1Database(seed = false): D1Database {
     return (found ?? null) as T;
   }
 
-  if (upperQuery.includes('FROM SOURCES WHERE ID =')) {
-    const found = knownSources.find(s => s.id === values[0]);
-    return (found ?? (seed && values[0] === 1 ? { id: 1, name: 'Integration Source' } : null)) as T;
-  }
 
   if (upperQuery.includes('SELECT 1 FROM USER_FOLLOWS')) {
     const found = follows.some(f => f.user_id === values[0] && f.target_type === values[1] && f.target_id === values[2]);
@@ -176,6 +172,49 @@ export function createMockD1Database(seed = false): D1Database {
 },
         all: async <T>() => {
           const upperQuery = query.toUpperCase();
+
+          if (seed && upperQuery.includes('WITH ACTIVE_EVENTS AS')) {
+            return {
+              results: [
+                {
+                  id: 1,
+                  hash: 'evt-hash',
+                  title: 'AI Integration Event',
+                  description: 'Desc',
+                  severity: 'warning',
+                  status: 'active',
+                  started_at: 1000,
+                  article_count: 5,
+                  source_count: 2,
+                  last_published_at: 1000,
+                  topic_slugs_raw: 'ai-integration-topic',
+                  source_names_raw: 'Integration Source,TechCrunch',
+                  brief_version: 2,
+                  has_narrative_delta: 1,
+                  has_claim_comparison: 1,
+                },
+                {
+                  id: 2,
+                  hash: 'evt-hash-2',
+                  title: 'Second Active Event',
+                  description: 'Desc 2',
+                  severity: 'info',
+                  status: 'active',
+                  started_at: 900,
+                  article_count: 2,
+                  source_count: 1,
+                  last_published_at: 950,
+                  topic_slugs_raw: 'machine-learning',
+                  source_names_raw: 'Integration Source',
+                  brief_version: 1,
+                  has_narrative_delta: 0,
+                  has_claim_comparison: 0,
+                },
+              ] as unknown as T[],
+              success: true,
+              meta: {},
+            };
+          }
 
           if (seed && upperQuery.includes('WHERE E.STATUS = \'ACTIVE\'') && upperQuery.includes('GROUP BY E.ID')) {
              return {
@@ -298,11 +337,14 @@ export function createMockD1Database(seed = false): D1Database {
           }
           return { success: true, meta: { changes: 1, last_row_id: 1 } };
         },
-      }),
-      first: async <T>() => null as T | null,
-      all: async <T>() => ({ results: [] as T[], success: true, meta: {} }),
-      run: async () => ({ success: true, meta: { changes: 0, last_row_id: 0 } }),
-    }),
+      });
+      return {
+        bind,
+        first: async <T>() => bind().first<T>(),
+        all: async <T>() => bind().all<T>(),
+        run: async () => bind().run(),
+      };
+    },
     batch: async <T>(statements: D1PreparedStatement[]) =>
       statements.map(() => ({ results: [] as T[], success: true, meta: {} })),
     dump: async () => new ArrayBuffer(0),

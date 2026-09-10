@@ -10,12 +10,24 @@ import { FollowButton } from './FollowButton';
 interface EventCardProps {
   event: EventSummary;
   matchedReason?: string | null;
+  rankReasons?: string[];
+  briefVersion?: number;
+  score?: number;
   compact?: boolean;
 }
 
-export function EventCard({ event, matchedReason, compact = false }: EventCardProps) {
+export function EventCard({
+  event,
+  matchedReason,
+  rankReasons,
+  briefVersion,
+  score,
+  compact = false,
+}: EventCardProps) {
   const isDeveloping = event.freshness === 'developing';
   const isStale = event.freshness === 'stale';
+  const activeReasons = rankReasons || event.rank_reasons || (matchedReason ? [matchedReason] : []);
+  const effectiveBriefVersion = briefVersion ?? event.brief_version ?? 0;
 
   const severityClasses = {
     critical: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20',
@@ -65,12 +77,35 @@ export function EventCard({ event, matchedReason, compact = false }: EventCardPr
             {event.severity}
           </span>
 
-          {/* Matched Interests Badge */}
-          {matchedReason && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 border border-purple-200 dark:border-purple-800/40">
-              🎯 {matchedReason}
+          {/* Brief Version Badge (when >= 2 and not in reasons) */}
+          {effectiveBriefVersion >= 2 && !activeReasons.some(r => r.startsWith('Narrative Evolved')) && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40">
+              🔄 V{effectiveBriefVersion} Brief
             </span>
           )}
+
+          {/* Rank Reasons Badges */}
+          {activeReasons.map(reason => {
+            const isFollow = reason.startsWith('Following') || reason.startsWith('Topic') || reason.startsWith('Source');
+            const isEvolved = reason.startsWith('Narrative Evolved');
+            const isPerspective = reason.startsWith('Cross-Source');
+            const badgeClass = isFollow
+              ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 border-purple-200 dark:border-purple-800/40'
+              : isEvolved
+                ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800/40'
+                : isPerspective
+                  ? 'bg-cyan-50 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 border-cyan-200 dark:border-cyan-800/40'
+                  : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/40';
+
+            return (
+              <span
+                key={reason}
+                className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${badgeClass}`}
+              >
+                {isFollow ? '⭐ ' : isEvolved ? '🔄 ' : isPerspective ? '⚖️ ' : ''}{reason}
+              </span>
+            );
+          })}
         </div>
 
         {/* Latest Activity Timestamp & Follow Action */}

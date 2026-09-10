@@ -5,6 +5,7 @@ import { POST as POST_SAVED } from '../src/app/api/saved/route';
 import { DELETE as DELETE_SAVED } from '../src/app/api/saved/[id]/route';
 import { POST as POST_HIDE } from '../src/app/api/hide/route';
 import { GET as GET_FOLLOWS, POST as POST_FOLLOWS, DELETE as DELETE_FOLLOWS } from '../src/app/api/follows/route';
+import { GET as GET_FOR_YOU } from '../src/app/api/feed/for-you/route';
 import { env } from 'cloudflare:workers';
 
 vi.mock('../src/lib/session', () => ({
@@ -384,6 +385,66 @@ describe('Phase 11A — BFF Identity & Follows', () => {
     const mockFetch = (env as any).BACKEND_API.fetch;
     const sentReq: Request = mockFetch.mock.calls[0][0];
     expect(sentReq.headers.get('X-Authenticated-User-Id')).toBe('test-user-id');
+  });
+
+  describe('BFF /api/feed/for-you Route', () => {
+    it('returns 500 when HMAC_SECRET is missing', async () => {
+      (env as any).HMAC_SECRET = undefined;
+      const req = makeBffRequest('http://localhost/api/feed/for-you');
+      const res = await GET_FOR_YOU(req);
+      expect(res.status).toBe(500);
+      const json = await res.json() as { error: string };
+      expect(json.error).toBe('Missing HMAC_SECRET');
+    });
+
+    it('returns 500 when BACKEND_API is missing', async () => {
+      (env as any).HMAC_SECRET = 'test-secret';
+      (env as any).BACKEND_API = undefined;
+      const req = makeBffRequest('http://localhost/api/feed/for-you');
+      const res = await GET_FOR_YOU(req);
+      expect(res.status).toBe(500);
+      const json = await res.json() as { error: string };
+      expect(json.error).toBe('Missing BACKEND_API binding');
+    });
+
+    it('forwards request with signed HMAC, user ID, and pagination', async () => {
+      (env as any).HMAC_SECRET = 'test-secret';
+      (env as any).BACKEND_API = {
+        fetch: vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ success: true, data: { items: [], meta: { total: 0, limit: 10, offset: 5, user_has_follows: false, fallback_applied: false } } }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        ),
+      };
+
+      const req = makeBffRequest('http://localhost/api/feed/for-you?limit=10&offset=5');
+      const res = await GET_FOR_YOU(req);
+      expect(res.status).toBe(200);
+
+      const mockFetch = (env as any).BACKEND_API.fetch;
+      expect(mockFetch).toHaveBeenCalled();
+      const sentReq: Request = mockFetch.mock.calls[0][0];
+      expect(sentReq.headers.get('X-Authenticated-User-Id')).toBe('test-user-id');
+      expect(sentReq.headers.get('X-HMAC-Signature')).toBeDefined();
+      expect(sentReq.url).toContain('/api/v1/feed/for-you?limit=10&offset=5');
+      expect(res.headers.get('Cache-Control')).toBe('private, no-cache, no-store, must-revalidate');
+    });
+
+    it('handles backend error response properly', async () => {
+      (env as any).HMAC_SECRET = 'test-secret';
+      (env as any).BACKEND_API = {
+        fetch: vi.fn().mockResolvedValue(
+          new Response('Unauthorized error', { status: 401 })
+        ),
+      };
+
+      const req = makeBffRequest('http://localhost/api/feed/for-you');
+      const res = await GET_FOR_YOU(req);
+      expect(res.status).toBe(401);
+      const json = await res.json() as { error: string };
+      expect(json.error).toContain('Backend error: 401');
+    });
   });
 });
 

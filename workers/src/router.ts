@@ -651,6 +651,47 @@ async function handleHide(request: Request, env: Env, auth: AuthContext): Promis
   return success(hidden, 201, PRIVATE_NO_CACHE_HEADERS);
 }
 
+async function handlePersonalizedFeed(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
+  const url = new URL(request.url);
+  const clientUserId = url.searchParams.get('user_id');
+  if (clientUserId && clientUserId !== userId) {
+    throw new ForbiddenError('User ID mismatch');
+  }
+
+  const limitParam = url.searchParams.get('limit');
+  const offsetParam = url.searchParams.get('offset');
+
+  let limit = 20;
+  if (limitParam !== null) {
+    if (!/^\d+$/.test(limitParam)) {
+      throw new BadRequestError('limit must be a positive integer');
+    }
+    limit = parseInt(limitParam, 10);
+    if (limit < 1 || limit > 50) {
+      throw new BadRequestError('limit must be between 1 and 50');
+    }
+  }
+
+  let offset = 0;
+  if (offsetParam !== null) {
+    if (!/^\d+$/.test(offsetParam)) {
+      throw new BadRequestError('offset must be a non-negative integer');
+    }
+    offset = parseInt(offsetParam, 10);
+    if (offset < 0 || !Number.isSafeInteger(offset)) {
+      throw new BadRequestError('offset is invalid');
+    }
+  }
+
+  const db = createDbClient(env);
+  await db.getOrCreateUser(userId);
+  const now = Math.floor(Date.now() / 1000);
+  const result = await db.getPersonalizedFeedEvents(userId, now, { limit, offset });
+
+  return success(result, 200, PRIVATE_NO_CACHE_HEADERS);
+}
+
 async function handleGetFollows(request: Request, env: Env, auth: AuthContext): Promise<Response> {
   const userId = requireAuthenticatedUser(auth);
   const url = new URL(request.url);
@@ -913,6 +954,13 @@ export async function route(request: Request, env: Env): Promise<Response> {
     }
 
     // Public API
+    if (path === '/api/v1/feed/for-you' && request.method === 'GET') {
+      const auth = await authenticate(request, env, false);
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/feed/for-you', env);
+      response = await handlePersonalizedFeed(request, env, auth);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
     if (path === '/api/v1/feed' && request.method === 'GET') {
       await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/feed', env);

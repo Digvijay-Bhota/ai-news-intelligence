@@ -154,6 +154,36 @@ export interface EventSummary {
   freshness: "developing" | "active" | "stale";
   source_count?: number;
   first_published_at?: number | null;
+  topics?: string[];
+  sources?: string[];
+  brief_version?: number;
+  has_narrative_delta?: boolean;
+  has_claim_comparison?: boolean;
+  score?: number;
+  rank_reasons?: string[];
+}
+
+export interface PersonalizedFeedItem extends EventSummary {
+  id?: number;
+  score: number;
+  rank_reasons: string[];
+  brief_version: number;
+  has_narrative_delta: boolean;
+  has_claim_comparison: boolean;
+}
+
+export interface PersonalizedFeedResponse {
+  success: boolean;
+  data: {
+    items: PersonalizedFeedItem[];
+    meta: {
+      total: number;
+      limit: number;
+      offset: number;
+      user_has_follows: boolean;
+      fallback_applied: boolean;
+    };
+  };
 }
 
 export interface GlobalFreshnessSummary {
