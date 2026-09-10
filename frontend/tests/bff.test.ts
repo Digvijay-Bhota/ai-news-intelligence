@@ -4,6 +4,7 @@ import { GET } from '../src/app/api/feed/route';
 import { POST as POST_SAVED } from '../src/app/api/saved/route';
 import { DELETE as DELETE_SAVED } from '../src/app/api/saved/[id]/route';
 import { POST as POST_HIDE } from '../src/app/api/hide/route';
+import { GET as GET_FOLLOWS, POST as POST_FOLLOWS, DELETE as DELETE_FOLLOWS } from '../src/app/api/follows/route';
 import { env } from 'cloudflare:workers';
 
 vi.mock('../src/lib/session', () => ({
@@ -264,3 +265,125 @@ describe('BFF Header Hardening', () => {
     expect(json.success).toBe(true);
   });
 });
+
+describe('Phase 11A — BFF Identity & Follows', () => {
+  beforeEach(() => {
+    (env as any).HMAC_SECRET = 'test-secret-key-32-bytes-long!!';
+    (env as any).BACKEND_API = {
+      fetch: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({
+          'Content-Type': 'application/json',
+          'X-RateLimit-Limit': '100',
+          'X-RateLimit-Remaining': '99',
+          'X-RateLimit-Reset': '1234567890',
+        }),
+        json: async () => ({ success: true, data: [] }),
+        text: async () => JSON.stringify({ success: true, data: [] }),
+      }),
+    };
+  });
+
+  function makeBffRequest(
+    url = 'http://localhost/api/follows',
+    headers: Record<string, string> = {},
+    method = 'GET',
+    body?: any
+  ) {
+    const init: RequestInit = { method, headers: { ...headers } };
+    if (body !== undefined) {
+      init.body = typeof body === 'string' ? body : JSON.stringify(body);
+      (init.headers as Record<string, string>)['content-type'] = 'application/json';
+    }
+    const req = new Request(url, init);
+    return Object.assign(req, { nextUrl: new URL(url) }) as unknown as import('next/server').NextRequest;
+  }
+
+  it('binds userId into HMAC when present', async () => {
+    const payloadWithout = { method: 'GET', path: '/api/v1/follows', timestamp: 1600000000, nonce: 'n', body: '' };
+    const payloadWith = { ...payloadWithout, userId: 'test-user-id' };
+    const sigWithout = await generateHmac(payloadWithout, 'secret');
+    const sigWith = await generateHmac(payloadWith, 'secret');
+    expect(sigWith).not.toBe(sigWithout);
+    expect(sigWith).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('GET /api/follows propagates authenticated user ID and signature to backend', async () => {
+    const req = makeBffRequest('http://localhost/api/follows?target_type=topic');
+    const res = await GET_FOLLOWS(req);
+    expect(res.status).toBe(200);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    expect(mockFetch).toHaveBeenCalled();
+    const sentReq: Request = mockFetch.mock.calls[0][0];
+
+    expect(sentReq.headers.get('X-Authenticated-User-Id')).toBe('test-user-id');
+    expect(sentReq.headers.get('X-HMAC-Signature')).toBeDefined();
+    expect(sentReq.url).toContain('/api/v1/follows?user_id=test-user-id&target_type=topic');
+  });
+
+  it('POST /api/follows validates required fields and forwards authenticated body', async () => {
+    const reqInvalid = makeBffRequest('http://localhost/api/follows', {}, 'POST', {});
+    const resInvalid = await POST_FOLLOWS(reqInvalid);
+    expect(resInvalid.status).toBe(400);
+
+    const reqValid = makeBffRequest('http://localhost/api/follows', {}, 'POST', {
+      target_type: 'topic',
+      target_id: 'ai-news',
+    });
+    const resValid = await POST_FOLLOWS(reqValid);
+    expect(resValid.status).toBe(200);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq: Request = mockFetch.mock.calls[0][0];
+    expect(sentReq.headers.get('X-Authenticated-User-Id')).toBe('test-user-id');
+    const sentBody = await sentReq.json();
+    expect(sentBody.user_id).toBe('test-user-id');
+    expect(sentBody.target_type).toBe('topic');
+    expect(sentBody.target_id).toBe('ai-news');
+  });
+
+  it('DELETE /api/follows forwards target query params and authenticated header', async () => {
+    const req = makeBffRequest('http://localhost/api/follows?target_type=topic&target_id=ai-news', {}, 'DELETE');
+    const res = await DELETE_FOLLOWS(req);
+    expect(res.status).toBe(200);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq: Request = mockFetch.mock.calls[0][0];
+    expect(sentReq.headers.get('X-Authenticated-User-Id')).toBe('test-user-id');
+    expect(sentReq.url).toContain('target_type=topic');
+    expect(sentReq.url).toContain('target_id=ai-news');
+  });
+
+  it('POST /api/saved binds X-Authenticated-User-Id', async () => {
+    const req = makeBffRequest('http://localhost/api/saved', {}, 'POST', { article_raw_id: 123 });
+    const res = await POST_SAVED(req);
+    expect(res.status).toBe(200);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq: Request = mockFetch.mock.calls[0][0];
+    expect(sentReq.headers.get('X-Authenticated-User-Id')).toBe('test-user-id');
+  });
+
+  it('DELETE /api/saved/:id binds X-Authenticated-User-Id', async () => {
+    const req = makeBffRequest('http://localhost/api/saved/123', {}, 'DELETE');
+    const res = await DELETE_SAVED(req, { params: { id: '123' } });
+    expect(res.status).toBe(200);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq: Request = mockFetch.mock.calls[0][0];
+    expect(sentReq.headers.get('X-Authenticated-User-Id')).toBe('test-user-id');
+  });
+
+  it('POST /api/hide binds X-Authenticated-User-Id', async () => {
+    const req = makeBffRequest('http://localhost/api/hide', {}, 'POST', { article_raw_id: 123 });
+    const res = await POST_HIDE(req);
+    expect(res.status).toBe(200);
+
+    const mockFetch = (env as any).BACKEND_API.fetch;
+    const sentReq: Request = mockFetch.mock.calls[0][0];
+    expect(sentReq.headers.get('X-Authenticated-User-Id')).toBe('test-user-id');
+  });
+});
+

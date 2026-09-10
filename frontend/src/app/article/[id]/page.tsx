@@ -2,6 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 import { env } from 'cloudflare:workers';
 import { generateHmac } from '../../../utils/hmac';
+import { FollowButton } from '../../../components/FollowButton';
 
 export const runtime = 'edge';
 
@@ -84,8 +85,9 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
             <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight mb-5 leading-tight">
               {title}
             </h1>
-            <div className="flex flex-wrap items-center text-sm text-gray-500 dark:text-gray-400 gap-4">
+            <div className="flex flex-wrap items-center text-sm text-gray-500 dark:text-gray-400 gap-3">
               <span className="font-semibold text-gray-700 dark:text-gray-300">{source}</span>
+              <FollowButton targetType="source" targetId={source} label={`Follow ${source}`} compact />
               <span>&bull;</span>
               <time dateTime={published_at ? new Date(published_at * 1000).toISOString() : ''}>
                 {formattedDate}

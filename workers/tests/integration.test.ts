@@ -9,9 +9,25 @@ describe('Integration', () => {
     return createMockEnv({ DB: createMockD1Database(true), CACHE: createMockKVNamespace() });
   }
 
-  async function signedRequest(url: string, method: string, body?: object, isInternal = false): Promise<Request> {
+  async function signedRequest(url: string, method: string, body?: Record<string, any>, isInternal = false, explicitUserId?: string): Promise<Request> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (isInternal) headers['X-Token-ID'] = 'test-token';
+
+    let userId = explicitUserId;
+    if (userId === undefined) {
+      try {
+        const parsedUrl = new URL(url);
+        userId = parsedUrl.searchParams.get('user_id') || undefined;
+      } catch {}
+      if (!userId && body && typeof body.user_id === 'string') {
+        userId = body.user_id;
+      }
+    }
+
+    if (userId) {
+      headers['X-Authenticated-User-Id'] = userId;
+    }
+
     const req = new Request(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
     const ts = Math.floor(Date.now() / 1000);
     return buildSignedRequest(req, TEST_SECRET, `nonce-${ts}`, ts);

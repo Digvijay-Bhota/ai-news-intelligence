@@ -260,9 +260,25 @@ it('GET /api/v1/events returns active events', async () => {
     return createMockEnv({ DB: createMockD1Database(true), CACHE: createMockKVNamespace() });
   }
 
-  async function signedRequest(url: string, method: string, body?: object, isInternal = false): Promise<Request> {
+  async function signedRequest(url: string, method: string, body?: Record<string, any>, isInternal = false, explicitUserId?: string): Promise<Request> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (isInternal) headers['X-Token-ID'] = 'test-token';
+
+    let userId = explicitUserId;
+    if (userId === undefined) {
+      try {
+        const parsedUrl = new URL(url);
+        userId = parsedUrl.searchParams.get('user_id') || undefined;
+      } catch {}
+      if (!userId && body && typeof body.user_id === 'string') {
+        userId = body.user_id;
+      }
+    }
+
+    if (userId) {
+      headers['X-Authenticated-User-Id'] = userId;
+    }
+
     const req = new Request(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
     const ts = Math.floor(Date.now() / 1000);
     return buildSignedRequest(req, TEST_SECRET, `nonce-${ts}`, ts);
@@ -402,6 +418,131 @@ it('GET /api/v1/events returns active events', async () => {
       });
       const res = await route(req, env);
       expect(res.status).toBe(201);
+    });
+  });
+
+  describe('Follows & User Authorization Hardening (Phase 11A)', () => {
+    it('requires authenticated user identity for follows', async () => {
+      const env = makeEnv();
+      const req = await signedRequest('http://localhost/api/v1/follows', 'GET', undefined, false, '');
+      const res = await route(req, env);
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects client user_id mismatch with 403 Forbidden', async () => {
+      const env = makeEnv();
+      // Authenticated as u1, but querying for u2
+      const req = await signedRequest('http://localhost/api/v1/preferences?user_id=u2', 'GET', undefined, false, 'u1');
+      const res = await route(req, env);
+      expect(res.status).toBe(403);
+
+      // Authenticated as u1, but body says u2
+      const postReq = await signedRequest('http://localhost/api/v1/follows', 'POST', {
+        user_id: 'u2',
+        target_type: 'topic',
+        target_id: 'ai-integration-topic',
+      }, false, 'u1');
+      const postRes = await route(postReq, env);
+      expect(postRes.status).toBe(403);
+    });
+
+    it('validates canonical target existence for follows', async () => {
+      const env = makeEnv();
+      // Invalid target_type
+      const reqInvalidType = await signedRequest('http://localhost/api/v1/follows', 'POST', {
+        target_type: 'author',
+        target_id: 'john-doe',
+      }, false, 'u1');
+      const resInvalidType = await route(reqInvalidType, env);
+      expect(resInvalidType.status).toBe(400);
+
+      // Nonexistent topic
+      const reqMissingTopic = await signedRequest('http://localhost/api/v1/follows', 'POST', {
+        target_type: 'topic',
+        target_id: 'non-existent-topic',
+      }, false, 'u1');
+      const resMissingTopic = await route(reqMissingTopic, env);
+      expect(resMissingTopic.status).toBe(404);
+
+      // Nonexistent event
+      const reqMissingEvent = await signedRequest('http://localhost/api/v1/follows', 'POST', {
+        target_type: 'event',
+        target_id: 'unknown-event-hash',
+      }, false, 'u1');
+      const resMissingEvent = await route(reqMissingEvent, env);
+      expect(resMissingEvent.status).toBe(404);
+
+      // Nonexistent source
+      const reqMissingSource = await signedRequest('http://localhost/api/v1/follows', 'POST', {
+        target_type: 'source',
+        target_id: 'non-existent-news-outlet',
+      }, false, 'u1');
+      const resMissingSource = await route(reqMissingSource, env);
+      expect(resMissingSource.status).toBe(404);
+    });
+
+    it('creates, lists, filters, and deletes follows with private cache headers', async () => {
+      const env = makeEnv();
+
+      // 1. Follow topic
+      const postTopicReq = await signedRequest('http://localhost/api/v1/follows', 'POST', {
+        target_type: 'topic',
+        target_id: 'ai-integration-topic',
+      }, false, 'u1');
+      const postTopicRes = await route(postTopicReq, env);
+      expect(postTopicRes.status).toBe(201);
+      expect(postTopicRes.headers.get('Cache-Control')).toContain('private');
+
+      // 2. Follow event
+      const postEventReq = await signedRequest('http://localhost/api/v1/follows', 'POST', {
+        target_type: 'event',
+        target_id: 'evt-hash',
+      }, false, 'u1');
+      const postEventRes = await route(postEventReq, env);
+      expect(postEventRes.status).toBe(201);
+
+      // 3. Follow source
+      const postSourceReq = await signedRequest('http://localhost/api/v1/follows', 'POST', {
+        target_type: 'source',
+        target_id: 'Integration Source',
+      }, false, 'u1');
+      const postSourceRes = await route(postSourceReq, env);
+      expect(postSourceRes.status).toBe(201);
+
+      // 4. List all follows for u1
+      const listReq = await signedRequest('http://localhost/api/v1/follows', 'GET', undefined, false, 'u1');
+      const listRes = await route(listReq, env);
+      expect(listRes.status).toBe(200);
+      const listData = (await listRes.json()) as ApiResponse<any>;
+      expect(listData.data.length).toBe(3);
+
+      // 5. Filter by target_type=topic
+      const filterReq = await signedRequest('http://localhost/api/v1/follows?target_type=topic', 'GET', undefined, false, 'u1');
+      const filterRes = await route(filterReq, env);
+      expect(filterRes.status).toBe(200);
+      const filterData = (await filterRes.json()) as ApiResponse<any>;
+      expect(filterData.data.length).toBe(1);
+      expect(filterData.data[0].target_id).toBe('ai-integration-topic');
+
+      // 6. User B has isolated follow graph (sees 0 follows)
+      const userBListReq = await signedRequest('http://localhost/api/v1/follows', 'GET', undefined, false, 'u2');
+      const userBListRes = await route(userBListReq, env);
+      expect(userBListRes.status).toBe(200);
+      const userBData = (await userBListRes.json()) as ApiResponse<any>;
+      expect(userBData.data.length).toBe(0);
+
+      // 7. Delete follow for topic
+      const delReq = await signedRequest('http://localhost/api/v1/follows?target_type=topic&target_id=ai-integration-topic', 'DELETE', undefined, false, 'u1');
+      const delRes = await route(delReq, env);
+      expect(delRes.status).toBe(200);
+      const delData = (await delRes.json()) as ApiResponse<any>;
+      expect(delData.data.deleted).toBe(true);
+
+      // 8. Confirm deleted
+      const checkReq = await signedRequest('http://localhost/api/v1/follows?target_type=topic', 'GET', undefined, false, 'u1');
+      const checkRes = await route(checkReq, env);
+      const checkData = (await checkRes.json()) as ApiResponse<any>;
+      expect(checkData.data.length).toBe(0);
     });
   });
 

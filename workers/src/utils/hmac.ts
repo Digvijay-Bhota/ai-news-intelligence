@@ -15,10 +15,12 @@ export interface HmacPayload {
   timestamp: number;
   nonce: string;
   body: string;
+  userId?: string;
 }
 
 /**
  * Generate HMAC signature for a request payload.
+ * When userId is present, cryptographically binds it to the signature payload.
  */
 export async function generateHmac(
   payload: HmacPayload,
@@ -26,7 +28,9 @@ export async function generateHmac(
   algorithm: string = 'SHA-256'
 ): Promise<string> {
   const encoder = new TextEncoder();
-  const data = `${payload.method}|${payload.path}|${payload.timestamp}|${payload.nonce}|${payload.body}`;
+  const data = payload.userId
+    ? `${payload.method}|${payload.path}|${payload.timestamp}|${payload.nonce}|${payload.body}|${payload.userId}`
+    : `${payload.method}|${payload.path}|${payload.timestamp}|${payload.nonce}|${payload.body}`;
   const key = await crypto.subtle.importKey(
     'raw',
     encoder.encode(secret),
@@ -53,6 +57,7 @@ export async function verifyHmac(
 
 /**
  * Extract HMAC payload from a Request.
+ * Also extracts X-Authenticated-User-Id header if present.
  */
 export async function extractHmacPayload(
   request: Request,
@@ -73,6 +78,7 @@ export async function extractHmacPayload(
 
   const url = new URL(request.url);
   const body = request.body ? await request.clone().text() : '';
+  const userId = request.headers.get('X-Authenticated-User-Id')?.trim() || undefined;
 
   const payload: HmacPayload = {
     method: request.method,
@@ -80,6 +86,7 @@ export async function extractHmacPayload(
     timestamp,
     nonce,
     body,
+    userId,
   };
 
   return { payload, signature };
@@ -96,12 +103,14 @@ export async function buildSignedRequest(
 ): Promise<Request> {
   const url = new URL(request.url);
   const body = request.body ? await request.clone().text() : '';
+  const userId = request.headers.get('X-Authenticated-User-Id')?.trim() || undefined;
   const payload: HmacPayload = {
     method: request.method,
     path: url.pathname + url.search,
     timestamp,
     nonce,
     body,
+    userId,
   };
   const signature = await generateHmac(payload, secret);
 

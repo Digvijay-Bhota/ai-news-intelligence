@@ -38,6 +38,7 @@ export async function DELETE(
       timestamp: ts,
       nonce,
       body: '',
+      userId,
     };
 
     const signature = await generateHmac(hmacPayload, secret);
@@ -48,7 +49,8 @@ export async function DELETE(
         'X-HMAC-Signature': signature,
         'X-Nonce': nonce,
         'X-Timestamp': String(ts),
-      ...getClientIpHeaders(request),
+        'X-Authenticated-User-Id': userId,
+        ...getClientIpHeaders(request),
       },
     });
 

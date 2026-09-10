@@ -228,3 +228,16 @@ export interface ClaimComparisonMetadata {
   claim_count: number;
   article_fingerprint: string | null;
 }
+
+// ─── Phase 11A: Identity Foundation & Follow Graph ────────────
+
+export type FollowTargetType = 'topic' | 'event' | 'source';
+
+export interface UserFollow {
+  id: string;
+  user_id: string;
+  target_type: FollowTargetType;
+  target_id: string;
+  created_at: number;
+}
+

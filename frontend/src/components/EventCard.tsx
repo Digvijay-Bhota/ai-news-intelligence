@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { EventSummary } from '../types';
 import { formatRelativeTime } from '../lib/utils';
 import { ClockIcon, ChevronRightIcon, ActivityIcon } from './icons';
+import { FollowButton } from './FollowButton';
 
 interface EventCardProps {
   event: EventSummary;
@@ -72,13 +73,16 @@ export function EventCard({ event, matchedReason, compact = false }: EventCardPr
           )}
         </div>
 
-        {/* Latest Activity Timestamp */}
-        {event.last_published_at && (
-          <div className="flex items-center text-xs text-gray-500 dark:text-gray-400 font-mono">
-            <ClockIcon className="w-3.5 h-3.5 mr-1 text-gray-400" />
-            <span>{formatRelativeTime(event.last_published_at)}</span>
-          </div>
-        )}
+        {/* Latest Activity Timestamp & Follow Action */}
+        <div className="flex items-center gap-2">
+          {event.last_published_at && (
+            <div className="flex items-center text-xs text-gray-500 dark:text-gray-400 font-mono">
+              <ClockIcon className="w-3.5 h-3.5 mr-1 text-gray-400" />
+              <span>{formatRelativeTime(event.last_published_at)}</span>
+            </div>
+          )}
+          <FollowButton targetType="event" targetId={event.hash} compact />
+        </div>
       </div>
 
       {/* Event Title */}

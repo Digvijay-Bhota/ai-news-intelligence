@@ -10,6 +10,7 @@ import { EventTimeline } from '../../../components/EventTimeline';
 import { EventBriefCard } from '../../../components/EventBriefCard';
 import { NarrativeDeltaCard } from '../../../components/NarrativeDeltaCard';
 import { ClaimComparisonCard } from '../../../components/ClaimComparisonCard';
+import { FollowButton } from '../../../components/FollowButton';
 
 
 export const runtime = 'edge';
@@ -217,9 +218,14 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
           )}
         </div>
 
-        <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-gray-100 mb-3 tracking-tight">
-          {event.title}
-        </h1>
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-3">
+          <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 dark:text-gray-100 tracking-tight flex-1">
+            {event.title}
+          </h1>
+          <div className="flex-shrink-0">
+            <FollowButton targetType="event" targetId={event.hash || hash} label="Follow Event" />
+          </div>
+        </div>
 
         {event.description && (
           <p className="text-lg text-gray-600 dark:text-gray-300 leading-relaxed max-w-4xl mb-6">

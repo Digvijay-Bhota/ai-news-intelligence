@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { fetchTopics } from '../../lib/api';
+import { FollowButton } from '../../components/FollowButton';
 import type { Topic } from '../../types';
 
 export default function TopicsPage() {
@@ -140,18 +141,18 @@ export default function TopicsPage() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
                 {items.map((topic) => (
-                  <Link
+                  <div
                     key={topic.id}
-                    href={`/topics/${topic.slug}`}
-                    className="group flex items-center justify-between p-3 rounded-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-500/50 hover:shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                    className="group flex items-center justify-between p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-500/50 hover:shadow-sm transition-all"
                   >
-                    <span className="font-medium text-sm text-gray-900 dark:text-gray-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 truncate">
+                    <Link
+                      href={`/topics/${topic.slug}`}
+                      className="flex-1 font-medium text-sm text-gray-900 dark:text-gray-100 hover:text-indigo-600 dark:hover:text-indigo-400 truncate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded mr-2"
+                    >
                       {topic.name}
-                    </span>
-                    <span className="text-xs text-gray-400 dark:text-gray-500 ml-2 group-hover:translate-x-0.5 transition-transform" aria-hidden="true">
-                      &rarr;
-                    </span>
-                  </Link>
+                    </Link>
+                    <FollowButton targetType="topic" targetId={topic.slug} compact />
+                  </div>
                 ))}
               </div>
             </section>

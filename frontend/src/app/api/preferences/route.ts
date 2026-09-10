@@ -30,7 +30,7 @@ async function proxyToBackend(request: NextRequest, method: 'GET' | 'POST') {
       body = JSON.stringify({ ...json, user_id: userId });
     }
 
-    const hmacPayload = { method, path: backendPath, timestamp: ts, nonce, body };
+    const hmacPayload = { method, path: backendPath, timestamp: ts, nonce, body, userId };
     const signature = await generateHmac(hmacPayload, secret);
 
     const backendReq = new Request(`http://backend${backendPath}`, {
@@ -40,7 +40,8 @@ async function proxyToBackend(request: NextRequest, method: 'GET' | 'POST') {
         'X-HMAC-Signature': signature,
         'X-Nonce': nonce,
         'X-Timestamp': String(ts),
-      ...getClientIpHeaders(request),
+        'X-Authenticated-User-Id': userId,
+        ...getClientIpHeaders(request),
       },
       body: method === 'POST' ? body : undefined
     });

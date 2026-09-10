@@ -15,12 +15,14 @@ export interface AuthContext {
   identifier: string;
   scopes: string[];
   isInternal: boolean;
+  userId?: string;
 }
 
 /**
  * Authenticate any request using HMAC.
  * For public API: uses IP as identifier (no token lookup).
  * For internal API: validates pipeline token.
+ * Extracts authenticated user identity bound to the verified HMAC signature.
  */
 export async function authenticate(
   request: Request,
@@ -29,7 +31,7 @@ export async function authenticate(
 ): Promise<AuthContext> {
   const { payload, signature } = await extractHmacPayload(request, env);
 
-  // Verify HMAC against configured secret
+  // Verify HMAC against configured secret (including bound userId if present)
   const valid = await verifyHmac(
     payload,
     signature,
@@ -67,7 +69,17 @@ export async function authenticate(
       'unknown';
   }
 
-  return { identifier, scopes, isInternal };
+  return { identifier, scopes, isInternal, userId: payload.userId };
+}
+
+/**
+ * Enforce that the request has an authenticated user context.
+ */
+export function requireAuthenticatedUser(auth: AuthContext): string {
+  if (!auth.userId) {
+    throw new UnauthorizedError('Authenticated user identity required');
+  }
+  return auth.userId;
 }
 
 /**

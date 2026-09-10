@@ -28,14 +28,55 @@ export function createMockEnv(overrides: Partial<Env> = {}): Env {
 
 export function createMockD1Database(seed = false): D1Database {
   const storage = new Map<string, Record<string, unknown>[]>();
+  const follows: Array<{ id: string; user_id: string; target_type: string; target_id: string; created_at: number }> = [];
+  const users: Map<string, { id: string; created_at: number; last_active_at: number }> = new Map();
+  const knownTopics = [
+    { id: 1, name: 'AI Integration Topic', slug: 'ai-integration-topic', description: 'Desc', active: 1 },
+    { id: 2, name: 'Machine Learning', slug: 'machine-learning', description: 'Desc', active: 1 },
+  ];
+  const knownSources = [
+    { id: 1, name: 'Integration Source', base_url: 'https://example.com', source_type: 'rss', active: 1 },
+    { id: 2, name: 'TechCrunch', base_url: 'https://techcrunch.com', source_type: 'rss', active: 1 },
+  ];
+  const knownEvents = [
+    { id: 1, event_hash: 'evt-hash', title: 'AI Integration Event', description: 'Desc', severity: 'info', status: 'active', started_at: 1000 },
+  ];
+
   return {
     prepare: (query: string) => ({
       bind: (...values: unknown[]) => ({
         first: async <T>() => {
   const upperQuery = query.toUpperCase();
 
+  if (upperQuery.includes('FROM USERS WHERE ID =')) {
+    const existing = users.get(values[0] as string);
+    return (existing ?? { id: values[0] as string, created_at: 1000, last_active_at: 1000 }) as T;
+  }
 
+  if (upperQuery.includes('FROM TOPICS WHERE SLUG =')) {
+    const found = knownTopics.find(t => t.slug === values[0]);
+    return (found ?? null) as T;
+  }
 
+  if (upperQuery.includes('FROM SOURCES WHERE NAME =')) {
+    const found = knownSources.find(s => s.name === values[0]);
+    return (found ?? null) as T;
+  }
+
+  if (upperQuery.includes('FROM SOURCES WHERE ID =')) {
+    const found = knownSources.find(s => s.id === values[0]);
+    return (found ?? (seed && values[0] === 1 ? { id: 1, name: 'Integration Source' } : null)) as T;
+  }
+
+  if (upperQuery.includes('SELECT 1 FROM USER_FOLLOWS')) {
+    const found = follows.some(f => f.user_id === values[0] && f.target_type === values[1] && f.target_id === values[2]);
+    return (found ? { 1: 1 } : null) as T;
+  }
+
+  if (upperQuery.includes('FROM USER_FOLLOWS') && upperQuery.includes('TARGET_ID')) {
+    const found = follows.find(f => f.user_id === values[0] && f.target_type === values[1] && f.target_id === values[2]);
+    return (found ?? { id: 'f-1', user_id: values[0], target_type: values[1], target_id: values[2], created_at: 1000 }) as T;
+  }
 
   if (upperQuery.includes('INSERT INTO USER_PREFERENCES')) {
     return {
@@ -114,10 +155,15 @@ export function createMockD1Database(seed = false): D1Database {
     } as T;
   }
 
-  if (seed && upperQuery.includes('FROM EVENTS WHERE EVENT_HASH = ?')) {
-    return {
-      hash: 'evt-hash', title: 'AI Integration Event', description: 'Desc', severity: 'info', started_at: 1000
-    } as T;
+  if (upperQuery.includes('FROM EVENTS WHERE EVENT_HASH =')) {
+    const found = knownEvents.find(e => e.event_hash === values[0]);
+    if (found) return found as T;
+    if (seed && values[0] === 'evt-hash') {
+      return {
+        id: 1, hash: 'evt-hash', event_hash: 'evt-hash', title: 'AI Integration Event', description: 'Desc', severity: 'info', started_at: 1000
+      } as T;
+    }
+    return null as T;
   }
 
   if (seed && (upperQuery.includes('SELECT COUNT(*) AS TOTAL FROM ARTICLES_RAW') || upperQuery.includes('SELECT COUNT(DISTINCT ARTICLES_RAW.ID) AS TOTAL FROM ARTICLES_RAW'))) {
@@ -206,11 +252,52 @@ export function createMockD1Database(seed = false): D1Database {
             };
           }
 
+          if (upperQuery.includes('FROM USER_FOLLOWS') && upperQuery.includes('TARGET_TYPE =')) {
+            const res = follows.filter(f => f.user_id === values[0] && f.target_type === values[1]);
+            return { results: res as unknown as T[], success: true, meta: {} };
+          }
+          if (upperQuery.includes('FROM USER_FOLLOWS')) {
+            const res = follows.filter(f => f.user_id === values[0]);
+            return { results: res as unknown as T[], success: true, meta: {} };
+          }
+
           const key = `${query}:${JSON.stringify(values)}`;
           const rows = storage.get(key) ?? [];
           return { results: rows as T[], success: true, meta: {} };
         },
-        run: async () => ({ success: true, meta: { changes: 1, last_row_id: 1 } }),
+        run: async () => {
+          const upperQuery = query.toUpperCase();
+          if (upperQuery.includes('INSERT INTO USER_FOLLOWS')) {
+            const userId = values[0] as string;
+            const targetType = values[1] as string;
+            const targetId = values[2] as string;
+            const createdAt = (values[3] as number) || 1000;
+            if (!follows.some(f => f.user_id === userId && f.target_type === targetType && f.target_id === targetId)) {
+              follows.push({ id: `f-${follows.length + 1}`, user_id: userId, target_type: targetType, target_id: targetId, created_at: createdAt });
+            }
+            return { success: true, meta: { changes: 1, last_row_id: follows.length } };
+          }
+          if (upperQuery.includes('DELETE FROM USER_FOLLOWS')) {
+            const userId = values[0] as string;
+            const targetType = values[1] as string;
+            const targetId = values[2] as string;
+            const initialLen = follows.length;
+            const remaining = follows.filter(f => !(f.user_id === userId && f.target_type === targetType && f.target_id === targetId));
+            follows.length = 0;
+            follows.push(...remaining);
+            const changes = initialLen - remaining.length;
+            return { success: true, meta: { changes, last_row_id: 0 } };
+          }
+          if (upperQuery.includes('INSERT OR IGNORE INTO USERS')) {
+            const userId = values[0] as string;
+            const createdAt = (values[1] as number) || 1000;
+            if (!users.has(userId)) {
+              users.set(userId, { id: userId, created_at: createdAt, last_active_at: createdAt });
+            }
+            return { success: true, meta: { changes: 1, last_row_id: 1 } };
+          }
+          return { success: true, meta: { changes: 1, last_row_id: 1 } };
+        },
       }),
       first: async <T>() => null as T | null,
       all: async <T>() => ({ results: [] as T[], success: true, meta: {} }),

@@ -2,7 +2,7 @@
  * D1 Database Access Layer — Phase 0 (Canonical)
  */
 
-import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow, EventNarrativeDeltaRow, EventClaimComparisonRow } from '../types';
+import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, User, UserFollow, FollowTargetType, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow, EventNarrativeDeltaRow, EventClaimComparisonRow } from '../types';
 
 export class DbClient {
   constructor(private readonly db: D1Database) {}
@@ -15,6 +15,10 @@ export class DbClient {
 
   async getSourceById(id: number): Promise<Source | null> {
     return this.db.prepare('SELECT * FROM sources WHERE id = ?1').bind(id).first<Source>();
+  }
+
+  async getSourceByName(name: string): Promise<Source | null> {
+    return this.db.prepare('SELECT * FROM sources WHERE name = ?1').bind(name).first<Source>();
   }
 
   async getSourcesBatch(sourceIds: number[]): Promise<Map<number, string>> {
@@ -714,6 +718,91 @@ export class DbClient {
       .prepare('INSERT INTO dedup_hashes (hash, article_raw_id, hash_type) VALUES (?1, ?2, ?3)')
       .bind(hash, articleRawId, 'content')
       .run();
+  }
+
+  // ─── Users (Durable Anonymous Identity — Phase 11A) ───────
+  async getOrCreateUser(userId: string): Promise<User> {
+    const now = Math.floor(Date.now() / 1000);
+    const existing = await this.db
+      .prepare('SELECT * FROM users WHERE id = ?1')
+      .bind(userId)
+      .first<User>();
+
+    if (existing) {
+      if (now - existing.last_active_at > 300) {
+        await this.db
+          .prepare('UPDATE users SET last_active_at = ?1 WHERE id = ?2')
+          .bind(now, userId)
+          .run();
+      }
+      return existing;
+    }
+
+    await this.db
+      .prepare('INSERT OR IGNORE INTO users (id, created_at, last_active_at) VALUES (?1, ?2, ?2)')
+      .bind(userId, now)
+      .run();
+
+    const user = await this.db
+      .prepare('SELECT * FROM users WHERE id = ?1')
+      .bind(userId)
+      .first<User>();
+
+    return user ?? { id: userId, created_at: now, last_active_at: now };
+  }
+
+  async getUserById(userId: string): Promise<User | null> {
+    return this.db.prepare('SELECT * FROM users WHERE id = ?1').bind(userId).first<User>();
+  }
+
+  // ─── User Follows (Topic, Event, Source — Phase 11A) ────────
+  async listUserFollows(userId: string, targetType?: FollowTargetType): Promise<UserFollow[]> {
+    if (targetType) {
+      const res = await this.db
+        .prepare('SELECT * FROM user_follows WHERE user_id = ?1 AND target_type = ?2 ORDER BY created_at DESC')
+        .bind(userId, targetType)
+        .all<UserFollow>();
+      return res.results ?? [];
+    }
+    const res = await this.db
+      .prepare('SELECT * FROM user_follows WHERE user_id = ?1 ORDER BY created_at DESC')
+      .bind(userId)
+      .all<UserFollow>();
+    return res.results ?? [];
+  }
+
+  async createUserFollow(userId: string, targetType: FollowTargetType, targetId: string): Promise<UserFollow> {
+    const now = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare(
+        'INSERT INTO user_follows (user_id, target_type, target_id, created_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(user_id, target_type, target_id) DO NOTHING'
+      )
+      .bind(userId, targetType, targetId, now)
+      .run();
+
+    const follow = await this.db
+      .prepare('SELECT * FROM user_follows WHERE user_id = ?1 AND target_type = ?2 AND target_id = ?3')
+      .bind(userId, targetType, targetId)
+      .first<UserFollow>();
+
+    if (!follow) throw new Error('Failed to create or retrieve user follow');
+    return follow;
+  }
+
+  async deleteUserFollow(userId: string, targetType: FollowTargetType, targetId: string): Promise<boolean> {
+    const res = await this.db
+      .prepare('DELETE FROM user_follows WHERE user_id = ?1 AND target_type = ?2 AND target_id = ?3')
+      .bind(userId, targetType, targetId)
+      .run();
+    return (res.meta.changes ?? 0) > 0;
+  }
+
+  async isUserFollowing(userId: string, targetType: FollowTargetType, targetId: string): Promise<boolean> {
+    const res = await this.db
+      .prepare('SELECT 1 FROM user_follows WHERE user_id = ?1 AND target_type = ?2 AND target_id = ?3 LIMIT 1')
+      .bind(userId, targetType, targetId)
+      .first();
+    return !!res;
   }
 
   // ─── User Preferences ─────────────────────────────────────

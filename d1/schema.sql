@@ -220,6 +220,26 @@ CREATE TABLE IF NOT EXISTS analytics_daily (
   created_at INTEGER DEFAULT (unixepoch())
 );
 
+-- ─── Users (Durable Anonymous Identity — Phase 11A) ──────────
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  last_active_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+-- ─── User Follows (Topic, Event, Source — Phase 11A) ────────
+CREATE TABLE IF NOT EXISTS user_follows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_type TEXT NOT NULL, -- 'topic', 'event', 'source'
+  target_id TEXT NOT NULL,   -- canonical slug, event_hash, or source name
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  UNIQUE(user_id, target_type, target_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_follows_user ON user_follows(user_id, target_type);
+CREATE INDEX IF NOT EXISTS idx_user_follows_target ON user_follows(target_type, target_id);
+
 -- ─── User Preferences ──────────────────────────────────────
 CREATE TABLE IF NOT EXISTS user_preferences (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

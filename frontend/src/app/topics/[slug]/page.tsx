@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Feed } from '../../../components/Feed';
 import { fetchTopics } from '../../../lib/api';
+import { FollowButton } from '../../../components/FollowButton';
 import Link from 'next/link';
 
 export default function TopicPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -59,10 +60,15 @@ export default function TopicPage({ params }: { params: Promise<{ slug: string }
         <Link href="/" className="text-sm font-medium text-indigo-600 hover:text-indigo-800 mb-4 inline-block">
           &larr; Back to Feed
         </Link>
-        <h2 className="text-3xl font-bold text-gray-900 tracking-tight">{topicName}</h2>
-        <p className="mt-2 text-lg text-gray-600">
-          Latest intelligence and updates for {topicName}.
-        </p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-3xl font-bold text-gray-900 tracking-tight">{topicName}</h2>
+            <p className="mt-2 text-lg text-gray-600">
+              Latest intelligence and updates for {topicName}.
+            </p>
+          </div>
+          <FollowButton targetType="topic" targetId={slug} label={`Follow ${topicName}`} />
+        </div>
       </div>
 
       <Feed topicsOverride={[slug]} />

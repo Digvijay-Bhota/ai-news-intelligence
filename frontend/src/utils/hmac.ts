@@ -4,6 +4,7 @@ export interface HmacPayload {
   timestamp: number;
   nonce: string;
   body: string;
+  userId?: string;
 }
 
 export async function generateHmac(
@@ -12,7 +13,9 @@ export async function generateHmac(
   algorithm: string = 'SHA-256'
 ): Promise<string> {
   const encoder = new TextEncoder();
-  const data = `${payload.method}|${payload.path}|${payload.timestamp}|${payload.nonce}|${payload.body}`;
+  const data = payload.userId
+    ? `${payload.method}|${payload.path}|${payload.timestamp}|${payload.nonce}|${payload.body}|${payload.userId}`
+    : `${payload.method}|${payload.path}|${payload.timestamp}|${payload.nonce}|${payload.body}`;
   const key = await crypto.subtle.importKey(
     'raw',
     encoder.encode(secret),

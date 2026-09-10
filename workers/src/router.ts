@@ -21,10 +21,11 @@
 import { getEventFreshness } from "./utils/freshness";
 import type {
   Env, ApiResponse, ArticleRaw, FeedItem, EventBrief, EventBriefMetadata, ChangeSummary,
-  NarrativeDelta, NarrativeDeltaMetadata, ClaimComparison, ClaimComparisonMetadata
+  NarrativeDelta, NarrativeDeltaMetadata, ClaimComparison, ClaimComparisonMetadata,
+  FollowTargetType
 } from './types';
-import { NotFoundError, BadRequestError } from './utils/errors';
-import { authenticate, authenticateInternal, requireScopes } from './middleware/auth';
+import { NotFoundError, BadRequestError, ForbiddenError } from './utils/errors';
+import { authenticate, authenticateInternal, requireScopes, requireAuthenticatedUser, AuthContext } from './middleware/auth';
 import { applyPublicRateLimit, applyInternalRateLimit, rateLimitHeaders } from './middleware/rate-limit';
 import { applyCors, handleCorsPreflight } from './middleware/cors';
 import { parseBody } from './middleware/body-limit';
@@ -526,13 +527,18 @@ async function handleGetSources(_request: Request, env: Env): Promise<Response> 
   return success(sources);
 }
 
-async function handleGetPreferences(request: Request, env: Env): Promise<Response> {
+const PRIVATE_NO_CACHE_HEADERS: Record<string, string> = {
+  'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+};
+
+async function handleGetPreferences(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const url = new URL(request.url);
-  const userId = url.searchParams.get('user_id');
-  if (!userId) throw new BadRequestError('user_id required');
-  if (userId.length > 255) throw new BadRequestError('user_id too long');
+  const clientUserId = url.searchParams.get('user_id');
+  if (clientUserId && clientUserId !== userId) throw new ForbiddenError('User ID mismatch');
 
   const db = createDbClient(env);
+  await db.getOrCreateUser(userId);
   const prefs = await db.getUserPreferences(userId);
   if (!prefs) {
     return success({
@@ -541,7 +547,7 @@ async function handleGetPreferences(request: Request, env: Env): Promise<Respons
       preferred_sources: [],
       digest_frequency: 'daily',
       email: null,
-    });
+    }, 200, PRIVATE_NO_CACHE_HEADERS);
   }
 
   return success({
@@ -550,21 +556,23 @@ async function handleGetPreferences(request: Request, env: Env): Promise<Respons
     preferred_sources: prefs.preferred_sources ? JSON.parse(prefs.preferred_sources) : [],
     digest_frequency: prefs.digest_frequency,
     email: prefs.email,
-  });
+  }, 200, PRIVATE_NO_CACHE_HEADERS);
 }
 
-async function handlePostPreferences(request: Request, env: Env): Promise<Response> {
+async function handlePostPreferences(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const body = await parseBody<{
-    user_id: string;
+    user_id?: string;
     preferred_topics?: string[];
     preferred_sources?: string[];
     digest_frequency?: string;
     email?: string;
   }>(request, false, env);
 
-  const userId = requireString(body.user_id, 'user_id');
+  if (body.user_id && body.user_id !== userId) throw new ForbiddenError('User ID mismatch');
 
   const db = createDbClient(env);
+  await db.getOrCreateUser(userId);
   const prefs = await db.upsertUserPreferences({
     user_id: userId,
     preferred_topics: body.preferred_topics ? JSON.stringify(body.preferred_topics) : null,
@@ -579,60 +587,183 @@ async function handlePostPreferences(request: Request, env: Env): Promise<Respon
     preferred_sources: prefs.preferred_sources ? JSON.parse(prefs.preferred_sources) : [],
     digest_frequency: prefs.digest_frequency,
     email: prefs.email,
-  });
+  }, 200, PRIVATE_NO_CACHE_HEADERS);
 }
 
-async function handleGetSaved(request: Request, env: Env): Promise<Response> {
+async function handleGetSaved(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const url = new URL(request.url);
-  const userId = url.searchParams.get('user_id');
-  if (!userId) throw new BadRequestError('user_id required');
-  if (userId.length > 255) throw new BadRequestError('user_id too long');
+  const clientUserId = url.searchParams.get('user_id');
+  if (clientUserId && clientUserId !== userId) throw new ForbiddenError('User ID mismatch');
 
   const db = createDbClient(env);
+  await db.getOrCreateUser(userId);
   const saved = await db.listSavedArticles(userId);
-  return success(saved);
+  return success(saved, 200, PRIVATE_NO_CACHE_HEADERS);
 }
 
-async function handlePostSaved(request: Request, env: Env): Promise<Response> {
+async function handlePostSaved(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const body = await parseBody<{
-    user_id: string;
+    user_id?: string;
     article_raw_id: number;
     note?: string;
   }>(request, false, env);
 
-  const userId = requireString(body.user_id, 'user_id');
+  if (body.user_id && body.user_id !== userId) throw new ForbiddenError('User ID mismatch');
+
   const articleRawId = requireString(String(body.article_raw_id), 'article_raw_id');
 
   const db = createDbClient(env);
+  await db.getOrCreateUser(userId);
   const saved = await db.createSavedArticle(userId, parseInt(articleRawId, 10), body.note);
-  return success(saved, 201);
+  return success(saved, 201, PRIVATE_NO_CACHE_HEADERS);
 }
 
-async function handleDeleteSaved(request: Request, env: Env, id: number): Promise<Response> {
+async function handleDeleteSaved(request: Request, env: Env, auth: AuthContext, id: number): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const url = new URL(request.url);
-  const userId = url.searchParams.get('user_id');
-  if (!userId) throw new BadRequestError('user_id required');
-  if (userId.length > 255) throw new BadRequestError('user_id too long');
+  const clientUserId = url.searchParams.get('user_id');
+  if (clientUserId && clientUserId !== userId) throw new ForbiddenError('User ID mismatch');
 
   const db = createDbClient(env);
+  await db.getOrCreateUser(userId);
   const deleted = await db.deleteSavedArticle(id, userId);
   if (!deleted) throw new NotFoundError('Saved article not found');
-  return success({ deleted: true });
+  return success({ deleted: true }, 200, PRIVATE_NO_CACHE_HEADERS);
 }
 
-async function handleHide(request: Request, env: Env): Promise<Response> {
+async function handleHide(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const body = await parseBody<{
-    user_id: string;
+    user_id?: string;
     article_raw_id: number;
     reason?: string;
   }>(request, false, env);
 
-  const userId = requireString(body.user_id, 'user_id');
+  if (body.user_id && body.user_id !== userId) throw new ForbiddenError('User ID mismatch');
+
   const articleRawId = requireString(String(body.article_raw_id), 'article_raw_id');
 
   const db = createDbClient(env);
+  await db.getOrCreateUser(userId);
   const hidden = await db.createHiddenStory(userId, parseInt(articleRawId, 10), body.reason);
-  return success(hidden, 201);
+  return success(hidden, 201, PRIVATE_NO_CACHE_HEADERS);
+}
+
+async function handleGetFollows(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
+  const url = new URL(request.url);
+  const clientUserId = url.searchParams.get('user_id');
+  if (clientUserId && clientUserId !== userId) throw new ForbiddenError('User ID mismatch');
+
+  const targetTypeParam = url.searchParams.get('target_type');
+  let targetType: FollowTargetType | undefined;
+  if (targetTypeParam) {
+    if (targetTypeParam !== 'topic' && targetTypeParam !== 'event' && targetTypeParam !== 'source') {
+      throw new BadRequestError("Invalid target_type. Must be 'topic', 'event', or 'source'");
+    }
+    targetType = targetTypeParam as FollowTargetType;
+  }
+
+  const db = createDbClient(env);
+  await db.getOrCreateUser(userId);
+  const follows = await db.listUserFollows(userId, targetType);
+  return success(follows, 200, PRIVATE_NO_CACHE_HEADERS);
+}
+
+async function handlePostFollow(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
+  const body = await parseBody<{
+    user_id?: string;
+    target_type: string;
+    target_id: string;
+  }>(request, false, env);
+
+  if (body.user_id && body.user_id !== userId) {
+    throw new ForbiddenError('User ID mismatch');
+  }
+
+  const targetType = requireString(body.target_type, 'target_type');
+  const targetId = requireString(body.target_id, 'target_id').trim();
+
+  if (targetType !== 'topic' && targetType !== 'event' && targetType !== 'source') {
+    throw new BadRequestError("Invalid target_type. Must be 'topic', 'event', or 'source'");
+  }
+
+  if (!targetId) {
+    throw new BadRequestError('target_id must not be empty');
+  }
+
+  const db = createDbClient(env);
+
+  // Canonical target validation
+  if (targetType === 'topic') {
+    const topic = await db.getTopicBySlug(targetId);
+    if (!topic) {
+      throw new NotFoundError(`Topic not found: ${targetId}`);
+    }
+  } else if (targetType === 'event') {
+    const event = await db.getEventByHash(targetId);
+    if (!event) {
+      throw new NotFoundError(`Event not found: ${targetId}`);
+    }
+  } else if (targetType === 'source') {
+    const source = await db.getSourceByName(targetId);
+    if (!source) {
+      const numericId = parseInt(targetId, 10);
+      const sourceById = !isNaN(numericId) ? await db.getSourceById(numericId) : null;
+      if (!sourceById) {
+        throw new NotFoundError(`Source not found: ${targetId}`);
+      }
+    }
+  }
+
+  await db.getOrCreateUser(userId);
+  const follow = await db.createUserFollow(userId, targetType as FollowTargetType, targetId);
+  return success(follow, 201, PRIVATE_NO_CACHE_HEADERS);
+}
+
+async function handleDeleteFollow(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
+  const url = new URL(request.url);
+
+  let targetType = url.searchParams.get('target_type');
+  let targetId = url.searchParams.get('target_id');
+  const clientUserId = url.searchParams.get('user_id');
+  if (clientUserId && clientUserId !== userId) {
+    throw new ForbiddenError('User ID mismatch');
+  }
+
+  if (!targetType || !targetId) {
+    try {
+      const body = await parseBody<{
+        user_id?: string;
+        target_type?: string;
+        target_id?: string;
+      }>(request, false, env);
+      if (body.user_id && body.user_id !== userId) {
+        throw new ForbiddenError('User ID mismatch');
+      }
+      if (!targetType && body.target_type) targetType = body.target_type;
+      if (!targetId && body.target_id) targetId = body.target_id;
+    } catch {
+      // Body may not exist for DELETE request
+    }
+  }
+
+  if (!targetType || (targetType !== 'topic' && targetType !== 'event' && targetType !== 'source')) {
+    throw new BadRequestError("Invalid or missing target_type. Must be 'topic', 'event', or 'source'");
+  }
+
+  if (!targetId || !targetId.trim()) {
+    throw new BadRequestError('Missing target_id');
+  }
+
+  const db = createDbClient(env);
+  await db.getOrCreateUser(userId);
+  const deleted = await db.deleteUserFollow(userId, targetType as FollowTargetType, targetId.trim());
+  return success({ deleted, target_type: targetType, target_id: targetId.trim() }, 200, PRIVATE_NO_CACHE_HEADERS);
 }
 
 // ─── Internal Handlers ────────────────────────────────────
@@ -802,45 +933,66 @@ export async function route(request: Request, env: Env): Promise<Response> {
     }
 
     if (path === '/api/v1/preferences' && request.method === 'GET') {
-      await authenticate(request, env, false);
+      const auth = await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/preferences', env);
-      response = await handleGetPreferences(request, env);
+      response = await handleGetPreferences(request, env, auth);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     if (path === '/api/v1/preferences' && request.method === 'POST') {
-      await authenticate(request, env, false);
+      const auth = await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/preferences', env);
-      response = await handlePostPreferences(request, env);
+      response = await handlePostPreferences(request, env, auth);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     if (path === '/api/v1/saved' && request.method === 'GET') {
-      await authenticate(request, env, false);
+      const auth = await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/saved', env);
-      response = await handleGetSaved(request, env);
+      response = await handleGetSaved(request, env, auth);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     if (path === '/api/v1/saved' && request.method === 'POST') {
-      await authenticate(request, env, false);
+      const auth = await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/saved', env);
-      response = await handlePostSaved(request, env);
+      response = await handlePostSaved(request, env, auth);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     const savedMatch = path.match(/^\/api\/v1\/saved\/(\d+)$/);
     if (savedMatch && request.method === 'DELETE') {
-      await authenticate(request, env, false);
+      const auth = await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/saved/:id', env);
-      response = await handleDeleteSaved(request, env, parseInt(savedMatch[1], 10));
+      response = await handleDeleteSaved(request, env, auth, parseInt(savedMatch[1], 10));
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
     if (path === '/api/v1/hide' && request.method === 'POST') {
-      await authenticate(request, env, false);
+      const auth = await authenticate(request, env, false);
       const rateInfo = await applyPublicRateLimit(request, '/api/v1/hide', env);
-      response = await handleHide(request, env);
+      response = await handleHide(request, env, auth);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    if (path === '/api/v1/follows' && request.method === 'GET') {
+      const auth = await authenticate(request, env, false);
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/follows', env);
+      response = await handleGetFollows(request, env, auth);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    if (path === '/api/v1/follows' && request.method === 'POST') {
+      const auth = await authenticate(request, env, false);
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/follows', env);
+      response = await handlePostFollow(request, env, auth);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    if (path === '/api/v1/follows' && request.method === 'DELETE') {
+      const auth = await authenticate(request, env, false);
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/follows', env);
+      response = await handleDeleteFollow(request, env, auth);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 

@@ -168,6 +168,22 @@ export interface AnalyticsDaily {
   created_at: number;
 }
 
+export interface User {
+  id: string;
+  created_at: number;
+  last_active_at: number;
+}
+
+export type FollowTargetType = 'topic' | 'event' | 'source';
+
+export interface UserFollow {
+  id: number;
+  user_id: string;
+  target_type: FollowTargetType;
+  target_id: string;
+  created_at: number;
+}
+
 export interface UserPreference {
   id: number;
   user_id: string;
