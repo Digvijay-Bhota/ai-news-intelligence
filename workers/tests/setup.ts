@@ -29,7 +29,8 @@ export function createMockEnv(overrides: Partial<Env> = {}): Env {
 export function createMockD1Database(seed = false): D1Database {
   const storage = new Map<string, Record<string, unknown>[]>();
   const follows: Array<{ id: string; user_id: string; target_type: string; target_id: string; created_at: number }> = [];
-  const users: Map<string, { id: string; created_at: number; last_active_at: number }> = new Map();
+  const users: Map<string, { id: string; created_at: number; last_active_at: number; acknowledged_through?: number }> = new Map();
+  const userEventReads: Array<{ user_id: string; event_id: number; read_at: number }> = [];
   const knownTopics = [
     { id: 1, name: 'AI Integration Topic', slug: 'ai-integration-topic', description: 'Desc', active: 1 },
     { id: 2, name: 'Machine Learning', slug: 'machine-learning', description: 'Desc', active: 1 },
@@ -50,7 +51,30 @@ export function createMockD1Database(seed = false): D1Database {
 
   if (upperQuery.includes('FROM USERS WHERE ID =')) {
     const existing = users.get(values[0] as string);
-    return (existing ?? { id: values[0] as string, created_at: 1000, last_active_at: 1000 }) as T;
+    return (existing ?? null) as T;
+  }
+
+  if (upperQuery.includes('UPDATE USERS') && upperQuery.includes('ACKNOWLEDGED_THROUGH')) {
+    const userId = values[0] as string;
+    const now = Math.floor(Date.now() / 1000);
+    const existing = users.get(userId) ?? { id: userId, created_at: now, last_active_at: now, acknowledged_through: now };
+    const updatedAck = Math.max(existing.acknowledged_through ?? 0, now);
+    existing.acknowledged_through = updatedAck;
+    users.set(userId, existing);
+    return { acknowledged_through: updatedAck } as T;
+  }
+
+  if (upperQuery.includes('INSERT INTO USER_EVENT_READS')) {
+    const userId = values[0] as string;
+    const eventId = Number(values[1]);
+    const now = Math.floor(Date.now() / 1000);
+    const existingIndex = userEventReads.findIndex(r => r.user_id === userId && r.event_id === eventId);
+    if (existingIndex >= 0) {
+      userEventReads[existingIndex].read_at = now;
+    } else {
+      userEventReads.push({ user_id: userId, event_id: eventId, read_at: now });
+    }
+    return { user_id: userId, event_id: eventId, read_at: now } as T;
   }
 
   if (upperQuery.includes('FROM TOPICS WHERE SLUG =')) {
@@ -190,8 +214,12 @@ export function createMockD1Database(seed = false): D1Database {
                   topic_slugs_raw: 'ai-integration-topic',
                   source_names_raw: 'Integration Source,TechCrunch',
                   brief_version: 2,
+                  brief_updated_at: 1000,
+                  brief_status: 'completed',
                   has_narrative_delta: 1,
+                  delta_created_at: 1000,
                   has_claim_comparison: 1,
+                  claim_created_at: 1000,
                 },
                 {
                   id: 2,
@@ -207,8 +235,43 @@ export function createMockD1Database(seed = false): D1Database {
                   topic_slugs_raw: 'machine-learning',
                   source_names_raw: 'Integration Source',
                   brief_version: 1,
+                  brief_updated_at: 950,
+                  brief_status: 'completed',
                   has_narrative_delta: 0,
+                  delta_created_at: null,
                   has_claim_comparison: 0,
+                  claim_created_at: null,
+                },
+              ] as unknown as T[],
+              success: true,
+              meta: {},
+            };
+          }
+
+          if (seed && upperQuery.includes('WITH CANDIDATE_EVENTS AS')) {
+            return {
+              results: [
+                {
+                  id: 1,
+                  hash: 'evt-hash',
+                  title: 'AI Integration Event',
+                  description: 'Desc',
+                  severity: 'warning',
+                  status: 'active',
+                  started_at: 1000,
+                  article_count: 5,
+                  source_count: 2,
+                  last_published_at: 1000,
+                  topic_slugs_raw: 'ai-integration-topic',
+                  source_names_raw: 'Integration Source,TechCrunch',
+                  brief_version: 2,
+                  brief_updated_at: 1000,
+                  brief_status: 'completed',
+                  has_narrative_delta: 1,
+                  delta_created_at: 1000,
+                  has_claim_comparison: 1,
+                  claim_created_at: 1000,
+                  event_change_cursor: 1000,
                 },
               ] as unknown as T[],
               success: true,
@@ -300,6 +363,11 @@ export function createMockD1Database(seed = false): D1Database {
             return { results: res as unknown as T[], success: true, meta: {} };
           }
 
+          if (upperQuery.includes('FROM USER_EVENT_READS')) {
+            const res = userEventReads.filter(r => r.user_id === values[0]);
+            return { results: res as unknown as T[], success: true, meta: {} };
+          }
+
           const key = `${query}:${JSON.stringify(values)}`;
           const rows = storage.get(key) ?? [];
           return { results: rows as T[], success: true, meta: {} };
@@ -330,8 +398,9 @@ export function createMockD1Database(seed = false): D1Database {
           if (upperQuery.includes('INSERT OR IGNORE INTO USERS')) {
             const userId = values[0] as string;
             const createdAt = (values[1] as number) || 1000;
+            const acknowledgedThrough = (values[2] as number) || createdAt;
             if (!users.has(userId)) {
-              users.set(userId, { id: userId, created_at: createdAt, last_active_at: createdAt });
+              users.set(userId, { id: userId, created_at: createdAt, last_active_at: createdAt, acknowledged_through: acknowledgedThrough });
             }
             return { success: true, meta: { changes: 1, last_row_id: 1 } };
           }

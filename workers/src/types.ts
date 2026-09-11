@@ -172,6 +172,33 @@ export interface User {
   id: string;
   created_at: number;
   last_active_at: number;
+  acknowledged_through: number;
+}
+
+export interface UserEventRead {
+  user_id: string;
+  event_id: number;
+  read_at: number;
+  seen_article_count: number;
+  seen_brief_version: number;
+  seen_narrative_version: number;
+  seen_claim_version: number;
+}
+
+export type SinceLastSeenChangeType =
+  | 'NEW_EVENT'
+  | 'NARRATIVE_EVOLVED'
+  | 'CROSS_SOURCE_PERSPECTIVE'
+  | 'NEW_REPORTING'
+  | null;
+
+export interface SinceLastSeenInfo {
+  change_type: SinceLastSeenChangeType;
+  is_new: boolean;
+  has_updates: boolean;
+  new_article_count: number;
+  change_summary: string | null;
+  last_changed_at: number | null;
 }
 
 export type FollowTargetType = 'topic' | 'event' | 'source';
@@ -202,6 +229,7 @@ export interface PersonalizedFeedItem {
   has_claim_comparison: boolean;
   score: number;
   rank_reasons: string[];
+  since_last_seen?: SinceLastSeenInfo;
 }
 
 export interface PersonalizedFeedResult {
@@ -212,6 +240,21 @@ export interface PersonalizedFeedResult {
     offset: number;
     user_has_follows: boolean;
     fallback_applied: boolean;
+    acknowledged_through?: number;
+    unread_event_count?: number;
+    updated_event_count?: number;
+    all_caught_up?: boolean;
+  };
+}
+
+export interface SinceLastSeenFeedResult {
+  items: PersonalizedFeedItem[];
+  meta: {
+    total_changed_events: number;
+    acknowledged_through: number;
+    all_caught_up: boolean;
+    limit: number;
+    offset: number;
   };
 }
 

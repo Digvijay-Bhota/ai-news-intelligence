@@ -2,9 +2,10 @@
  * D1 Database Access Layer — Phase 0 (Canonical)
  */
 
-import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, User, UserFollow, FollowTargetType, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow, EventNarrativeDeltaRow, EventClaimComparisonRow, PersonalizedFeedItem, PersonalizedFeedResult } from '../types';
+import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, User, UserFollow, FollowTargetType, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow, EventNarrativeDeltaRow, EventClaimComparisonRow, PersonalizedFeedItem, PersonalizedFeedResult, UserEventRead, SinceLastSeenFeedResult, SinceLastSeenInfo } from '../types';
 import { getEventFreshness } from '../utils/freshness';
-import { RankingEvent, FollowContext, rankEvents } from '../utils/ranking';
+import { RankingEvent, FollowContext, rankEvents, RankingFreshness } from '../utils/ranking';
+import { evaluateEventDelta } from '../utils/change-engine';
 
 export class DbClient {
   constructor(private readonly db: D1Database) {}
@@ -722,7 +723,7 @@ export class DbClient {
       .run();
   }
 
-  // ─── Users (Durable Anonymous Identity — Phase 11A) ───────
+  // ─── Users (Durable Anonymous Identity — Phase 11A/11C) ───
   async getOrCreateUser(userId: string): Promise<User> {
     const now = Math.floor(Date.now() / 1000);
     const existing = await this.db
@@ -731,17 +732,28 @@ export class DbClient {
       .first<User>();
 
     if (existing) {
-      if (now - existing.last_active_at > 300) {
+      let ackThrough = existing.acknowledged_through;
+      let needsAckUpdate = false;
+      // Self-heal migration boundary if acknowledged_through is uninitialized (0 or null)
+      if (!ackThrough || ackThrough === 0) {
+        ackThrough = now;
+        needsAckUpdate = true;
+      }
+      const activeOutdated = now - existing.last_active_at > 300;
+
+      if (needsAckUpdate || activeOutdated) {
         await this.db
-          .prepare('UPDATE users SET last_active_at = ?1 WHERE id = ?2')
-          .bind(now, userId)
+          .prepare('UPDATE users SET last_active_at = ?1, acknowledged_through = ?2 WHERE id = ?3')
+          .bind(activeOutdated ? now : existing.last_active_at, ackThrough, userId)
           .run();
+        existing.acknowledged_through = ackThrough;
+        if (activeOutdated) existing.last_active_at = now;
       }
       return existing;
     }
 
     await this.db
-      .prepare('INSERT OR IGNORE INTO users (id, created_at, last_active_at) VALUES (?1, ?2, ?2)')
+      .prepare('INSERT OR IGNORE INTO users (id, created_at, last_active_at, acknowledged_through) VALUES (?1, ?2, ?2, ?2)')
       .bind(userId, now)
       .run();
 
@@ -750,7 +762,7 @@ export class DbClient {
       .bind(userId)
       .first<User>();
 
-    return user ?? { id: userId, created_at: now, last_active_at: now };
+    return user ?? { id: userId, created_at: now, last_active_at: now, acknowledged_through: now };
   }
 
   async getUserById(userId: string): Promise<User | null> {
@@ -807,7 +819,162 @@ export class DbClient {
     return !!res;
   }
 
-  // ─── Personalized Intelligence Feed (Phase 11B) ───────────
+  // ─── Phase 11C: Since-Last-Seen State & Intelligence ────────
+  async getUserEventReads(userId: string, eventIds: number[]): Promise<Map<number, UserEventRead>> {
+    const map = new Map<number, UserEventRead>();
+    if (eventIds.length === 0) return map;
+    const uniqueIds = Array.from(new Set(eventIds));
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const query = `SELECT * FROM user_event_reads WHERE user_id = ? AND event_id IN (${placeholders})`;
+    const res = await this.db.prepare(query).bind(userId, ...uniqueIds).all<UserEventRead>();
+    if (res.results) {
+      for (const row of res.results) {
+        map.set(row.event_id, row);
+      }
+    }
+    return map;
+  }
+
+  async getArticlesBeforeAckBatch(eventIds: number[], acknowledgedThrough: number): Promise<Map<number, number>> {
+    const map = new Map<number, number>();
+    if (eventIds.length === 0) return map;
+    const uniqueIds = Array.from(new Set(eventIds));
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const query = `
+      SELECT ae.event_id, COUNT(DISTINCT a.id) as count
+      FROM article_events ae
+      JOIN articles_raw a ON ae.article_raw_id = a.id
+      WHERE ae.event_id IN (${placeholders}) AND a.published_at <= ?
+      GROUP BY ae.event_id
+    `;
+    const res = await this.db.prepare(query).bind(...uniqueIds, acknowledgedThrough).all<{ event_id: number; count: number }>();
+    if (res.results) {
+      for (const row of res.results) {
+        map.set(row.event_id, row.count);
+      }
+    }
+    return map;
+  }
+
+  private async resolveArticlesBeforeAck(
+    events: { id: number; article_count: number; started_at: number | null; created_at?: number | null; last_published_at: number | null }[],
+    acknowledgedThrough: number
+  ): Promise<Map<number, number>> {
+    const map = new Map<number, number>();
+    const needsQuery: number[] = [];
+
+    for (const e of events) {
+      const lastPub = e.last_published_at ?? 0;
+      const start = e.started_at ?? e.created_at ?? 0;
+
+      if (lastPub <= acknowledgedThrough) {
+        map.set(e.id, e.article_count);
+      } else if (start > acknowledgedThrough) {
+        map.set(e.id, 0);
+      } else {
+        needsQuery.push(e.id);
+      }
+    }
+
+    if (needsQuery.length > 0) {
+      const batchMap = await this.getArticlesBeforeAckBatch(needsQuery, acknowledgedThrough);
+      for (const id of needsQuery) {
+        map.set(id, batchMap.get(id) ?? 0);
+      }
+    }
+
+    return map;
+  }
+
+  async markFeedCaughtUp(userId: string): Promise<number> {
+    const now = Math.floor(Date.now() / 1000);
+    await this.getOrCreateUser(userId);
+
+    const result = await this.db
+      .prepare(
+        `UPDATE users
+         SET acknowledged_through = MAX(COALESCE(acknowledged_through, 0), unixepoch()),
+             last_active_at = unixepoch()
+         WHERE id = ?1
+         RETURNING acknowledged_through`
+      )
+      .bind(userId)
+      .first<{ acknowledged_through: number }>();
+
+    if (result && typeof result.acknowledged_through === 'number') {
+      return result.acknowledged_through;
+    }
+
+    const user = await this.getUserById(userId);
+    return user?.acknowledged_through ?? now;
+  }
+
+  async markEventRead(userId: string, eventId: number): Promise<UserEventRead> {
+    const now = Math.floor(Date.now() / 1000);
+    await this.getOrCreateUser(userId);
+
+    const statsQuery = `
+      SELECT
+        e.id as event_id,
+        COUNT(DISTINCT ae.article_raw_id) as article_count,
+        COALESCE((SELECT MAX(version) FROM event_briefs WHERE event_id = e.id AND status = 'completed'), 1) as brief_version,
+        COALESCE((SELECT MAX(current_version) FROM event_narrative_deltas WHERE event_id = e.id AND status = 'completed'), 0) as narrative_version,
+        COALESCE((SELECT MAX(version) FROM event_claim_comparisons WHERE event_id = e.id AND status = 'completed'), 0) as claim_version
+      FROM events e
+      LEFT JOIN article_events ae ON e.id = ae.event_id
+      WHERE e.id = ?1
+      GROUP BY e.id
+    `;
+    const stats = await this.db.prepare(statsQuery).bind(eventId).first<{
+      event_id: number;
+      article_count: number;
+      brief_version: number;
+      narrative_version: number;
+      claim_version: number;
+    }>();
+
+    const seenArticleCount = stats ? Math.max(stats.article_count, 1) : 1;
+    const seenBriefVersion = stats ? Math.max(stats.brief_version, 1) : 1;
+    const seenNarrativeVersion = stats ? stats.narrative_version : 0;
+    const seenClaimVersion = stats ? stats.claim_version : 0;
+
+    await this.db
+      .prepare(
+        `INSERT INTO user_event_reads (
+           user_id, event_id, read_at,
+           seen_article_count, seen_brief_version, seen_narrative_version, seen_claim_version
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(user_id, event_id) DO UPDATE SET
+           read_at = excluded.read_at,
+           seen_article_count = excluded.seen_article_count,
+           seen_brief_version = excluded.seen_brief_version,
+           seen_narrative_version = excluded.seen_narrative_version,
+           seen_claim_version = excluded.seen_claim_version`
+      )
+      .bind(
+        userId,
+        eventId,
+        now,
+        seenArticleCount,
+        seenBriefVersion,
+        seenNarrativeVersion,
+        seenClaimVersion
+      )
+      .run();
+
+    return {
+      user_id: userId,
+      event_id: eventId,
+      read_at: now,
+      seen_article_count: seenArticleCount,
+      seen_brief_version: seenBriefVersion,
+      seen_narrative_version: seenNarrativeVersion,
+      seen_claim_version: seenClaimVersion,
+    };
+  }
+
+  // ─── Personalized Intelligence Feed (Phase 11B/11C) ───────────
   async getPersonalizedFeedEvents(
     userId: string,
     nowSeconds: number,
@@ -815,6 +982,8 @@ export class DbClient {
   ): Promise<PersonalizedFeedResult> {
     const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
     const offset = Math.max(options.offset ?? 0, 0);
+
+    const user = await this.getOrCreateUser(userId);
 
     // 1. Fetch user follows (single indexed query)
     const follows = await this.listUserFollows(userId);
@@ -850,6 +1019,7 @@ export class DbClient {
           e.severity,
           e.status,
           e.started_at,
+          e.created_at,
           COUNT(DISTINCT ae.article_raw_id) as article_count,
           COUNT(DISTINCT a.source_id) as source_count,
           MAX(a.published_at) as last_published_at
@@ -874,19 +1044,19 @@ export class DbClient {
         GROUP BY ae.event_id
       ),
       event_intel_agg AS (
-        SELECT event_id, MAX(version) as brief_version
+        SELECT event_id, MAX(version) as brief_version, MAX(updated_at) as brief_updated_at
         FROM event_briefs
         WHERE status = 'completed'
         GROUP BY event_id
       ),
       event_deltas_agg AS (
-        SELECT event_id, COUNT(*) as delta_count
+        SELECT event_id, COUNT(*) as delta_count, MAX(created_at) as delta_created_at
         FROM event_narrative_deltas
         WHERE status = 'completed'
         GROUP BY event_id
       ),
       event_claims_agg AS (
-        SELECT event_id, COUNT(*) as claim_comp_count
+        SELECT event_id, COUNT(*) as claim_comp_count, MAX(version) as claim_version, MAX(created_at) as claim_created_at
         FROM event_claim_comparisons
         WHERE status = 'completed'
         GROUP BY event_id
@@ -899,14 +1069,19 @@ export class DbClient {
         ae.severity,
         ae.status,
         ae.started_at,
+        ae.created_at,
         ae.article_count,
         ae.source_count,
         ae.last_published_at,
         COALESCE(eta.topic_slugs, '') as topic_slugs_raw,
         COALESCE(esa.source_names, '') as source_names_raw,
         COALESCE(eia.brief_version, 0) as brief_version,
+        COALESCE(eia.brief_updated_at, 0) as brief_updated_at,
         CASE WHEN eda.delta_count > 0 THEN 1 ELSE 0 END as has_narrative_delta,
-        CASE WHEN eca.claim_comp_count > 0 THEN 1 ELSE 0 END as has_claim_comparison
+        COALESCE(eda.delta_created_at, 0) as delta_created_at,
+        CASE WHEN eca.claim_comp_count > 0 THEN 1 ELSE 0 END as has_claim_comparison,
+        COALESCE(eca.claim_version, 0) as claim_version,
+        COALESCE(eca.claim_created_at, 0) as claim_created_at
       FROM active_events ae
       LEFT JOIN event_topics_agg eta ON ae.id = eta.event_id
       LEFT JOIN event_sources_agg esa ON ae.id = esa.event_id
@@ -925,18 +1100,52 @@ export class DbClient {
       severity: string | null;
       status: string;
       started_at: number | null;
+      created_at: number | null;
       article_count: number;
       source_count: number;
       last_published_at: number | null;
       topic_slugs_raw: string;
       source_names_raw: string;
       brief_version: number;
+      brief_updated_at: number | null;
       has_narrative_delta: number;
+      delta_created_at: number | null;
       has_claim_comparison: number;
+      claim_version: number;
+      claim_created_at: number | null;
     }
 
     const candidateRes = await this.db.prepare(candidateQuery).bind().all<CandidateRow>();
     const rows = candidateRes.results ?? [];
+
+    // Fetch user reads and articles before ack for delta computation
+    const eventIds = rows.map(r => r.id);
+    const [readsMap, articlesBeforeAckMap] = await Promise.all([
+      this.getUserEventReads(userId, eventIds),
+      this.resolveArticlesBeforeAck(rows, user.acknowledged_through),
+    ]);
+
+    const deltaMap = new Map<number, SinceLastSeenInfo>();
+    for (const r of rows) {
+      const userRead = readsMap.get(r.id) ?? null;
+      const articlesBeforeAck = articlesBeforeAckMap.get(r.id) ?? 0;
+      const delta = evaluateEventDelta({
+        started_at: r.started_at,
+        created_at: r.created_at,
+        last_published_at: r.last_published_at,
+        article_count: r.article_count,
+        source_count: r.source_count,
+        brief_version: r.brief_version,
+        brief_updated_at: r.brief_updated_at,
+        delta_created_at: r.delta_created_at,
+        claim_version: r.claim_version,
+        claim_created_at: r.claim_created_at,
+        acknowledged_through: user.acknowledged_through,
+        articles_before_ack: articlesBeforeAck,
+        user_read: userRead,
+      });
+      deltaMap.set(r.id, delta);
+    }
 
     // 3. Map to RankingEvent with canonical freshness
     const candidateEvents: (RankingEvent & { title: string; description: string | null; started_at: number | null })[] = rows.map(r => {
@@ -992,7 +1201,19 @@ export class DbClient {
       has_claim_comparison: r.event.has_claim_comparison,
       score: r.score,
       rank_reasons: r.rank_reasons,
+      since_last_seen: deltaMap.get(r.event.id),
     }));
+
+    let unread_event_count = 0;
+    let updated_event_count = 0;
+    for (const delta of deltaMap.values()) {
+      if (delta.change_type === 'NEW_EVENT') {
+        unread_event_count++;
+      } else if (delta.has_updates) {
+        updated_event_count++;
+      }
+    }
+    const all_caught_up = unread_event_count === 0 && updated_event_count === 0;
 
     return {
       items,
@@ -1002,6 +1223,267 @@ export class DbClient {
         offset,
         user_has_follows,
         fallback_applied,
+        acknowledged_through: user.acknowledged_through,
+        unread_event_count,
+        updated_event_count,
+        all_caught_up,
+      },
+    };
+  }
+
+  // ─── Dedicated Catch-Up Feed (Phase 11C) ─────────────────────
+  async getSinceLastSeenEvents(
+    userId: string,
+    nowSeconds: number,
+    options: { limit?: number; offset?: number } = {}
+  ): Promise<SinceLastSeenFeedResult> {
+    const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
+    const offset = Math.max(options.offset ?? 0, 0);
+
+    const user = await this.getOrCreateUser(userId);
+    const follows = await this.listUserFollows(userId);
+    const followContext: FollowContext = {
+      eventIds: new Set<string>(),
+      topicSlugs: new Set<string>(),
+      sourceNames: new Set<string>(),
+    };
+
+    for (const f of follows) {
+      if (f.target_type === 'event') {
+        followContext.eventIds.add(f.target_id);
+      } else if (f.target_type === 'topic') {
+        followContext.topicSlugs.add(f.target_id.trim().toLowerCase());
+      } else if (f.target_type === 'source') {
+        followContext.sourceNames.add(f.target_id.trim().toLowerCase());
+      }
+    }
+
+    // Catch-up candidate query:
+    // Computes canonical event_change_cursor across all active events and applies
+    // MANDATORY ORDER BY ec.event_change_cursor DESC, ec.id DESC LIMIT 50 BEFORE pagination.
+    const catchUpQuery = `
+      WITH user_anchor AS (
+        SELECT acknowledged_through
+        FROM users
+        WHERE id = ?1
+      ),
+      event_activity AS (
+        SELECT
+          e.id,
+          e.event_hash as hash,
+          e.title,
+          e.description,
+          e.severity,
+          e.status,
+          e.started_at,
+          e.created_at,
+          MAX(a.published_at) as last_published_at,
+          COUNT(DISTINCT ae.article_raw_id) as article_count,
+          COUNT(DISTINCT a.source_id) as source_count,
+          (SELECT MAX(b.version) FROM event_briefs b WHERE b.event_id = e.id AND b.status = 'completed') as brief_version,
+          (SELECT MAX(b.updated_at) FROM event_briefs b WHERE b.event_id = e.id AND b.status = 'completed') as brief_updated_at,
+          (SELECT MAX(nd.created_at) FROM event_narrative_deltas nd WHERE nd.event_id = e.id AND nd.status = 'completed') as delta_created_at,
+          (SELECT MAX(cc.version) FROM event_claim_comparisons cc WHERE cc.event_id = e.id AND cc.status = 'completed') as claim_version,
+          (SELECT MAX(cc.created_at) FROM event_claim_comparisons cc WHERE cc.event_id = e.id AND cc.status = 'completed') as claim_created_at
+        FROM events e
+        LEFT JOIN article_events ae ON e.id = ae.event_id
+        LEFT JOIN articles_raw a ON ae.article_raw_id = a.id
+        WHERE e.status = 'active'
+        GROUP BY e.id
+      ),
+      event_cursors AS (
+        SELECT
+          ea.*,
+          MAX(
+            COALESCE(ea.last_published_at, 0),
+            COALESCE(ea.started_at, ea.created_at, 0),
+            COALESCE(ea.brief_updated_at, 0),
+            COALESCE(ea.delta_created_at, 0),
+            COALESCE(ea.claim_created_at, 0)
+          ) as event_change_cursor
+        FROM event_activity ea
+      ),
+      catch_up_candidates AS (
+        SELECT
+          ec.*
+        FROM event_cursors ec
+        CROSS JOIN user_anchor ua
+        WHERE ec.event_change_cursor > ua.acknowledged_through
+        ORDER BY ec.event_change_cursor DESC, ec.id DESC
+        LIMIT 50
+      ),
+      event_topics_agg AS (
+        SELECT ae.event_id, GROUP_CONCAT(DISTINCT t.slug) as topic_slugs
+        FROM article_events ae
+        JOIN catch_up_candidates c ON ae.event_id = c.id
+        JOIN article_topics at ON ae.article_raw_id = at.article_raw_id
+        JOIN topics t ON at.topic_id = t.id
+        GROUP BY ae.event_id
+      ),
+      event_sources_agg AS (
+        SELECT ae.event_id, GROUP_CONCAT(DISTINCT s.name) as source_names
+        FROM article_events ae
+        JOIN catch_up_candidates c ON ae.event_id = c.id
+        JOIN articles_raw a ON ae.article_raw_id = a.id
+        JOIN sources s ON a.source_id = s.id
+        GROUP BY ae.event_id
+      )
+      SELECT
+        c.*,
+        COALESCE(eta.topic_slugs, '') as topic_slugs_raw,
+        COALESCE(esa.source_names, '') as source_names_raw
+      FROM catch_up_candidates c
+      LEFT JOIN event_topics_agg eta ON c.id = eta.event_id
+      LEFT JOIN event_sources_agg esa ON c.id = esa.event_id
+      ORDER BY c.event_change_cursor DESC, c.id DESC;
+    `;
+
+    interface CatchUpRow {
+      id: number;
+      hash: string;
+      title: string;
+      description: string | null;
+      severity: string | null;
+      status: string;
+      started_at: number | null;
+      created_at: number | null;
+      last_published_at: number | null;
+      article_count: number;
+      source_count: number;
+      brief_version: number | null;
+      brief_updated_at: number | null;
+      delta_created_at: number | null;
+      claim_version: number | null;
+      claim_created_at: number | null;
+      event_change_cursor: number;
+      topic_slugs_raw: string;
+      source_names_raw: string;
+    }
+
+    const res = await this.db.prepare(catchUpQuery).bind(userId).all<CatchUpRow>();
+    const rows = res.results ?? [];
+
+    if (rows.length === 0) {
+      return {
+        items: [],
+        meta: {
+          total_changed_events: 0,
+          acknowledged_through: user.acknowledged_through,
+          all_caught_up: true,
+          limit,
+          offset,
+        },
+      };
+    }
+
+    const eventIds = rows.map(r => r.id);
+    const [readsMap, articlesBeforeAckMap] = await Promise.all([
+      this.getUserEventReads(userId, eventIds),
+      this.resolveArticlesBeforeAck(rows, user.acknowledged_through),
+    ]);
+
+    const changedCandidates: (PersonalizedFeedItem & { event_change_cursor: number })[] = [];
+
+    for (const r of rows) {
+      const topic_slugs = r.topic_slugs_raw ? r.topic_slugs_raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const source_names = r.source_names_raw ? r.source_names_raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const freshness = getEventFreshness(r.last_published_at, r.article_count, nowSeconds);
+      const userRead = readsMap.get(r.id) ?? null;
+      const articlesBeforeAck = articlesBeforeAckMap.get(r.id) ?? 0;
+
+      const deltaInfo = evaluateEventDelta({
+        started_at: r.started_at,
+        created_at: r.created_at,
+        last_published_at: r.last_published_at,
+        article_count: r.article_count,
+        source_count: r.source_count,
+        brief_version: r.brief_version ?? 0,
+        brief_updated_at: r.brief_updated_at,
+        delta_created_at: r.delta_created_at,
+        claim_version: r.claim_version ?? 0,
+        claim_created_at: r.claim_created_at,
+        acknowledged_through: user.acknowledged_through,
+        articles_before_ack: articlesBeforeAck,
+        user_read: userRead,
+      });
+
+      if (deltaInfo.change_type !== null) {
+        changedCandidates.push({
+          id: r.id,
+          hash: r.hash,
+          title: r.title,
+          description: r.description,
+          severity: r.severity ?? 'info',
+          freshness,
+          article_count: r.article_count,
+          source_count: r.source_count,
+          started_at: r.started_at,
+          last_published_at: r.last_published_at,
+          topics: topic_slugs,
+          sources: source_names,
+          brief_version: r.brief_version ?? 0,
+          has_narrative_delta: (r.delta_created_at ?? 0) > 0,
+          has_claim_comparison: (r.claim_created_at ?? 0) > 0,
+          score: 0,
+          rank_reasons: [],
+          since_last_seen: deltaInfo,
+          event_change_cursor: r.event_change_cursor,
+        });
+      }
+    }
+
+    // Rank candidates using Phase 11B ranking for follow boosts
+    const rankingEvents: RankingEvent[] = changedCandidates.map(c => ({
+      id: c.id,
+      hash: c.hash,
+      severity: c.severity,
+      last_published_at: c.last_published_at,
+      article_count: c.article_count,
+      source_count: c.source_count,
+      freshness: c.freshness as RankingFreshness,
+      brief_version: c.brief_version,
+      has_narrative_delta: c.has_narrative_delta,
+      has_claim_comparison: c.has_claim_comparison,
+      topic_slugs: c.topics,
+      source_names: c.sources,
+    }));
+
+    const ranked = rankEvents(rankingEvents, followContext, nowSeconds);
+    const scoreMap = new Map<number, { score: number; rank_reasons: string[] }>();
+    for (const r of ranked) {
+      scoreMap.set(r.event.id, { score: r.score, rank_reasons: r.rank_reasons });
+    }
+
+    for (const item of changedCandidates) {
+      const s = scoreMap.get(item.id);
+      if (s) {
+        item.score = s.score;
+        item.rank_reasons = s.rank_reasons;
+      }
+    }
+
+    // Final result ordering: ORDER BY event_change_cursor DESC, event_id DESC
+    changedCandidates.sort((a, b) => {
+      if (b.event_change_cursor !== a.event_change_cursor) {
+        return b.event_change_cursor - a.event_change_cursor;
+      }
+      return b.id - a.id;
+    });
+
+    const totalChanged = changedCandidates.length;
+    const paginated = changedCandidates.slice(offset, offset + limit).map(c => {
+      const { event_change_cursor, ...rest } = c;
+      return rest;
+    });
+
+    return {
+      items: paginated,
+      meta: {
+        total_changed_events: totalChanged,
+        acknowledged_through: user.acknowledged_through,
+        all_caught_up: totalChanged === 0,
+        limit,
+        offset,
       },
     };
   }

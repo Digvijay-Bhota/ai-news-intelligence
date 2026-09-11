@@ -220,12 +220,28 @@ CREATE TABLE IF NOT EXISTS analytics_daily (
   created_at INTEGER DEFAULT (unixepoch())
 );
 
--- ─── Users (Durable Anonymous Identity — Phase 11A) ──────────
+-- ─── Users (Durable Anonymous Identity — Phase 11A/11C) ──────
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  last_active_at INTEGER NOT NULL DEFAULT (unixepoch())
+  last_active_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  acknowledged_through INTEGER NOT NULL DEFAULT 0
 );
+
+-- ─── User Event Reads (Since-Last-Seen Read State — Phase 11C) ─
+CREATE TABLE IF NOT EXISTS user_event_reads (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  read_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  seen_article_count INTEGER NOT NULL DEFAULT 1,
+  seen_brief_version INTEGER NOT NULL DEFAULT 1,
+  seen_narrative_version INTEGER NOT NULL DEFAULT 0,
+  seen_claim_version INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_event_reads_user ON user_event_reads(user_id, read_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_event_reads_event ON user_event_reads(event_id);
 
 -- ─── User Follows (Topic, Event, Source — Phase 11A) ────────
 CREATE TABLE IF NOT EXISTS user_follows (

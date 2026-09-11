@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import type { EventSummary } from '../types';
+import type { EventSummary, SinceLastSeenInfo } from '../types';
 import { formatRelativeTime } from '../lib/utils';
 import { ClockIcon, ChevronRightIcon, ActivityIcon } from './icons';
 import { FollowButton } from './FollowButton';
@@ -14,6 +14,8 @@ interface EventCardProps {
   briefVersion?: number;
   score?: number;
   compact?: boolean;
+  sinceLastSeen?: SinceLastSeenInfo;
+  onMarkRead?: (eventHash: string, eventId?: number) => void;
 }
 
 export function EventCard({
@@ -23,11 +25,14 @@ export function EventCard({
   briefVersion,
   score,
   compact = false,
+  sinceLastSeen,
+  onMarkRead,
 }: EventCardProps) {
   const isDeveloping = event.freshness === 'developing';
   const isStale = event.freshness === 'stale';
   const activeReasons = rankReasons || event.rank_reasons || (matchedReason ? [matchedReason] : []);
   const effectiveBriefVersion = briefVersion ?? event.brief_version ?? 0;
+  const delta = sinceLastSeen || (event as any).since_last_seen as SinceLastSeenInfo | undefined;
 
   const severityClasses = {
     critical: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20',
@@ -51,6 +56,28 @@ export function EventCard({
       {/* Top badges & telemetry */}
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Since-Last-Seen Delta Badge (Phase 11C) */}
+          {delta && delta.change_type === 'NEW_EVENT' && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-600 text-white shadow-sm tracking-wide">
+              ✨ NEW
+            </span>
+          )}
+          {delta && delta.change_type === 'NARRATIVE_EVOLVED' && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-600 text-white shadow-sm">
+              🔄 Evolved
+            </span>
+          )}
+          {delta && delta.change_type === 'CROSS_SOURCE_PERSPECTIVE' && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-cyan-700 text-white shadow-sm">
+              ⚖️ Perspectives
+            </span>
+          )}
+          {delta && delta.change_type === 'NEW_REPORTING' && delta.new_article_count > 0 && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-600 text-white shadow-sm">
+              +{delta.new_article_count} new report{delta.new_article_count > 1 ? 's' : ''}
+            </span>
+          )}
+
           {/* Freshness Badge */}
           {isDeveloping ? (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
@@ -124,6 +151,7 @@ export function EventCard({
       <h3 className={`font-bold text-gray-900 dark:text-gray-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors leading-snug ${compact ? 'text-base mb-2' : 'text-xl mb-2.5'}`}>
         <Link
           href={`/events/${event.hash}`}
+          onClick={() => onMarkRead?.(event.hash, (event as any).id)}
           className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
         >
           {event.title}
@@ -160,6 +188,7 @@ export function EventCard({
 
         <Link
           href={`/events/${event.hash}`}
+          onClick={() => onMarkRead?.(event.hash, (event as any).id)}
           className="inline-flex items-center text-xs font-semibold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-1 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
           tabIndex={-1}
           aria-hidden="true"

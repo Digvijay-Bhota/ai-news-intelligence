@@ -163,6 +163,22 @@ export interface EventSummary {
   rank_reasons?: string[];
 }
 
+export type SinceLastSeenChangeType =
+  | 'NEW_EVENT'
+  | 'NARRATIVE_EVOLVED'
+  | 'CROSS_SOURCE_PERSPECTIVE'
+  | 'NEW_REPORTING'
+  | null;
+
+export interface SinceLastSeenInfo {
+  change_type: SinceLastSeenChangeType;
+  is_new: boolean;
+  has_updates: boolean;
+  new_article_count: number;
+  change_summary: string | null;
+  last_changed_at: number | null;
+}
+
 export interface PersonalizedFeedItem extends EventSummary {
   id?: number;
   score: number;
@@ -170,6 +186,7 @@ export interface PersonalizedFeedItem extends EventSummary {
   brief_version: number;
   has_narrative_delta: boolean;
   has_claim_comparison: boolean;
+  since_last_seen?: SinceLastSeenInfo;
 }
 
 export interface PersonalizedFeedResponse {
@@ -182,6 +199,24 @@ export interface PersonalizedFeedResponse {
       offset: number;
       user_has_follows: boolean;
       fallback_applied: boolean;
+      acknowledged_through?: number;
+      unread_event_count?: number;
+      updated_event_count?: number;
+      all_caught_up?: boolean;
+    };
+  };
+}
+
+export interface SinceLastSeenFeedResponse {
+  success: boolean;
+  data: {
+    items: PersonalizedFeedItem[];
+    meta: {
+      total_changed_events: number;
+      acknowledged_through: number;
+      all_caught_up: boolean;
+      limit: number;
+      offset: number;
     };
   };
 }
