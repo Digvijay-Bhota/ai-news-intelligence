@@ -48,7 +48,14 @@ function success<T>(data: T, status = 200, extraHeaders?: Record<string, string>
 }
 
 function error(message: string, status = 400, extraHeaders?: Record<string, string>): Response {
-  return json({ success: false, error: message }, status, extraHeaders);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extraHeaders };
+  return new Response(JSON.stringify({ success: false, error: message }), { status, headers });
+}
+
+// @ts-ignore: Intentionally preserved per contract but currently unused
+function internalError(err: unknown, extraHeaders?: Record<string, string>): Response {
+  console.error('Internal Server Error:', err);
+  return error('Internal Server Error', 500, extraHeaders);
 }
 
 // ─── Helpers ──────────────────────────────────────────────
@@ -1009,6 +1016,87 @@ async function handleInternalPipelineLog(request: Request, env: Env): Promise<Re
   return success(job, 201);
 }
 
+// ─── Community Identity (Phase 13A) ─────────────────────
+
+async function handleGetCommunityProfile(_request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const db = createDbClient(env);
+  const userId = requireAuthenticatedUser(auth);
+
+  let profile = await db.getUserProfile(userId);
+
+  if (!profile) {
+    // Ensure the durable anonymous user exists first
+    await db.getOrCreateUser(userId);
+
+    // Lazy creation
+    const publicId = crypto.randomUUID().replace(/-/g, '').substring(0, 21); // basic non-enumerable id
+    const shortHash = publicId.substring(0, 4).toUpperCase();
+    const displayName = `Reader_${shortHash}`;
+
+    try {
+      profile = await db.createUserProfile({
+        user_id: userId,
+        public_id: publicId,
+        display_name: displayName,
+        status: 'active'
+      });
+    } catch (err: any) {
+      if (err.message?.includes('UNIQUE') || err.message?.includes('constraint failed') || err.message?.includes('SQLITE_CONSTRAINT')) {
+        const existing = await db.getUserProfile(userId);
+        if (existing) {
+          profile = existing;
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  // Never expose user_id
+  return success({
+    public_id: profile.public_id,
+    display_name: profile.display_name,
+    status: profile.status,
+    created_at: profile.created_at
+  });
+}
+
+async function handlePatchCommunityProfile(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const db = createDbClient(env);
+  const userId = requireAuthenticatedUser(auth);
+  const body = await parseBody<{ display_name?: string }>(request, true, env);
+
+  let displayName = optionalString(body.display_name);
+  if (!displayName) {
+    throw new BadRequestError('Display name is required');
+  }
+
+  displayName = displayName.trim();
+
+  if (displayName.length < 3 || displayName.length > 30) {
+    throw new BadRequestError('Display name must be between 3 and 30 characters');
+  }
+
+  const nameRegex = /^[\p{L}\p{M}\p{N} \-_]+$/u;
+  if (!nameRegex.test(displayName)) {
+    throw new BadRequestError('Display name contains invalid characters');
+  }
+
+  const updated = await db.updateUserProfile(userId, displayName);
+  if (!updated) {
+     throw new NotFoundError('Profile not found');
+  }
+
+  return success({
+    public_id: updated.public_id,
+    display_name: updated.display_name,
+    status: updated.status,
+    created_at: updated.created_at
+  });
+}
+
 // ─── Router ───────────────────────────────────────────────
 
 export async function route(request: Request, env: Env): Promise<Response> {
@@ -1161,6 +1249,20 @@ export async function route(request: Request, env: Env): Promise<Response> {
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
     }
 
+    if (path === '/api/v1/community/profile' && request.method === 'GET') {
+      const auth = await authenticate(request, env, false);
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/profile', env);
+      response = await handleGetCommunityProfile(request, env, auth);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    if (path === '/api/v1/community/profile' && request.method === 'PATCH') {
+      const auth = await authenticate(request, env, false);
+      const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/profile', env);
+      response = await handlePatchCommunityProfile(request, env, auth);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
     // Internal API
     if (path === '/internal/v1/articles' && request.method === 'POST') {
       const auth = await authenticateInternal(request, env);
@@ -1215,7 +1317,7 @@ export async function route(request: Request, env: Env): Promise<Response> {
     throw new NotFoundError('Endpoint not found');
   } catch (err) {
     const status = err instanceof Error && 'status' in err ? (err as { status: number }).status : 500;
-    const message = err instanceof Error ? err.message : 'Internal Server Error';
+    const message = (err instanceof Error && status !== 500) ? err.message : 'Internal Server Error';
     const response = error(message, status);
     return applyCors(request, response, env);
   }

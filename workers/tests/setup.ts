@@ -30,6 +30,7 @@ export function createMockD1Database(seed = false): D1Database {
   const storage = new Map<string, Record<string, unknown>[]>();
   const follows: Array<{ id: string; user_id: string; target_type: string; target_id: string; created_at: number }> = [];
   const users: Map<string, { id: string; created_at: number; last_active_at: number; acknowledged_through?: number }> = new Map();
+  const userProfiles: Map<string, any> = new Map();
   const userEventReads: Array<{ user_id: string; event_id: number; read_at: number }> = [];
   const knownTopics = [
     { id: 1, name: 'AI Integration Topic', slug: 'ai-integration-topic', description: 'Desc', active: 1 },
@@ -52,6 +53,33 @@ export function createMockD1Database(seed = false): D1Database {
   if (upperQuery.includes('FROM USERS WHERE ID =')) {
     const existing = users.get(values[0] as string);
     return (existing ?? null) as T;
+  }
+
+  if (upperQuery.includes('FROM USER_PROFILES WHERE USER_ID =')) {
+    const existing = userProfiles.get(values[0] as string);
+    return (existing ?? null) as T;
+  }
+
+  if (upperQuery.includes('INSERT INTO USER_PROFILES')) {
+    const profile = {
+      user_id: values[0],
+      public_id: values[1],
+      display_name: values[2],
+      status: values[3],
+      created_at: values[4],
+      updated_at: values[4]
+    };
+    userProfiles.set(values[0] as string, profile);
+    return profile as T;
+  }
+
+  if (upperQuery.includes('UPDATE USER_PROFILES SET DISPLAY_NAME')) {
+    const profile = userProfiles.get(values[0] as string);
+    if (!profile) return null as T;
+    profile.display_name = values[1];
+    profile.updated_at = values[2];
+    userProfiles.set(values[0] as string, profile);
+    return profile as T;
   }
 
   if (upperQuery.includes('UPDATE USERS') && upperQuery.includes('ACKNOWLEDGED_THROUGH')) {

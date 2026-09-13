@@ -7,11 +7,14 @@ import type { Topic, Source } from '../../types';
 export default function SettingsPage() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
-  
+
   const [prefTopics, setPrefTopics] = useState<string[]>([]);
   const [prefSources, setPrefSources] = useState<string[]>([]);
   const [digestFreq, setDigestFreq] = useState<string>('daily');
-  
+
+  const [profile, setProfile] = useState<{ public_id: string; display_name: string } | null>(null);
+  const [displayName, setDisplayName] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
@@ -19,10 +22,11 @@ export default function SettingsPage() {
   useEffect(() => {
     async function load() {
       try {
-        const [topicsRes, sourcesRes, prefsRes] = await Promise.all([
+        const [topicsRes, sourcesRes, prefsRes, profileRes] = await Promise.all([
           fetchTopics(),
           fetchSources(),
-          fetch('/api/preferences').then(r => r.ok ? r.json() : null)
+          fetch('/api/preferences').then(r => r.ok ? r.json() : null),
+          fetch('/api/v1/community/profile').then(r => r.ok ? r.json() : null)
         ]);
 
         if (topicsRes.success) setTopics(topicsRes.data || []);
@@ -60,8 +64,19 @@ export default function SettingsPage() {
       if (!res.ok) throw new Error('Save failed');
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Save failed');
-      
-      setMessage({ type: 'success', text: 'Preferences saved successfully!' });
+      if (displayName && profile && displayName !== profile.display_name) {
+        const pRes = await fetch('/api/v1/community/profile', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ display_name: displayName })
+        });
+        if (!pRes.ok) throw new Error('Failed to update display name');
+        const pData = await pRes.json();
+        if (!pData.success) throw new Error(pData.error || 'Failed to update display name');
+        setProfile(pData.data);
+      }
+
+      setMessage({ type: 'success', text: 'Settings saved successfully!' });
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to save.' });
     } finally {
@@ -93,7 +108,7 @@ export default function SettingsPage() {
     <div className="max-w-3xl mx-auto py-12 px-4 sm:px-6">
       <h1 className="text-3xl font-extrabold text-gray-900 dark:text-gray-50 mb-2">Settings</h1>
       <p className="text-gray-600 dark:text-gray-400 mb-8">Customize your AI News Intelligence experience.</p>
-      
+
       {message && (
         <div className={`mb-6 p-4 rounded-md ${message.type === 'success' ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300 border border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800'}`}>
           {message.text}
@@ -101,7 +116,39 @@ export default function SettingsPage() {
       )}
 
       <form onSubmit={handleSave} className="space-y-10 bg-white dark:bg-gray-900 p-6 sm:p-8 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
-        
+
+        {profile && (
+          <section>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Community Profile</h2>
+            <div className="space-y-4 max-w-sm">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Display Name
+                </label>
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  minLength={3}
+                  maxLength={30}
+                  required
+                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-800 dark:text-gray-100 sm:text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Public ID
+                </label>
+                <div className="px-3 py-2 bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-mono text-xs border border-gray-200 dark:border-gray-700 rounded-md">
+                  {profile.public_id}
+                </div>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  This opaque ID is your permanent community identifier. Your internal identity is never exposed.
+                </p>
+              </div>
+            </div>
+          </section>
+        )}
         <section>
           <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Preferred Topics</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -148,7 +195,7 @@ export default function SettingsPage() {
 
         <section>
           <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Digest Frequency</h2>
-          <select 
+          <select
             value={digestFreq}
             onChange={e => setDigestFreq(e.target.value)}
             className="mt-1 block w-full pl-3 pr-10 py-2.5 text-base border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 sm:text-sm rounded-md"

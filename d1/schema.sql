@@ -228,6 +228,16 @@ CREATE TABLE IF NOT EXISTS users (
   acknowledged_through INTEGER NOT NULL DEFAULT 0
 );
 
+-- ─── Community Identity (Phase 13A) ────────────────────────
+CREATE TABLE IF NOT EXISTS user_profiles (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  public_id TEXT UNIQUE NOT NULL,
+  display_name TEXT NOT NULL,
+  status TEXT DEFAULT 'active',
+  created_at INTEGER DEFAULT (unixepoch()),
+  updated_at INTEGER DEFAULT (unixepoch())
+);
+
 -- ─── User Event Reads (Since-Last-Seen Read State — Phase 11C) ─
 CREATE TABLE IF NOT EXISTS user_event_reads (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

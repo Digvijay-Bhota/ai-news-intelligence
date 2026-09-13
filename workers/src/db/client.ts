@@ -2,7 +2,7 @@
  * D1 Database Access Layer — Phase 0 (Canonical)
  */
 
-import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, User, UserFollow, FollowTargetType, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow, EventNarrativeDeltaRow, EventClaimComparisonRow, PersonalizedFeedItem, PersonalizedFeedResult, UserEventRead, SinceLastSeenFeedResult, SinceLastSeenInfo } from '../types';
+import type { Env, ArticleRaw, Source, Topic, Event, PipelineJob, AiJob, DedupHash, SourceHealth, User, UserFollow, FollowTargetType, UserPreference, SavedArticle, HiddenStory, PipelineToken, EventBriefRow, EventNarrativeDeltaRow, EventClaimComparisonRow, PersonalizedFeedItem, PersonalizedFeedResult, UserEventRead, SinceLastSeenFeedResult, SinceLastSeenInfo, UserProfile } from '../types';
 import { getEventFreshness } from '../utils/freshness';
 import { RankingEvent, FollowContext, rankEvents, RankingFreshness } from '../utils/ranking';
 import { evaluateEventDelta } from '../utils/change-engine';
@@ -721,6 +721,39 @@ export class DbClient {
       .prepare('INSERT INTO dedup_hashes (hash, article_raw_id, hash_type) VALUES (?1, ?2, ?3)')
       .bind(hash, articleRawId, 'content')
       .run();
+  }
+
+  // ─── Community Identity (Phase 13A) ───
+  async getUserProfile(userId: string): Promise<UserProfile | null> {
+    const profile = await this.db
+      .prepare('SELECT * FROM user_profiles WHERE user_id = ?1')
+      .bind(userId)
+      .first<UserProfile>();
+    return profile || null;
+  }
+
+  async createUserProfile(params: { user_id: string; public_id: string; display_name: string; status: string }): Promise<UserProfile> {
+    const now = Math.floor(Date.now() / 1000);
+    const profile = await this.db
+      .prepare(
+        'INSERT INTO user_profiles (user_id, public_id, display_name, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5) RETURNING *'
+      )
+      .bind(params.user_id, params.public_id, params.display_name, params.status, now)
+      .first<UserProfile>();
+
+    if (!profile) throw new Error('Failed to create user profile');
+    return profile;
+  }
+
+  async updateUserProfile(userId: string, displayName: string): Promise<UserProfile | null> {
+    const now = Math.floor(Date.now() / 1000);
+    const profile = await this.db
+      .prepare(
+        'UPDATE user_profiles SET display_name = ?2, updated_at = ?3 WHERE user_id = ?1 RETURNING *'
+      )
+      .bind(userId, displayName, now)
+      .first<UserProfile>();
+    return profile || null;
   }
 
   // ─── Users (Durable Anonymous Identity — Phase 11A/11C) ───

@@ -175,6 +175,15 @@ export interface User {
   acknowledged_through: number;
 }
 
+export interface UserProfile {
+  user_id: string;
+  public_id: string;
+  display_name: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface UserEventRead {
   user_id: string;
   event_id: number;
