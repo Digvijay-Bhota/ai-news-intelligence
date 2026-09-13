@@ -8,6 +8,7 @@ import { EmptyState } from '../../../components/EmptyState';
 import { FollowButton } from '../../../components/FollowButton';
 import { Kicker, EditorialHeading, SectionLabel, Metadata, Divider } from '../../../components/Foundations';
 import { SourceChip } from '../../../components/Editorial/SourceChip';
+import { CommunityDiscussion } from '../../../components/CommunityDiscussion';
 
 export const runtime = 'edge';
 
@@ -228,6 +229,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
           Community insights and discussion threads will appear here.
         </div>
       </section>
+      <CommunityDiscussion eventHash={hash} />
     </article>
   );
 }

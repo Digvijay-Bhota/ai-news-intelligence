@@ -546,3 +546,53 @@ export interface ClaimComparisonMetadata {
   claim_count: number;
   article_fingerprint: string | null;
 }
+
+// ─── Phase 13: Community Identity & Discussion ──────────────
+
+
+export interface CommunityPost {
+  id: string;
+  event_id: number;
+  user_id: string;
+  parent_id: string | null;
+  body: string;
+  status: 'active' | 'flagged' | 'hidden' | 'deleted';
+  context_anchor_type: string | null;
+  context_anchor_id: string | null;
+  created_at: number;
+  updated_at: number;
+  edited_at: number | null;
+  edit_count: number;
+}
+
+export interface CommunityVote {
+  post_id: string;
+  user_id: string;
+  vote_type: string;
+  created_at: number;
+}
+
+export interface CommunityReport {
+  post_id: string;
+  user_id: string;
+  reason: string;
+  created_at: number;
+}
+
+export interface ModerationAudit {
+  id: number;
+  post_id: string;
+  actor: string;
+  actor_role: string;
+  previous_state: string | null;
+  new_state: string;
+  reason: string | null;
+  created_at: number;
+}
+
+export interface PublicCommunityPost extends Omit<CommunityPost, 'user_id' | 'status'> {
+  author_public_id: string;
+  author_display_name: string;
+  upvotes: number;
+  reply_count: number;
+}

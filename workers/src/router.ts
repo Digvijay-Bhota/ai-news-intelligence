@@ -1264,6 +1264,18 @@ export async function route(request: Request, env: Env): Promise<Response> {
     }
 
     // Internal API
+
+    const internalCommMatch = path.match(/^\/internal\/v1\/community\/posts\/([a-zA-Z0-9_-]+)\/moderate$/);
+    if (internalCommMatch && request.method === 'POST') {
+      const auth = await authenticateInternal(request, env);
+      const hasPrivilege = auth.scopes.some(s => ['internal', 'admin', 'moderator'].includes(s));
+      if (!hasPrivilege) throw new ForbiddenError('Required scopes: internal, admin, or moderator');
+      const rateInfo = await applyInternalRateLimit(auth.identifier, '/internal/v1/community/posts/:postId/moderate', env);
+      const comm = await import('./community');
+      response = await comm.handleModerateCommunityPost(request, env, auth, internalCommMatch[1]);
+      return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
     if (path === '/internal/v1/articles' && request.method === 'POST') {
       const auth = await authenticateInternal(request, env);
       requireScopes(auth, ['internal', 'admin']);
@@ -1303,6 +1315,96 @@ export async function route(request: Request, env: Env): Promise<Response> {
       const rateInfo = await applyInternalRateLimit(auth.identifier, '/internal/v1/events/:hash/brief', env);
       response = await handleGenerateEventBrief(request, env, internalBriefMatch[1]);
       return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+    }
+
+    // --- Phase 13B Community Discussion ---
+    if (path.startsWith('/api/v1/events/') || path.startsWith('/api/v1/community/')) {
+      const comm = await import('./community');
+      
+      const evtCommMatch = path.match(/^\/api\/v1\/events\/([a-zA-Z0-9_-]+)\/community$/);
+      if (evtCommMatch) {
+        if (request.method === 'GET') {
+          const rateInfo = await applyPublicRateLimit(request, '/api/v1/events/:hash/community', env);
+          response = await comm.handleGetCommunityPosts(request, env, evtCommMatch[1]);
+          return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+        }
+        if (request.method === 'POST') {
+          const auth = await authenticate(request, env, false);
+          requireAuthenticatedUser(auth);
+          const rateInfo = await applyPublicRateLimit(request, '/api/v1/events/:hash/community', env);
+          response = await comm.handleCreateCommunityPost(request, env, auth, evtCommMatch[1]);
+          return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+        }
+      }
+      
+      const postRepliesMatch = path.match(/^\/api\/v1\/community\/posts\/([a-zA-Z0-9_-]+)\/replies$/);
+      if (postRepliesMatch) {
+        if (request.method === 'GET') {
+          const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/posts/:postId/replies', env);
+          response = await comm.handleGetCommunityReplies(request, env, postRepliesMatch[1]);
+          return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+        }
+        if (request.method === 'POST') {
+          const auth = await authenticate(request, env, false);
+          requireAuthenticatedUser(auth);
+          const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/posts/:postId/replies', env);
+          response = await comm.handleCreateCommunityReply(request, env, auth, postRepliesMatch[1]);
+          return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+        }
+      }
+      
+      const postMatch = path.match(/^\/api\/v1\/community\/posts\/([a-zA-Z0-9_-]+)$/);
+      if (postMatch) {
+        if (request.method === 'PATCH') {
+          const auth = await authenticate(request, env, false);
+          requireAuthenticatedUser(auth);
+          const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/posts/:postId', env);
+          response = await comm.handleEditCommunityPost(request, env, auth, postMatch[1]);
+          return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+        }
+        if (request.method === 'DELETE') {
+          const auth = await authenticate(request, env, false);
+          requireAuthenticatedUser(auth);
+          const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/posts/:postId', env);
+          response = await comm.handleDeleteCommunityPost(request, env, auth, postMatch[1]);
+          return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+        }
+      }
+      
+      const postVoteMatch = path.match(/^\/api\/v1\/community\/posts\/([a-zA-Z0-9_-]+)\/vote$/);
+      if (postVoteMatch) {
+        if (request.method === 'PUT') {
+          const auth = await authenticate(request, env, false);
+          requireAuthenticatedUser(auth);
+          const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/posts/:postId/vote', env);
+          response = await comm.handleVoteCommunityPost(request, env, auth, postVoteMatch[1], false);
+          return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+        }
+        if (request.method === 'DELETE') {
+          const auth = await authenticate(request, env, false);
+          requireAuthenticatedUser(auth);
+          const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/posts/:postId/vote', env);
+          response = await comm.handleVoteCommunityPost(request, env, auth, postVoteMatch[1], true);
+          return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+        }
+      }
+      
+      const postReportMatch = path.match(/^\/api\/v1\/community\/posts\/([a-zA-Z0-9_-]+)\/report$/);
+      if (postReportMatch && request.method === 'POST') {
+        const auth = await authenticate(request, env, false);
+        requireAuthenticatedUser(auth);
+        const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/posts/:postId/report', env);
+        response = await comm.handleReportCommunityPost(request, env, auth, postReportMatch[1]);
+        return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+      }
+      
+      if (path === '/api/v1/community/me/interactions' && request.method === 'GET') {
+        const auth = await authenticate(request, env, false);
+        requireAuthenticatedUser(auth);
+        const rateInfo = await applyPublicRateLimit(request, '/api/v1/community/me/interactions', env);
+        response = await comm.handleGetMyInteractions(request, env, auth);
+        return applyCors(request, response, env, rateLimitHeaders(rateInfo));
+      }
     }
 
     const apiBriefMatch = path.match(/^\/api\/v1\/events\/([a-zA-Z0-9_-]+)\/brief$/);
