@@ -1,10 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Feed } from '../../components/Feed';
 import { EventCard } from '../../components/EventCard';
 import type { PersonalizedFeedItem } from '../../types';
-import { RadarIcon, ChevronRightIcon, CheckIcon } from '../../components/icons';
+import { SectionLabel, Divider } from '../../components/Foundations';
 import Link from 'next/link';
 
 interface FeedData {
@@ -33,324 +32,282 @@ export default function ForYouPage() {
   const loadFeed = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch('/api/feed/for-you?limit=20');
-      if (!res.ok) {
-        throw new Error(`Failed to load feed (${res.status})`);
-      }
-      const json = await res.json();
-      if (json.success && json.data) {
-        setFeedData(json.data);
-      } else {
-        throw new Error(json.error || 'Failed to parse feed response');
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('Error fetching /api/feed/for-you:', msg);
-      setError(msg);
-    }
-  }, []);
-
-  const loadCatchUp = useCallback(async () => {
-    try {
-      const res = await fetch('/api/feed/since-last-seen?limit=20');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
-          setCatchUpItems(json.data.items);
-        }
+      const [feedRes, slsRes] = await Promise.all([
+        fetch('/api/feed/for-you?limit=20'),
+        fetch('/api/feed/since-last-seen?limit=20'),
+      ]);
+      if (!feedRes.ok) throw new Error(`Feed error (${feedRes.status})`);
+      const feedJson = await feedRes.json();
+      setFeedData(feedJson.data);
+      if (slsRes.ok) {
+        const slsJson = await slsRes.json();
+        const items: PersonalizedFeedItem[] = slsJson.data?.items ?? [];
+        setCatchUpItems(items.length > 0 ? items : null);
+        if (items.length > 0) setActiveTab('catch-up');
       }
     } catch (err) {
-      console.error('Error fetching /api/feed/since-last-seen:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load feed.');
+    } finally {
+      setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    const init = async () => {
-      setLoading(true);
-      await Promise.all([loadFeed(), loadCatchUp()]);
-      setLoading(false);
-    };
-    init();
-  }, [loadFeed, loadCatchUp]);
+  useEffect(() => { loadFeed(); }, [loadFeed]);
+
+  const handleMarkRead = useCallback(async (_eventHash: string, eventId?: number) => {
+    if (!eventId) return;
+    try {
+      await fetch('/api/feed/read-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id: eventId }),
+      });
+    } catch { /* silent */ }
+  }, []);
 
   const handleMarkCaughtUp = async () => {
     setMarkingCaughtUp(true);
     try {
-      const res = await fetch('/api/feed/ack-seen', {
+      await fetch('/api/feed/ack-seen', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      if (res.ok) {
-        await Promise.all([loadFeed(), loadCatchUp()]);
-      }
-    } catch (err) {
-      console.error('Error marking feed caught up:', err);
+      setCatchUpItems(null);
+      setActiveTab('feed');
+      setFeedData(prev => prev ? { ...prev, meta: { ...prev.meta, all_caught_up: true, unread_event_count: 0, updated_event_count: 0 } } : prev);
     } finally {
       setMarkingCaughtUp(false);
     }
   };
 
-  const handleMarkRead = async (eventHash: string, eventId?: number) => {
-    try {
-      await fetch('/api/feed/read-event', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ event_hash: eventHash, event_id: eventId }),
-      });
-      // Refresh local state without full reload
-      await Promise.all([loadFeed(), loadCatchUp()]);
-    } catch (err) {
-      console.error('Error marking event read:', err);
-    }
-  };
-
   if (loading) {
     return (
-      <div className="space-y-6">
-        <div className="mb-8">
-          <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">For You</h2>
-          <p className="mt-2 text-lg text-gray-600 dark:text-gray-400">Loading your personalized intelligence briefing...</p>
+      <div className="max-w-6xl mx-auto py-8">
+        <div className="animate-pulse space-y-8">
+          <div className="h-4 bg-divider rounded w-32" />
+          <div className="h-10 bg-divider rounded w-2/3" />
+          <div className="h-4 bg-divider rounded w-full" />
+          <div className="h-4 bg-divider rounded w-5/6" />
+          <Divider className="my-8" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {[1,2,3,4].map(i => <div key={i} className="h-36 bg-divider rounded" />)}
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="h-48 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse"></div>
-          <div className="h-48 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse"></div>
-        </div>
-        <div className="h-64 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse mt-6"></div>
       </div>
     );
   }
 
-  if (error || !feedData) {
+  if (error) {
     return (
-      <div className="max-w-3xl py-12 text-center bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-8 shadow-sm">
-        <p className="text-red-500 font-medium mb-4">Unable to load personalized feed: {error || 'Unknown error'}</p>
-        <div className="flex items-center justify-center gap-4">
-          <button
-            onClick={() => {
-              setLoading(true);
-              Promise.all([loadFeed(), loadCatchUp()]).finally(() => setLoading(false));
-            }}
-            className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors shadow-sm"
-          >
-            Try Again
-          </button>
-          <Link
-            href="/events"
-            className="px-4 py-2 text-sm font-semibold rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-          >
-            Browse All Events
-          </Link>
-        </div>
+      <div className="max-w-6xl mx-auto py-8">
+        <p className="font-sans text-sm text-breaking">{error}</p>
       </div>
     );
   }
 
-  const { items, meta } = feedData;
-  const hasFollows = meta.user_has_follows;
-  const isFallback = meta.fallback_applied;
-  const unreadCount = meta.unread_event_count ?? 0;
-  const updatedCount = meta.updated_event_count ?? 0;
+  const items = feedData?.items ?? [];
+  const meta = feedData?.meta;
+  const hasFollows = meta?.user_has_follows ?? false;
+  const isFallback = meta?.fallback_applied ?? false;
+  const unreadCount = meta?.unread_event_count ?? 0;
+  const updatedCount = meta?.updated_event_count ?? 0;
+  const allCaughtUp = meta?.all_caught_up ?? true;
   const totalChanged = unreadCount + updatedCount;
-  const allCaughtUp = meta.all_caught_up ?? totalChanged === 0;
 
-  const displayItems = activeTab === 'catch-up' ? (catchUpItems ?? []) : items;
+  const displayItems = activeTab === 'catch-up' && catchUpItems ? catchUpItems : items;
+  const [lead, ...rest] = displayItems;
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">For You</h2>
-          <p className="mt-1 text-base text-gray-600 dark:text-gray-400">
-            {hasFollows && !isFallback
-              ? 'Curated intelligence stream matching your followed topics, sources, and tracked events.'
-              : hasFollows && isFallback
-                ? 'Top developing intelligence stories while awaiting new updates on your followed interests.'
-                : 'Top developing intelligence stories. Follow topics, sources, or events to tailor this briefing.'}
-          </p>
-        </div>
-        <Link
-          href="/settings"
-          className="inline-flex items-center text-xs font-semibold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
-        >
-          Manage Follows & Interests &rarr;
-        </Link>
-      </div>
+    <div className="max-w-6xl mx-auto">
 
-      {/* Phase 11C: Catch-Up Intelligence Banner */}
-      {!allCaughtUp && totalChanged > 0 ? (
-        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-950/40 dark:to-purple-950/30 border border-indigo-200 dark:border-indigo-800/60 rounded-xl p-5 shadow-sm">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-start sm:items-center gap-3">
-              <div className="p-2 rounded-lg bg-indigo-600 text-white shadow-sm mt-0.5 sm:mt-0">
-                <RadarIcon className="w-5 h-5 animate-pulse" />
-              </div>
-              <div>
-                <h4 className="text-sm font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                  <span>Since Your Last Visit</span>
-                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 font-mono">
-                    {totalChanged} updates
-                  </span>
-                </h4>
-                <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
-                  {unreadCount > 0 && (
-                    <span className="font-semibold text-emerald-700 dark:text-emerald-400 mr-2">
-                      ✨ {unreadCount} new event{unreadCount > 1 ? 's' : ''}
-                    </span>
-                  )}
-                  {updatedCount > 0 && (
-                    <span className="font-semibold text-indigo-700 dark:text-indigo-400">
-                      🔄 {updatedCount} updated event{updatedCount > 1 ? 's' : ''}
-                    </span>
-                  )}
-                </p>
-              </div>
+      {/* ── Since-Last-Seen Banner ───────────────────────────────── */}
+      {!allCaughtUp && totalChanged > 0 && (
+        <div className="mb-10 border-l-4 border-accent bg-accent/5 dark:bg-accent/10 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="font-sans text-[11px] font-bold tracking-widest uppercase text-accent mb-1">
+              Since Your Last Visit
             </div>
-
-            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-              {catchUpItems && catchUpItems.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setActiveTab(activeTab === 'catch-up' ? 'feed' : 'catch-up')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
-                    activeTab === 'catch-up'
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
-                >
-                  {activeTab === 'catch-up' ? 'Show All Feed' : `Catch-Up Stream (${catchUpItems.length})`}
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={handleMarkCaughtUp}
-                disabled={markingCaughtUp}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-colors shadow-sm disabled:opacity-50"
-              >
-                <CheckIcon className="w-3.5 h-3.5" />
-                {markingCaughtUp ? 'Marking...' : 'Mark Caught Up'}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40 rounded-xl p-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-xs font-bold">
-              ✓
-            </div>
-            <p className="text-xs font-medium text-emerald-900 dark:text-emerald-300">
-              <span className="font-semibold">All caught up!</span> You are up to date on all recent developments and event evolutions.
+            <p className="font-sans text-sm text-charcoal">
+              {unreadCount > 0 && <span className="font-bold">{unreadCount} new {unreadCount === 1 ? 'story' : 'stories'}</span>}
+              {unreadCount > 0 && updatedCount > 0 && ' and '}
+              {updatedCount > 0 && <span className="font-bold">{updatedCount} updated {updatedCount === 1 ? 'story' : 'stories'}</span>}
+              {' since you were last here.'}
             </p>
           </div>
-          {activeTab === 'catch-up' && (
+          <div className="flex items-center gap-3 shrink-0">
+            {catchUpItems && catchUpItems.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setActiveTab(activeTab === 'catch-up' ? 'feed' : 'catch-up')}
+                className="font-sans text-xs font-bold text-accent border border-accent px-3 py-1.5 hover:bg-accent/10 transition-colors"
+              >
+                {activeTab === 'catch-up' ? 'Full Feed' : `View ${catchUpItems.length} Updates`}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setActiveTab('feed')}
-              className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline whitespace-nowrap"
+              onClick={handleMarkCaughtUp}
+              disabled={markingCaughtUp}
+              className="font-sans text-xs font-bold text-white bg-accent px-3 py-1.5 hover:bg-accent/90 transition-colors disabled:opacity-50"
             >
-              Back to Full Feed &rarr;
+              {markingCaughtUp ? 'Marking…' : 'Mark Caught Up'}
             </button>
-          )}
+          </div>
         </div>
       )}
 
-      {/* No Follows Discovery Banner (Cold Start) */}
+      {allCaughtUp && (
+        <div className="mb-8 flex items-center gap-3 border-l-4 border-positive p-4 bg-positive/5">
+          <div className="w-5 h-5 rounded-full border-2 border-positive flex items-center justify-center text-xs text-positive font-bold">✓</div>
+          <p className="font-sans text-sm text-charcoal">
+            <span className="font-bold">All caught up.</span> You are up to date with all recent developments.
+          </p>
+        </div>
+      )}
+
+      {/* ── No-follows cold-start prompt ─────────────────────────── */}
       {!hasFollows && (
-        <div className="bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/50 rounded-xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className="p-2 rounded-lg bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 mt-0.5">
-              <RadarIcon className="w-5 h-5" />
+        <div className="mb-10 p-5 border border-divider bg-surface flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="font-sans text-[11px] font-bold tracking-widest uppercase text-accent mb-1">
+              Personalize Your Feed
             </div>
-            <div>
-              <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                Personalize your intelligence briefing
-              </h4>
-              <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
-                You are currently viewing canonical active stories. Follow topics, news outlets, or specific events to elevate what matters most to you.
-              </p>
-            </div>
+            <p className="font-sans text-sm text-charcoal">
+              Follow topics, sources, or events to surface what matters to you.
+            </p>
           </div>
           <Link
             href="/topics"
-            className="whitespace-nowrap px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors shadow-sm"
+            className="font-sans text-xs font-bold text-white bg-charcoal px-4 py-2 hover:bg-ink transition-colors shrink-0"
           >
-            Explore Topics &rarr;
+            Explore Topics →
           </Link>
         </div>
       )}
 
-      {/* Follows Exist but No Direct Candidate Matches Banner */}
+      {/* ── Fallback notice ──────────────────────────────────────── */}
       {hasFollows && isFallback && (
-        <div className="bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 rounded-xl p-4 flex items-center justify-between gap-4">
-          <p className="text-xs text-amber-800 dark:text-amber-300">
-            <span className="font-semibold">Catch-up briefing:</span> None of your followed topics or sources have fresh event activity today. Displaying top active cluster intelligence instead.
+        <div className="mb-8 p-4 border-l-4 border-developing bg-developing/5">
+          <p className="font-sans text-sm text-charcoal">
+            <span className="font-bold">No activity in your followed topics today.</span>{' '}
+            Showing top active intelligence instead.{' '}
+            <Link href="/settings" className="underline text-accent">Manage follows →</Link>
           </p>
-          <Link
-            href="/settings"
-            className="text-xs font-semibold text-amber-700 hover:text-amber-900 dark:text-amber-400 whitespace-nowrap"
-          >
-            View Follows &rarr;
-          </Link>
         </div>
       )}
 
-      {/* Ranked Events Section */}
-      {displayItems.length > 0 && (
-        <section aria-label="Personalized events" className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-600 dark:bg-indigo-400"></span>
-              </span>
-              <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                <RadarIcon className="w-4 h-4 text-indigo-500" />
-                {activeTab === 'catch-up'
-                  ? 'Catch-Up Stream (Since Last Seen)'
-                  : hasFollows && !isFallback
-                    ? 'Events Matching Your Profile'
-                    : 'Top Event Intelligence'}
-              </h3>
-              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-200 dark:border-indigo-500/20 font-mono">
-                {displayItems.length}
-              </span>
-            </div>
-            <Link
-              href="/events"
-              className="text-xs font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 flex items-center gap-0.5"
-            >
-              View All Events
-              <ChevronRightIcon className="w-3.5 h-3.5" />
-            </Link>
+      {/* ── Section label ────────────────────────────────────────── */}
+      <div className="mb-8">
+        <SectionLabel>
+          {activeTab === 'catch-up'
+            ? 'Changed Since Your Last Visit'
+            : hasFollows && !isFallback
+              ? 'Your Intelligence Briefing'
+              : 'Top Event Intelligence'}
+        </SectionLabel>
+      </div>
+
+      {displayItems.length === 0 ? (
+        <p className="font-sans text-sm text-slate italic">No events to display.</p>
+      ) : (
+        <>
+          {/* ── Desktop: Lead + Sidebar layout ───────────────────── */}
+          <div className="hidden lg:grid lg:grid-cols-3 lg:gap-10 mb-12">
+            {/* Lead story takes 2/3 */}
+            {lead && (
+              <div className="col-span-2">
+                <EventCard
+                  key={lead.hash || `ev-${lead.id}`}
+                  event={lead}
+                  rankReasons={lead.rank_reasons}
+                  briefVersion={lead.brief_version}
+                  score={lead.score}
+                  sinceLastSeen={lead.since_last_seen}
+                  onMarkRead={handleMarkRead}
+                  lead
+                />
+              </div>
+            )}
+
+            {/* Latest sidebar — 1/3 */}
+            {rest.length > 0 && (
+              <div className="col-span-1 flex flex-col border-l border-divider pl-6">
+                <div className="font-sans text-[11px] font-bold tracking-widest uppercase text-slate mb-4">
+                  Latest Developments
+                </div>
+                <div className="flex flex-col divide-y divide-divider">
+                  {rest.slice(0, 5).map(item => (
+                    <div key={item.hash || `ev-${item.id}`} className="py-3 first:pt-0">
+                      <EventCard
+                        event={item}
+                        rankReasons={item.rank_reasons}
+                        briefVersion={item.brief_version}
+                        score={item.score}
+                        sinceLastSeen={item.since_last_seen}
+                        onMarkRead={handleMarkRead}
+                        compact
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {displayItems.map(item => (
-              <EventCard
-                key={item.hash || `ev-${item.id}`}
-                event={item}
-                rankReasons={item.rank_reasons}
-                briefVersion={item.brief_version}
-                score={item.score}
-                sinceLastSeen={item.since_last_seen}
-                onMarkRead={handleMarkRead}
-              />
+          {/* Grid for remaining stories (desktop) */}
+          {rest.length > 5 && (
+            <div className="hidden lg:block">
+              <Divider className="mb-8" />
+              <div className="font-sans text-[11px] font-bold tracking-widest uppercase text-slate mb-6">
+                More Intelligence
+              </div>
+              <div className="grid grid-cols-2 xl:grid-cols-3 gap-6">
+                {rest.slice(5).map(item => (
+                  <EventCard
+                    key={item.hash || `ev-${item.id}`}
+                    event={item}
+                    rankReasons={item.rank_reasons}
+                    briefVersion={item.brief_version}
+                    score={item.score}
+                    sinceLastSeen={item.since_last_seen}
+                    onMarkRead={handleMarkRead}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Mobile/Tablet: Single column list ────────────────── */}
+          <div className="lg:hidden flex flex-col divide-y divide-divider">
+            {lead && (
+              <div className="pb-6">
+                <EventCard
+                  key={lead.hash || `ev-${lead.id}`}
+                  event={lead}
+                  rankReasons={lead.rank_reasons}
+                  briefVersion={lead.brief_version}
+                  score={lead.score}
+                  sinceLastSeen={lead.since_last_seen}
+                  onMarkRead={handleMarkRead}
+                  lead
+                />
+              </div>
+            )}
+            {rest.map(item => (
+              <div key={item.hash || `ev-${item.id}`} className="py-6">
+                <EventCard
+                  event={item}
+                  rankReasons={item.rank_reasons}
+                  briefVersion={item.brief_version}
+                  score={item.score}
+                  sinceLastSeen={item.since_last_seen}
+                  onMarkRead={handleMarkRead}
+                />
+              </div>
             ))}
           </div>
-        </section>
-      )}
-
-      {/* Personalized Articles Feed */}
-      {activeTab === 'feed' && (
-        <section aria-label="Personalized article stream" className="space-y-4 pt-4">
-          <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">
-            Latest Article Stream
-          </h3>
-          <Feed />
-        </section>
+        </>
       )}
     </div>
   );

@@ -4,8 +4,9 @@ import React from 'react';
 import Link from 'next/link';
 import type { EventSummary, SinceLastSeenInfo } from '../types';
 import { formatRelativeTime } from '../lib/utils';
-import { ClockIcon, ChevronRightIcon, ActivityIcon } from './icons';
 import { FollowButton } from './FollowButton';
+import { Kicker, Metadata } from './Foundations';
+import { SourceChip } from './Editorial/SourceChip';
 
 interface EventCardProps {
   event: EventSummary;
@@ -16,6 +17,41 @@ interface EventCardProps {
   compact?: boolean;
   sinceLastSeen?: SinceLastSeenInfo;
   onMarkRead?: (eventHash: string, eventId?: number) => void;
+  /** Render as the lead story (large, prominent) */
+  lead?: boolean;
+}
+
+function kickerFromContext(
+  delta: SinceLastSeenInfo | undefined,
+  freshness: string,
+  severity: string,
+  rankReasons: string[],
+  briefVersion: number,
+): { text: string; type: 'developing' | 'breaking' | 'positive' | 'accent' | 'default' } {
+  // Since-last-seen takes first priority
+  if (delta?.change_type === 'NEW_EVENT') return { text: 'New Story', type: 'positive' };
+  if (delta?.change_type === 'NARRATIVE_EVOLVED') return { text: 'Story Evolved', type: 'developing' };
+  if (delta?.change_type === 'CROSS_SOURCE_PERSPECTIVE') return { text: 'New Perspectives', type: 'accent' };
+  if (delta?.change_type === 'NEW_REPORTING' && (delta?.new_article_count ?? 0) > 0) return { text: `+${delta?.new_article_count} New Reports`, type: 'accent' };
+
+  // Severity
+  if (severity === 'critical') return { text: 'Critical Update', type: 'breaking' };
+
+  // Freshness
+  if (freshness === 'developing') return { text: 'Developing Story', type: 'developing' };
+
+  // Follow context
+  const followReason = rankReasons.find(r => r.startsWith('Following') || r.startsWith('Topic') || r.startsWith('Source'));
+  if (followReason) return { text: 'Because You Follow', type: 'accent' };
+
+  // Intelligence enrichment
+  const evolved = rankReasons.find(r => r.startsWith('Narrative Evolved'));
+  if (evolved || briefVersion >= 2) return { text: 'Intelligence Updated', type: 'developing' };
+
+  const crossSource = rankReasons.find(r => r.startsWith('Cross-Source'));
+  if (crossSource) return { text: 'Multi-Source Analysis', type: 'accent' };
+
+  return { text: 'Active Intelligence', type: 'default' };
 }
 
 export function EventCard({
@@ -23,10 +59,10 @@ export function EventCard({
   matchedReason,
   rankReasons,
   briefVersion,
-  score,
   compact = false,
   sinceLastSeen,
   onMarkRead,
+  lead = false,
 }: EventCardProps) {
   const isDeveloping = event.freshness === 'developing';
   const isStale = event.freshness === 'stale';
@@ -34,168 +70,117 @@ export function EventCard({
   const effectiveBriefVersion = briefVersion ?? event.brief_version ?? 0;
   const delta = sinceLastSeen || (event as any).since_last_seen as SinceLastSeenInfo | undefined;
 
-  const severityClasses = {
-    critical: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20',
-    high: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20',
-    warning: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20',
-    medium: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20',
-    low: 'bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700',
-    info: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
-  }[event.severity] || 'bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700';
+  const kicker = kickerFromContext(delta, event.freshness, event.severity, activeReasons, effectiveBriefVersion);
 
-  const borderAccent = isDeveloping
-    ? 'border-l-4 border-l-emerald-500'
+  // Left accent bar color based on state
+  const accentColor = isDeveloping
+    ? 'border-l-developing'
     : event.severity === 'critical'
-      ? 'border-l-4 border-l-red-500'
-      : event.severity === 'high' || event.severity === 'warning'
-        ? 'border-l-4 border-l-amber-500'
-        : 'border-l-4 border-l-indigo-500';
+      ? 'border-l-breaking'
+      : delta?.change_type
+        ? 'border-l-accent'
+        : 'border-l-divider';
 
-  return (
-    <article className={`group relative bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-500/40 transition-all duration-200 flex flex-col ${borderAccent} ${compact ? 'p-4' : 'p-6'}`}>
-      {/* Top badges & telemetry */}
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Since-Last-Seen Delta Badge (Phase 11C) */}
-          {delta && delta.change_type === 'NEW_EVENT' && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-600 text-white shadow-sm tracking-wide">
-              ✨ NEW
-            </span>
-          )}
-          {delta && delta.change_type === 'NARRATIVE_EVOLVED' && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-600 text-white shadow-sm">
-              🔄 Evolved
-            </span>
-          )}
-          {delta && delta.change_type === 'CROSS_SOURCE_PERSPECTIVE' && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-cyan-700 text-white shadow-sm">
-              ⚖️ Perspectives
-            </span>
-          )}
-          {delta && delta.change_type === 'NEW_REPORTING' && delta.new_article_count > 0 && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-600 text-white shadow-sm">
-              +{delta.new_article_count} new report{delta.new_article_count > 1 ? 's' : ''}
-            </span>
-          )}
-
-          {/* Freshness Badge */}
-          {isDeveloping ? (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
-              <span className="relative flex h-2 w-2 mr-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              Developing
-            </span>
-          ) : isStale ? (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
-              <span className="h-1.5 w-1.5 rounded-full bg-gray-400 mr-1.5"></span>
-              Concluded
-            </span>
-          ) : (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-500/10 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-500 mr-1.5"></span>
-              Active
-            </span>
-          )}
-
-          {/* Severity Badge */}
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider border ${severityClasses}`}>
-            {event.severity}
-          </span>
-
-          {/* Brief Version Badge (when >= 2 and not in reasons) */}
-          {effectiveBriefVersion >= 2 && !activeReasons.some(r => r.startsWith('Narrative Evolved')) && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40">
-              🔄 V{effectiveBriefVersion} Brief
-            </span>
-          )}
-
-          {/* Rank Reasons Badges */}
-          {activeReasons.map(reason => {
-            const isFollow = reason.startsWith('Following') || reason.startsWith('Topic') || reason.startsWith('Source');
-            const isEvolved = reason.startsWith('Narrative Evolved');
-            const isPerspective = reason.startsWith('Cross-Source');
-            const badgeClass = isFollow
-              ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 border-purple-200 dark:border-purple-800/40'
-              : isEvolved
-                ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800/40'
-                : isPerspective
-                  ? 'bg-cyan-50 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 border-cyan-200 dark:border-cyan-800/40'
-                  : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/40';
-
-            return (
-              <span
-                key={reason}
-                className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${badgeClass}`}
-              >
-                {isFollow ? '⭐ ' : isEvolved ? '🔄 ' : isPerspective ? '⚖️ ' : ''}{reason}
-              </span>
-            );
-          })}
-        </div>
-
-        {/* Latest Activity Timestamp & Follow Action */}
-        <div className="flex items-center gap-2">
-          {event.last_published_at && (
-            <div className="flex items-center text-xs text-gray-500 dark:text-gray-400 font-mono">
-              <ClockIcon className="w-3.5 h-3.5 mr-1 text-gray-400" />
-              <span>{formatRelativeTime(event.last_published_at)}</span>
-            </div>
-          )}
+  if (lead) {
+    return (
+      <article className={`group flex flex-col border-l-4 ${accentColor} pl-6 pb-6`}>
+        <Kicker type={kicker.type}>{kicker.text}</Kicker>
+        <h2 className="font-serif font-bold text-ink leading-tight text-3xl sm:text-4xl mb-4 group-hover:text-accent transition-colors">
+          <Link
+            href={`/events/${event.hash}`}
+            onClick={() => onMarkRead?.(event.hash, (event as any).id)}
+            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+          >
+            {event.title}
+          </Link>
+        </h2>
+        {event.description && (
+          <p className="font-serif text-charcoal/80 leading-relaxed text-base mb-4 line-clamp-4 flex-1">
+            {event.description}
+          </p>
+        )}
+        <div className="flex items-center justify-between mt-auto pt-4 border-t border-divider">
+          <Metadata>
+            {event.sources && event.sources.length > 0 && (
+              <SourceChip name={event.sources[0]} />
+            )}
+            {(event.source_count ?? 0) > 1 && (
+              <span className="text-slate text-xs">+{(event.source_count ?? 0) - 1} more</span>
+            )}
+            <span className="text-divider">·</span>
+            <span>{event.article_count} {event.article_count === 1 ? 'article' : 'articles'}</span>
+            {event.last_published_at && (
+              <>
+                <span className="text-divider">·</span>
+                <span>{formatRelativeTime(event.last_published_at)}</span>
+              </>
+            )}
+          </Metadata>
           <FollowButton targetType="event" targetId={event.hash} compact />
         </div>
-      </div>
+      </article>
+    );
+  }
 
-      {/* Event Title */}
-      <h3 className={`font-bold text-gray-900 dark:text-gray-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors leading-snug ${compact ? 'text-base mb-2' : 'text-xl mb-2.5'}`}>
+  if (compact) {
+    return (
+      <article className={`group flex flex-col gap-1 border-l-2 ${accentColor} pl-4 py-3`}>
+        <Kicker type={kicker.type}>{kicker.text}</Kicker>
+        <h3 className="font-sans font-bold text-charcoal leading-snug text-sm group-hover:text-accent transition-colors line-clamp-2">
+          <Link
+            href={`/events/${event.hash}`}
+            onClick={() => onMarkRead?.(event.hash, (event as any).id)}
+            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+          >
+            {event.title}
+          </Link>
+        </h3>
+        <Metadata>
+          {event.sources && event.sources.length > 0 && (
+            <SourceChip name={event.sources[0]} />
+          )}
+          {event.last_published_at && <span>{formatRelativeTime(event.last_published_at)}</span>}
+        </Metadata>
+      </article>
+    );
+  }
+
+  // Standard card (grid item)
+  return (
+    <article className={`group flex flex-col border border-divider bg-surface hover:border-slate transition-colors border-l-4 ${accentColor} p-5`}>
+      <Kicker type={kicker.type}>{kicker.text}</Kicker>
+      <h3 className="font-serif font-bold text-charcoal leading-snug text-xl mb-2 group-hover:text-accent transition-colors">
         <Link
           href={`/events/${event.hash}`}
           onClick={() => onMarkRead?.(event.hash, (event as any).id)}
-          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
+          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
         >
           {event.title}
         </Link>
       </h3>
-
-      {/* Event Description */}
       {event.description && (
-        <p className={`text-gray-600 dark:text-gray-300 leading-relaxed mb-4 flex-1 ${compact ? 'text-xs line-clamp-2' : 'text-sm line-clamp-3'}`}>
+        <p className="font-sans text-sm text-charcoal/70 leading-relaxed mb-4 flex-1 line-clamp-3">
           {event.description}
         </p>
       )}
-
-      {/* Bottom Intelligence Metrics Footer */}
-      <div className="pt-3 border-t border-gray-100 dark:border-gray-800/80 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 font-mono">
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="inline-flex items-center font-semibold text-gray-700 dark:text-gray-300">
-            <ActivityIcon className="w-3.5 h-3.5 mr-1 text-indigo-500" />
-            {event.article_count} {event.article_count === 1 ? 'article' : 'articles'}
-          </span>
-
-          {event.source_count !== undefined && event.source_count > 0 && (
-            <span className="text-gray-500 dark:text-gray-400">
-              · {event.source_count} {event.source_count === 1 ? 'source' : 'sources'}
-            </span>
+      <div className="flex items-center justify-between pt-3 border-t border-divider">
+        <Metadata>
+          {event.sources && event.sources.length > 0 && (
+            <SourceChip name={event.sources[0]} />
           )}
-
-          {event.article_count > 1 && (
-            <span className="hidden sm:inline text-emerald-600 dark:text-emerald-400 font-medium">
-              · Corroborated
-            </span>
+          {(event.source_count ?? 0) > 1 && (
+            <span className="text-slate">+{(event.source_count ?? 0) - 1}</span>
           )}
-        </div>
-
-        <Link
-          href={`/events/${event.hash}`}
-          onClick={() => onMarkRead?.(event.hash, (event as any).id)}
-          className="inline-flex items-center text-xs font-semibold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-1 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
-          tabIndex={-1}
-          aria-hidden="true"
-        >
-          Story Hub
-          <ChevronRightIcon className="w-4 h-4 ml-0.5" />
-        </Link>
+          <span className="text-divider">·</span>
+          <span>{event.article_count} {event.article_count === 1 ? 'article' : 'articles'}</span>
+          {!isStale && !isDeveloping && event.last_published_at && (
+            <>
+              <span className="text-divider">·</span>
+              <span>{formatRelativeTime(event.last_published_at)}</span>
+            </>
+          )}
+        </Metadata>
+        <FollowButton targetType="event" targetId={event.hash} compact />
       </div>
     </article>
   );

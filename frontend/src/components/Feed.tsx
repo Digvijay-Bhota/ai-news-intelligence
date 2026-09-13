@@ -131,7 +131,7 @@ export function Feed({ topicsOverride, sourceNamesOverride }: FeedProps = {}) {
           <button
             onClick={() => loadFeed(true)}
             disabled={loadingMore}
-            className="w-full sm:w-auto bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-medium py-3 px-8 rounded-full hover:bg-gray-50 dark:hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-gray-950 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
+            className="w-full sm:w-auto bg-surface border border-divider text-charcoal font-sans font-bold text-xs uppercase tracking-widest py-3 px-8 hover:border-slate transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
           >
             {loadingMore ? (
               <>

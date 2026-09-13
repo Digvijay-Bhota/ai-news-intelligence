@@ -4,10 +4,10 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import type { Article } from '../types';
 import { formatRelativeTime } from '../lib/utils';
-import { TopicBadge } from './TopicBadge';
-import { EventBadge } from './EventBadge';
-import { ClockIcon, ExternalLinkIcon, BookmarkIcon, EyeOffIcon } from './icons';
+import { ExternalLinkIcon, BookmarkIcon, EyeOffIcon } from './icons';
 import { useUserArticles } from '../lib/userArticlesContext';
+import { SourceChip } from './Editorial/SourceChip';
+import { Metadata } from './Foundations';
 
 export function ArticleCard({ article }: { article: Article }) {
   const { savedArticles, saveArticle, unsaveArticle, hideArticle } = useUserArticles();
@@ -21,88 +21,82 @@ export function ArticleCard({ article }: { article: Article }) {
     if (isSaving) return;
     setIsSaving(true);
     try {
-      if (isSaved) {
-        await unsaveArticle(article.id);
-      } else {
-        await saveArticle(article);
-      }
-    } finally {
-      setIsSaving(false);
-    }
+      if (isSaved) { await unsaveArticle(article.id); }
+      else { await saveArticle(article); }
+    } finally { setIsSaving(false); }
   };
 
   const handleHide = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (isHiding) return;
     setIsHiding(true);
-    try {
-      await hideArticle(article.id);
-    } finally {
-      setIsHiding(false);
-    }
+    try { await hideArticle(article.id); }
+    finally { setIsHiding(false); }
   };
 
   return (
-    <article className="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden hover:shadow-md dark:hover:border-gray-700 transition-all duration-200 flex flex-col h-full">
+    <article className="group flex flex-col border border-divider bg-surface hover:border-slate transition-colors h-full">
       <div className="p-5 flex-1 flex flex-col">
+        {/* Source + timestamp */}
         <div className="flex justify-between items-start mb-3">
-          <span className="text-sm font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">{article.source}</span>
-          <div className="flex items-center text-gray-500 dark:text-gray-400 text-xs" title={article.published_at ? new Date(article.published_at * 1000).toLocaleString() : undefined}>
-            <ClockIcon className="w-3.5 h-3.5 mr-1.5" />
-            <time dateTime={article.published_at ? new Date(article.published_at * 1000).toISOString() : undefined}>
+          <SourceChip name={article.source} url={article.url} />
+          <Metadata>
+            <time dateTime={article.published_at ? new Date(article.published_at * 1000).toISOString() : undefined} className="text-xs text-slate font-sans">
               {formatRelativeTime(article.published_at)}
             </time>
-          </div>
+          </Metadata>
         </div>
 
-        <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-3 leading-snug">
-          <Link href={`/article/${article.id}`} className="hover:text-indigo-600 dark:hover:text-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 rounded">
+        {/* Headline */}
+        <h2 className="font-sans font-bold text-charcoal text-base leading-snug mb-2 flex-1 group-hover:text-accent transition-colors">
+          <Link
+            href={`/article/${article.id}`}
+            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+          >
             {article.title}
           </Link>
         </h2>
 
         {article.summary && (
-          <p className="text-gray-600 dark:text-gray-300 text-sm mb-4 line-clamp-3 leading-relaxed flex-1">
+          <p className="font-sans text-sm text-charcoal/70 leading-relaxed mb-3 line-clamp-2">
             {article.summary}
           </p>
         )}
 
-        {(!article.summary) && <div className="flex-1" />}
-
-        {(article.topics.length > 0 || article.events.length > 0) && (
-          <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
-            <div className="flex flex-wrap gap-1.5">
-              {article.events.map((e, idx) => (
-                <EventBadge key={idx} event={e} />
-              ))}
-              {article.topics.map((t, idx) => (
-                <TopicBadge key={idx} topic={t} />
-              ))}
-            </div>
+        {/* Events linked */}
+        {article.events.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-2">
+            {article.events.slice(0, 2).map((ev, idx) => (
+              <Link
+                key={idx}
+                href={`/events/${ev.hash}`}
+                className="font-sans text-[10px] font-bold uppercase tracking-widest text-accent border border-accent/30 px-1.5 py-0.5 hover:bg-accent/5 transition-colors"
+              >
+                {ev.title.length > 28 ? ev.title.slice(0, 28) + '…' : ev.title}
+              </Link>
+            ))}
           </div>
         )}
       </div>
 
-      <div className="bg-gray-50 dark:bg-gray-900/50 px-5 py-3 border-t border-gray-100 dark:border-gray-800 flex justify-between items-center">
-        <div className="flex space-x-2">
+      {/* Footer actions */}
+      <div className="border-t border-divider px-5 py-2.5 flex justify-between items-center">
+        <div className="flex gap-1">
           <button
             onClick={handleSaveToggle}
             disabled={isSaving}
-            className={`inline-flex items-center p-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 transition-colors ${isSaved ? 'text-indigo-600 bg-indigo-50 dark:text-indigo-400 dark:bg-indigo-500/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
-            aria-label={isSaved ? "Unsave article" : "Save article"}
-            title={isSaved ? "Unsave article" : "Save article"}
+            aria-label={isSaved ? 'Unsave article' : 'Save article'}
+            className={`p-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent transition-colors ${isSaved ? 'text-accent' : 'text-slate hover:text-charcoal'}`}
           >
-            <span className="inline-flex items-center"><BookmarkIcon className="w-5 h-5" solid={isSaved} /></span>
+            <BookmarkIcon className="w-4 h-4" solid={isSaved} />
           </button>
-
           <button
             onClick={handleHide}
             disabled={isHiding}
-            className="inline-flex items-center p-1.5 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 transition-colors"
             aria-label="Hide article"
-            title="Hide article"
+            className="p-1.5 rounded text-slate hover:text-charcoal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent transition-colors"
           >
-            <span className="inline-flex items-center"><EyeOffIcon className="w-5 h-5" /></span>
+            <EyeOffIcon className="w-4 h-4" />
           </button>
         </div>
 
@@ -110,10 +104,10 @@ export function ArticleCard({ article }: { article: Article }) {
           href={article.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 rounded px-2 py-1 -mr-2"
           aria-label={`Read full article at source: ${article.title}`}
+          className="font-sans text-xs font-bold text-slate hover:text-charcoal uppercase tracking-widest flex items-center gap-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
         >
-          Source <span className="ml-1.5 inline-flex items-center"><ExternalLinkIcon className="w-4 h-4" /></span>
+          Source <ExternalLinkIcon className="w-3.5 h-3.5" />
         </a>
       </div>
     </article>
