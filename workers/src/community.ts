@@ -1,3 +1,4 @@
+import { requireAuthenticatedUser } from "./middleware/auth";
 import type { Env } from './types';
 import type { AuthContext } from './middleware/auth';
 import { NotFoundError, BadRequestError, ForbiddenError } from './utils/errors';
@@ -69,6 +70,7 @@ export async function handleGetCommunityPosts(request: Request, env: Env, eventH
 }
 
 export async function handleCreateCommunityPost(request: Request, env: Env, auth: AuthContext, eventHash: string): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const body = (await parseBody(request, false)) as any;
   const text = requireString(body.body, 'body');
   if (text.length > 5000) throw new BadRequestError('Body exceeds 5000 characters');
@@ -99,7 +101,7 @@ export async function handleCreateCommunityPost(request: Request, env: Env, auth
   await env.DB.prepare(
     `INSERT INTO community_posts (id, event_id, user_id, parent_id, body, status, context_anchor_type, context_anchor_id)
      VALUES (?, ?, ?, NULL, ?, 'active', ?, ?)`
-  ).bind(postId, event.id, auth.identifier, text, anchorType, anchorId).run();
+  ).bind(postId, event.id, userId, text, anchorType, anchorId).run();
   
   return success({ id: postId }, 201);
 }
@@ -121,6 +123,7 @@ export async function handleGetCommunityReplies(_request: Request, env: Env, pos
 }
 
 export async function handleCreateCommunityReply(request: Request, env: Env, auth: AuthContext, postId: string): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const body = (await parseBody(request, false)) as any;
   const text = requireString(body.body, 'body');
   if (text.length > 5000) throw new BadRequestError('Body exceeds 5000 characters');
@@ -133,19 +136,20 @@ export async function handleCreateCommunityReply(request: Request, env: Env, aut
   await env.DB.prepare(
     `INSERT INTO community_posts (id, event_id, user_id, parent_id, body, status)
      VALUES (?, ?, ?, ?, ?, 'active')`
-  ).bind(replyId, parent.event_id, auth.identifier, parent.id, text).run();
+  ).bind(replyId, parent.event_id, userId, parent.id, text).run();
   
   return success({ id: replyId }, 201);
 }
 
 export async function handleEditCommunityPost(request: Request, env: Env, auth: AuthContext, postId: string): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const body = (await parseBody(request, false)) as any;
   const text = requireString(body.body, 'body');
   if (text.length > 5000) throw new BadRequestError('Body exceeds 5000 characters');
   
   const post = await env.DB.prepare('SELECT user_id, status FROM community_posts WHERE id = ?').bind(postId).first<{ user_id: string, status: string }>();
   if (!post) throw new NotFoundError('Post not found');
-  if (post.user_id !== auth.identifier) throw new ForbiddenError('Not owner');
+  if (post.user_id !== userId) throw new ForbiddenError('Not owner');
   if (post.status !== 'active') throw new ForbiddenError('Cannot edit locked post');
   
   await env.DB.prepare(
@@ -156,37 +160,40 @@ export async function handleEditCommunityPost(request: Request, env: Env, auth: 
 }
 
 export async function handleDeleteCommunityPost(_request: Request, env: Env, auth: AuthContext, postId: string): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const post = await env.DB.prepare('SELECT user_id, status FROM community_posts WHERE id = ?').bind(postId).first<{ user_id: string, status: string }>();
   if (!post) throw new NotFoundError('Post not found');
   
-  if (post.user_id !== auth.identifier) throw new ForbiddenError('Not owner');
+  if (post.user_id !== userId) throw new ForbiddenError('Not owner');
   if (post.status === 'deleted') return success(null);
   
   await env.DB.prepare(`UPDATE community_posts SET status = 'deleted' WHERE id = ?`).bind(postId).run();
   
   await env.DB.prepare(
     `INSERT INTO moderation_audits (post_id, actor, actor_role, previous_state, new_state, reason) VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(postId, auth.identifier, 'USER', post.status, 'deleted', 'User deleted own post').run();
+  ).bind(postId, userId, 'USER', post.status, 'deleted', 'User deleted own post').run();
   
   return success(null);
 }
 
 export async function handleVoteCommunityPost(_request: Request, env: Env, auth: AuthContext, postId: string, isDelete: boolean): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const post = await env.DB.prepare('SELECT status FROM community_posts WHERE id = ?').bind(postId).first<{ status: string }>();
   if (!post) throw new NotFoundError('Post not found');
   if (post.status !== 'active' && post.status !== 'flagged') throw new ForbiddenError('Cannot interact with this post');
 
   if (isDelete) {
-    await env.DB.prepare('DELETE FROM community_votes WHERE post_id = ? AND user_id = ?').bind(postId, auth.identifier).run();
+    await env.DB.prepare('DELETE FROM community_votes WHERE post_id = ? AND user_id = ?').bind(postId, userId).run();
   } else {
     await env.DB.prepare(
       'INSERT OR IGNORE INTO community_votes (post_id, user_id, vote_type) VALUES (?, ?, ?)'
-    ).bind(postId, auth.identifier, 'upvote').run();
+    ).bind(postId, userId, 'upvote').run();
   }
   return success(null);
 }
 
 export async function handleReportCommunityPost(request: Request, env: Env, auth: AuthContext, postId: string): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const body = (await parseBody(request, false)) as any;
   const reason = requireString(body.reason, 'reason');
   
@@ -195,7 +202,7 @@ export async function handleReportCommunityPost(request: Request, env: Env, auth
   
   await env.DB.prepare(
     'INSERT OR IGNORE INTO community_reports (post_id, user_id, reason) VALUES (?, ?, ?)'
-  ).bind(postId, auth.identifier, reason).run();
+  ).bind(postId, userId, reason).run();
   
   const reports = await env.DB.prepare('SELECT COUNT(*) as count FROM community_reports WHERE post_id = ?').bind(postId).first<{ count: number }>();
   if (reports && reports.count >= 5 && post.status === 'active') {
@@ -209,11 +216,12 @@ export async function handleReportCommunityPost(request: Request, env: Env, auth
 }
 
 export async function handleGetMyInteractions(request: Request, env: Env, auth: AuthContext): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const url = new URL(request.url);
   const eventHash = url.searchParams.get('event_hash');
   
   let eventCondition = "";
-  let params: (string|number)[] = [auth.identifier];
+  let params: (string|number)[] = [userId];
   
   if (eventHash) {
     const event = await env.DB.prepare('SELECT id FROM events WHERE event_hash = ?').bind(eventHash).first<{ id: number }>();
@@ -246,6 +254,7 @@ export async function handleGetMyInteractions(request: Request, env: Env, auth: 
 }
 
 export async function handleModerateCommunityPost(request: Request, env: Env, auth: AuthContext, postId: string): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
   const body = (await parseBody(request, false)) as any;
   const newState = requireString(body.status, 'status');
   
@@ -283,7 +292,7 @@ export async function handleModerateCommunityPost(request: Request, env: Env, au
   
   await env.DB.prepare(
     `INSERT INTO moderation_audits (post_id, actor, actor_role, previous_state, new_state, reason) VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(postId, auth.identifier, actorRole, post.status, newState, reason).run();
+  ).bind(postId, userId, actorRole, post.status, newState, reason).run();
 
   return success(null);
 }
