@@ -1418,6 +1418,7 @@ export async function route(request: Request, env: Env): Promise<Response> {
 
     throw new NotFoundError('Endpoint not found');
   } catch (err) {
+    console.error('Unhandled API Error:', err);
     const status = err instanceof Error && 'status' in err ? (err as { status: number }).status : 500;
     const message = (err instanceof Error && status !== 500) ? err.message : 'Internal Server Error';
     const response = error(message, status);
