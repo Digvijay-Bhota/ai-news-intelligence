@@ -11,6 +11,8 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyBody, setReplyBody] = useState('');
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [replies, setReplies] = useState<Record<string, any[]>>({});
+  const [expandedReplies, setExpandedReplies] = useState<Record<string, boolean>>({});
 
   const fetchPosts = async (cursor?: string) => {
     try {
@@ -38,6 +40,30 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
   useEffect(() => {
     fetchPosts();
   }, [eventHash]);
+
+  
+  const fetchReplies = async (postId: string) => {
+    try {
+      const res = await fetch(`/api/v1/community/posts/${postId}/replies`);
+      if (res.ok) {
+        const d = await res.json();
+        setReplies(prev => ({...prev, [postId]: d.data.items || []}));
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  const handleToggleReplies = async (postId: string) => {
+    if (expandedReplies[postId]) {
+      setExpandedReplies(prev => ({...prev, [postId]: false}));
+      return;
+    }
+    setExpandedReplies(prev => ({...prev, [postId]: true}));
+    if (!replies[postId]) {
+      await fetchReplies(postId);
+    }
+  };
 
   const handlePost = async () => {
     if (!newPost.trim()) return;
@@ -72,7 +98,11 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
         setReplyingId(null);
         setReplyBody('');
         setError(null);
-        // In a real app we'd fetch replies, but here we just show success
+        if (!expandedReplies[parentId]) {
+          handleToggleReplies(parentId);
+        } else {
+          await fetchReplies(parentId);
+        }
         fetchPosts();
       } else {
         const d = await res.json();
@@ -199,8 +229,16 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
                 className="text-gray-600 hover:text-blue-600"
                 onClick={() => { setReplyingId(post.id); setReplyBody(''); }}
               >
-                Reply ({post.reply_count || 0})
+                Reply
               </button>
+              {post.reply_count > 0 && (
+                <button 
+                  className="text-gray-600 hover:text-blue-600"
+                  onClick={() => handleToggleReplies(post.id)}
+                >
+                  {expandedReplies[post.id] ? 'Hide Replies' : `View Replies (${post.reply_count})`}
+                </button>
+              )}
               <button 
                 className="text-blue-600 hover:text-blue-800"
                 onClick={() => { setEditingId(post.id); setEditBody(post.body); }}
@@ -221,17 +259,51 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
               </button>
             </div>
             
-            {replyingId === post.id && (
-              <div className="mt-3 ml-4">
+                        {replyingId === post.id && (
+              <div className="mt-3 ml-4 border-l-2 pl-4">
                 <textarea 
-                  className="w-full p-2 border rounded text-black"
+                  className="w-full p-2 border rounded text-black mb-2"
                   value={replyBody}
                   onChange={e => setReplyBody(e.target.value)}
                   placeholder="Write a reply..."
                   aria-label="New reply"
                 />
-                <button onClick={() => handleReply(post.id)} className="mr-2 text-blue-600">Submit Reply</button>
+                <button onClick={() => handleReply(post.id)} className="mr-4 text-blue-600">Submit Reply</button>
                 <button onClick={() => setReplyingId(null)} className="text-gray-600">Cancel</button>
+              </div>
+            )}
+            
+            {expandedReplies[post.id] && replies[post.id] && (
+              <div className="mt-4 ml-6 space-y-3 border-l-2 border-gray-200 pl-4" role="list">
+                {replies[post.id].map(reply => (
+                  <div key={reply.id} className="p-2 border rounded bg-gray-50" role="listitem">
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="font-semibold text-sm">{reply.author_display_name}</span>
+                      <span className="text-xs text-gray-500">{new Date(reply.created_at * 1000).toLocaleString()}</span>
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm">{reply.body}</p>
+                    <div className="flex space-x-4 mt-2 text-xs">
+                      <button 
+                        className="text-gray-600 hover:text-blue-600"
+                        onClick={() => handleVote(reply.id, false)}
+                        aria-label="Upvote"
+                      >
+                        👍 {reply.upvotes}
+                      </button>
+                      {/* Replies cannot have replies (depth 1) so no reply button here */}
+                      <button 
+                        className="text-red-600 hover:text-red-800"
+                        onClick={async () => {
+                          await fetch(`/api/v1/community/posts/${reply.id}`, { method: 'DELETE' });
+                          await fetchReplies(post.id);
+                          fetchPosts();
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

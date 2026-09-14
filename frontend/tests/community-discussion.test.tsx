@@ -49,7 +49,7 @@ describe('CommunityDiscussion', () => {
     });
     expect(screen.getByText('TestUser')).toBeInTheDocument();
     expect(screen.getByText('👍 5')).toBeInTheDocument();
-    expect(screen.getByText('Reply (2)')).toBeInTheDocument();
+    expect(screen.getByText('View Replies (2)')).toBeInTheDocument();
     // Test that private data isn't assumed in the payload
     expect(screen.getByRole('button', { name: 'Load More' })).toBeInTheDocument();
   });
@@ -114,7 +114,7 @@ describe('CommunityDiscussion', () => {
     render(<CommunityDiscussion eventHash="evt123" />);
     await waitFor(() => screen.getByText('Hello world'));
     
-    fireEvent.click(screen.getByText(/Reply/));
+    fireEvent.click(screen.getAllByText('Reply')[0]);
     fireEvent.change(screen.getByLabelText('New reply'), { target: { value: 'My reply' } });
     
     mockFetch.mockResolvedValueOnce({
@@ -153,7 +153,7 @@ describe('CommunityDiscussion', () => {
     render(<CommunityDiscussion eventHash="evt123" />);
     await waitFor(() => screen.getByText('Hello world'));
     
-    fireEvent.click(screen.getByText(/Reply/));
+    fireEvent.click(screen.getAllByText('Reply')[0]);
     fireEvent.change(screen.getByLabelText('New reply'), { target: { value: 'My reply' } });
     
     mockFetch.mockResolvedValueOnce({
@@ -339,4 +339,57 @@ describe('CommunityDiscussion', () => {
       expect(mockFetch).toHaveBeenCalledWith('/api/v1/events/evt123/community?cursor=page_2');
     });
   });
+
+  it('fetches and renders replies when View Replies is clicked', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          items: [{
+            id: 'post1',
+            body: 'Hello world',
+            author_display_name: 'TestUser',
+            created_at: 1600000000,
+            upvotes: 0,
+            reply_count: 1
+          }],
+          next_cursor: null
+        }
+      })
+    });
+    
+    render(<CommunityDiscussion eventHash="evt123" />);
+    await waitFor(() => screen.getByText('Hello world'));
+    
+    // Mock the reply fetch
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          items: [{
+            id: 'reply1',
+            body: 'This is a test reply',
+            author_display_name: 'ReplyUser',
+            created_at: 1600000050,
+            upvotes: 2,
+            reply_count: 0
+          }]
+        }
+      })
+    });
+    
+    fireEvent.click(screen.getByText('View Replies (1)'));
+    
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith('/api/v1/community/posts/post1/replies');
+      expect(screen.getByText('This is a test reply')).toBeInTheDocument();
+      expect(screen.getByText('ReplyUser')).toBeInTheDocument();
+      expect(screen.getByText('👍 2')).toBeInTheDocument();
+      const replyElement = screen.getByText('This is a test reply').closest('.p-2.border');
+      expect(replyElement).not.toHaveTextContent('Reply');
+    });
+  });
+
 });
