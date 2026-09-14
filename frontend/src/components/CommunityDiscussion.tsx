@@ -1,5 +1,7 @@
 'use client';
 import React, { useState, useEffect } from 'react';
+import { CommunityPulse } from './CommunityPulse';
+
 
 export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
   const [posts, setPosts] = useState<any[]>([]);
@@ -173,7 +175,9 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
 
   return (
     <div className="mt-8 border-t pt-8">
-      <h2 className="text-xl font-bold mb-4">Community Discussion</h2>
+            <h2 className="text-xl font-bold mb-4">Community Discussion</h2>
+      
+      <CommunityPulse eventHash={eventHash} />
       
       {error && <div className="text-red-500 mb-4 bg-red-100 p-2 rounded" role="alert">{error}</div>}
 

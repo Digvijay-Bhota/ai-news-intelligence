@@ -295,3 +295,95 @@ export async function handleModerateCommunityPost(request: Request, env: Env, au
 
   return success(null);
 }
+
+export async function computeCommunityMetrics(env: Env, eventId: number) {
+  const lifetime = await env.DB.prepare(`
+    SELECT 
+      COUNT(id) as total_posts,
+      COUNT(DISTINCT user_id) as total_users
+    FROM community_posts
+    WHERE event_id = ? AND status = 'active'
+  `).bind(eventId).first<{ total_posts: number, total_users: number }>();
+
+  const now = Math.floor(Date.now() / 1000);
+  const oneDayAgo = now - 24 * 3600;
+  const twoDaysAgo = now - 48 * 3600;
+
+  const last24h = await env.DB.prepare(`
+    SELECT 
+      COUNT(id) as posts_24h,
+      COUNT(DISTINCT user_id) as users_24h
+    FROM community_posts
+    WHERE event_id = ? AND status = 'active' AND created_at >= ?
+  `).bind(eventId, oneDayAgo).first<{ posts_24h: number, users_24h: number }>();
+
+  const prev24h = await env.DB.prepare(`
+    SELECT COUNT(id) as posts_prev_24h
+    FROM community_posts
+    WHERE event_id = ? AND status = 'active' AND created_at >= ? AND created_at < ?
+  `).bind(eventId, twoDaysAgo, oneDayAgo).first<{ posts_prev_24h: number }>();
+
+  const postsLast24h = last24h?.posts_24h || 0;
+  const participantsLast24h = last24h?.users_24h || 0;
+  const postsPrev24h = prev24h?.posts_prev_24h || 0;
+  
+  const momentumScore = (postsLast24h / Math.max(1, postsPrev24h)) * participantsLast24h;
+
+  await env.DB.prepare(`
+    INSERT INTO community_metrics_snapshots 
+      (event_id, lifetime_posts, lifetime_participants, posts_last_24h, participants_last_24h, momentum_score, last_computed_at)
+    VALUES (?, ?, ?, ?, ?, ?, unixepoch())
+    ON CONFLICT(event_id) DO UPDATE SET
+      lifetime_posts = excluded.lifetime_posts,
+      lifetime_participants = excluded.lifetime_participants,
+      posts_last_24h = excluded.posts_last_24h,
+      participants_last_24h = excluded.participants_last_24h,
+      momentum_score = excluded.momentum_score,
+      last_computed_at = excluded.last_computed_at
+  `).bind(
+    eventId,
+    lifetime?.total_posts || 0,
+    lifetime?.total_users || 0,
+    postsLast24h,
+    participantsLast24h,
+    momentumScore
+  ).run();
+
+  return await env.DB.prepare(`SELECT * FROM community_metrics_snapshots WHERE event_id = ?`).bind(eventId).first();
+}
+
+export async function handleGenerateCommunityIntelligence(_request: Request, env: Env, auth: AuthContext, eventHash: string): Promise<Response> {
+  if (!auth.scopes.includes('internal') && !auth.scopes.includes('admin')) {
+    throw new ForbiddenError('Requires internal/admin scope');
+  }
+
+  const event = await env.DB.prepare('SELECT id FROM events WHERE event_hash = ?').bind(eventHash).first<{ id: number }>();
+  if (!event) throw new NotFoundError('Event not found');
+
+  const snapshot = await computeCommunityMetrics(env, event.id);
+
+  return success({ metrics: snapshot }, 200);
+}
+
+export async function handleGetCommunityIntelligence(_request: Request, env: Env, eventHash: string): Promise<Response> {
+  const event = await env.DB.prepare('SELECT id FROM events WHERE event_hash = ?').bind(eventHash).first<{ id: number }>();
+  if (!event) throw new NotFoundError('Event not found');
+
+  let snapshot = await env.DB.prepare(`SELECT * FROM community_metrics_snapshots WHERE event_id = ?`).bind(event.id).first();
+  
+  if (!snapshot) {
+    snapshot = {
+      event_id: event.id,
+      lifetime_posts: 0,
+      lifetime_participants: 0,
+      posts_last_24h: 0,
+      participants_last_24h: 0,
+      momentum_score: 0.0,
+      last_computed_at: Math.floor(Date.now() / 1000)
+    };
+  }
+
+  return success({ metrics: snapshot }, 200, {
+    'Cache-Control': 'public, s-maxage=300'
+  });
+}

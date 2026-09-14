@@ -1265,6 +1265,16 @@ export async function route(request: Request, env: Env): Promise<Response> {
 
     // Internal API
 
+    
+    const internalIntelMatch = path.match(/^\/internal\/v1\/events\/([a-zA-Z0-9_-]+)\/community\/intelligence\/generate$/);
+    if (internalIntelMatch && request.method === 'POST') {
+      const auth = await authenticateInternal(request, env);
+      const rateInfo = await applyInternalRateLimit(auth.identifier, '/internal/v1/events/:hash/community/intelligence/generate', env);
+      const comm = await import('./community');
+      const res = await comm.handleGenerateCommunityIntelligence(request, env, auth, internalIntelMatch[1]);
+      return applyCors(request, res, env, rateLimitHeaders(rateInfo));
+    }
+
     const internalCommMatch = path.match(/^\/internal\/v1\/community\/posts\/([a-zA-Z0-9_-]+)\/moderate$/);
     if (internalCommMatch && request.method === 'POST') {
       const auth = await authenticateInternal(request, env);
@@ -1321,6 +1331,16 @@ export async function route(request: Request, env: Env): Promise<Response> {
     if (path.startsWith('/api/v1/events/') || path.startsWith('/api/v1/community/')) {
       const comm = await import('./community');
       
+      
+      const evtIntelMatch = path.match(/^\/api\/v1\/events\/([a-zA-Z0-9_-]+)\/community\/intelligence$/);
+      if (evtIntelMatch) {
+        if (request.method === 'GET') {
+          const rateInfo = await applyPublicRateLimit(request, '/api/v1/events/:hash/community/intelligence', env);
+          const res = await comm.handleGetCommunityIntelligence(request, env, evtIntelMatch[1]);
+          return applyCors(request, res, env, rateLimitHeaders(rateInfo));
+        }
+      }
+
       const evtCommMatch = path.match(/^\/api\/v1\/events\/([a-zA-Z0-9_-]+)\/community$/);
       if (evtCommMatch) {
         if (request.method === 'GET') {
