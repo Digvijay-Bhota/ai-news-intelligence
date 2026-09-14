@@ -179,7 +179,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
 
       <div className="mb-6">
         <textarea 
-          className="w-full p-2 border rounded text-black"
+          className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
           rows={3}
           value={newPost}
           onChange={e => setNewPost(e.target.value)}
@@ -205,7 +205,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
             {editingId === post.id ? (
               <div className="mb-3">
                 <textarea 
-                  className="w-full p-2 border rounded text-black"
+                  className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                   value={editBody}
                   onChange={e => setEditBody(e.target.value)}
                   aria-label="Edit post"
@@ -262,7 +262,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
                         {replyingId === post.id && (
               <div className="mt-3 ml-4 border-l-2 pl-4">
                 <textarea 
-                  className="w-full p-2 border rounded text-black mb-2"
+                  className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 mb-2"
                   value={replyBody}
                   onChange={e => setReplyBody(e.target.value)}
                   placeholder="Write a reply..."
