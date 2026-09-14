@@ -254,7 +254,6 @@ export async function handleGetMyInteractions(request: Request, env: Env, auth: 
 }
 
 export async function handleModerateCommunityPost(request: Request, env: Env, auth: AuthContext, postId: string): Promise<Response> {
-  const userId = requireAuthenticatedUser(auth);
   const body = (await parseBody(request, false)) as any;
   const newState = requireString(body.status, 'status');
   
@@ -292,7 +291,7 @@ export async function handleModerateCommunityPost(request: Request, env: Env, au
   
   await env.DB.prepare(
     `INSERT INTO moderation_audits (post_id, actor, actor_role, previous_state, new_state, reason) VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(postId, userId, actorRole, post.status, newState, reason).run();
+  ).bind(postId, auth.identifier, actorRole, post.status, newState, reason).run();
 
   return success(null);
 }
