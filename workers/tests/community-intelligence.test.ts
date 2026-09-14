@@ -93,6 +93,8 @@ describe('Community Intelligence Metrics', () => {
     const res = await handleGetCommunityIntelligence(req, env, 'hash');
     const data = await res.json() as ApiResponse<{metrics: any}>;
     expect(data.data!.metrics.lifetime_posts).toBe(10);
+    expect(data.data!.metrics.event_id).toBeUndefined();
+    expect(data.data!.metrics).not.toHaveProperty('event_id');
     // Ensure cache header is present
     expect(res.headers.get('Cache-Control')).toBe('public, s-maxage=300');
   });

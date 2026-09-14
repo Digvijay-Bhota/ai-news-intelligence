@@ -381,7 +381,8 @@ export async function handleGetCommunityIntelligence(_request: Request, env: Env
     };
   }
 
-  return success({ metrics: snapshot }, 200, {
+  const { event_id, ...publicMetrics } = snapshot as any;
+  return success({ metrics: publicMetrics }, 200, {
     'Cache-Control': 'public, s-maxage=300'
   });
 }
