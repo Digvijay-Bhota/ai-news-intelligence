@@ -1,4 +1,4 @@
-import { requireAuthenticatedUser } from "./middleware/auth";
+import { requireAuthenticatedUser, requireScopes } from './middleware/auth';
 import type { Env } from './types';
 import type { AuthContext } from './middleware/auth';
 import { NotFoundError, BadRequestError, ForbiddenError } from './utils/errors';
@@ -353,16 +353,14 @@ export async function computeCommunityMetrics(env: Env, eventId: number) {
 }
 
 export async function handleGenerateCommunityIntelligence(_request: Request, env: Env, auth: AuthContext, eventHash: string): Promise<Response> {
-  if (!auth.scopes.includes('internal') && !auth.scopes.includes('admin')) {
-    throw new ForbiddenError('Requires internal/admin scope');
-  }
+  requireScopes(auth, ['internal', 'admin']);
 
   const event = await env.DB.prepare('SELECT id FROM events WHERE event_hash = ?').bind(eventHash).first<{ id: number }>();
   if (!event) throw new NotFoundError('Event not found');
 
   const snapshot = await computeCommunityMetrics(env, event.id);
 
-  return success({ metrics: snapshot }, 200);
+  return success({ metrics: (({ event_id, ...rest }) => rest)(snapshot as any) }, 200);
 }
 
 export async function handleGetCommunityIntelligence(_request: Request, env: Env, eventHash: string): Promise<Response> {
