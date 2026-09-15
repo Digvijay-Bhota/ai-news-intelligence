@@ -189,3 +189,72 @@ export async function addEvidenceToSignal(
 
     await db.batch(statements);
 }
+
+export interface CandidateProposal {
+    type: SignalType;
+    content: string;
+    postIds: string[];
+}
+
+export interface AppendProposal {
+    signalId: string;
+    postIds: string[];
+}
+
+export async function persistGenerationBatch(
+    db: D1Database,
+    eventId: number,
+    newCandidates: CandidateProposal[],
+    appends: AppendProposal[],
+    lastProcessedPostId: string
+): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    const statements = [];
+
+    // Verify all posts exist and are active
+    const allPostIds = new Set<string>();
+    for (const c of newCandidates) c.postIds.forEach(id => allPostIds.add(id));
+    for (const a of appends) a.postIds.forEach(id => allPostIds.add(id));
+
+    const postIdsArr = Array.from(allPostIds);
+    if (postIdsArr.length > 0) {
+        const placeholders = postIdsArr.map(() => '?').join(',');
+        const validPosts = await db.prepare(
+            `SELECT id FROM community_posts WHERE id IN (${placeholders}) AND event_id = ? AND status = 'active'`
+        ).bind(...postIdsArr, eventId).all<{id: string}>();
+        
+        if (validPosts.results.length !== postIdsArr.length) {
+            throw new Error('One or more post IDs are invalid, not active, or do not belong to the event');
+        }
+    }
+
+    for (const candidate of newCandidates) {
+        const signalId = crypto.randomUUID();
+        statements.push(
+            db.prepare(`INSERT INTO community_signals (id, event_id, type, status, content, created_at, updated_at) VALUES (?, ?, ?, 'candidate', ?, ?, ?)`)
+            .bind(signalId, eventId, candidate.type, candidate.content, now, now)
+        );
+        for (const postId of candidate.postIds) {
+            statements.push(
+                db.prepare(`INSERT INTO community_signal_evidence (signal_id, post_id, added_at) VALUES (?, ?, ?)`)
+                .bind(signalId, postId, now)
+            );
+        }
+    }
+
+    for (const append of appends) {
+        for (const postId of append.postIds) {
+            statements.push(
+                db.prepare(`INSERT OR IGNORE INTO community_signal_evidence (signal_id, post_id, added_at) VALUES (?, ?, ?)`)
+                .bind(append.signalId, postId, now)
+            );
+        }
+    }
+
+    statements.push(
+        db.prepare(`INSERT INTO community_signal_generation_state (event_id, last_processed_post_id, updated_at) VALUES (?, ?, ?) ON CONFLICT(event_id) DO UPDATE SET last_processed_post_id = excluded.last_processed_post_id, updated_at = excluded.updated_at`)
+        .bind(eventId, lastProcessedPostId, now)
+    );
+
+    await db.batch(statements);
+}
