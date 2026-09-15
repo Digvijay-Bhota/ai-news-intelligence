@@ -228,6 +228,18 @@ export async function persistGenerationBatch(
         }
     }
 
+    if (appends.length > 0) {
+        const appendSignalIds = Array.from(new Set(appends.map(a => a.signalId)));
+        const placeholders = appendSignalIds.map(() => '?').join(',');
+        const validSignals = await db.prepare(
+            `SELECT id FROM community_signals WHERE id IN (${placeholders}) AND event_id = ? AND status = 'candidate'`
+        ).bind(...appendSignalIds, eventId).all<{id: string}>();
+        
+        if (validSignals.results.length !== appendSignalIds.length) {
+            throw new Error('One or more append targets are invalid, not candidate, or do not belong to the event');
+        }
+    }
+
     for (const candidate of newCandidates) {
         const signalId = crypto.randomUUID();
         statements.push(
