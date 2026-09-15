@@ -15,7 +15,7 @@ export interface LlmProposal {
 
 export async function generateSemanticProposal(prompt: string, env: Env, mockAI?: (prompt: string) => Promise<string>): Promise<string> {
     if (mockAI) return await mockAI(prompt);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${env.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${env.GEMINI_API_KEY}`;
     const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -114,6 +114,13 @@ Never invent evidence or post IDs.
 Do not include database identifiers in your content, and keep it under 150 chars.
 Only classify into these exact types: "emerging_theme", "common_question", "divergent_view".
 
+CRITICAL EVIDENCE RULES:
+1. Every proposed signal MUST contain at least 3 distinct evidence_post_ids.
+2. Those evidence posts MUST represent at least 3 distinct users (user_hash).
+3. Never return a proposal with fewer than 3 qualifying evidence posts.
+4. If insufficient evidence exists, return NO proposal rather than fabricating evidence.
+5. Every evidence ID MUST come from the supplied batch.
+
 Active posts:
 ${JSON.stringify(inputPosts, null, 2)}
 
@@ -122,7 +129,7 @@ Output ONLY a JSON array matching exactly this schema:
   {
     "type": "emerging_theme",
     "content": "Semantic summary (max 150 chars)",
-    "evidence_post_ids": ["post_id_1", "post_id_2"]
+    "evidence_post_ids": ["post_id_1", "post_id_2", "post_id_3"]
   }
 ]`;
 
