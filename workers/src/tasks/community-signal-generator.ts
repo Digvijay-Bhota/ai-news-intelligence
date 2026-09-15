@@ -210,3 +210,40 @@ Output ONLY a JSON array matching exactly this schema:
     // 6. Persist atomically
     await persistGenerationBatch(db, eventId, newCandidates, appends, newLastProcessedPostId);
 }
+
+export async function sweepInvalidatedSignals(env: Env): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    // Find all 'approved' signals that currently do NOT have 3 active posts / 3 users
+    // Since it's a sweeper, we can do this with a single query and update them.
+    // D1 allows UPDATE ... FROM or we can select then update.
+    
+    const invalidSignalsRes = await env.DB.prepare(`
+        SELECT s.id, s.event_id
+        FROM community_signals s
+        LEFT JOIN community_signal_evidence e ON s.id = e.signal_id
+        LEFT JOIN community_posts p ON e.post_id = p.id AND p.status = 'active' AND p.event_id = s.event_id
+        WHERE s.status = 'approved'
+        GROUP BY s.id
+        HAVING COUNT(DISTINCT p.id) < 3 OR COUNT(DISTINCT p.user_id) < 3
+        LIMIT 100
+    `).all<{id: string, event_id: number}>();
+    
+    const invalidSignals = invalidSignalsRes.results || [];
+    
+    if (invalidSignals.length === 0) return;
+
+    const statements = [];
+    for (const sig of invalidSignals) {
+        const reviewId = crypto.randomUUID();
+        statements.push(
+            env.DB.prepare(
+                `UPDATE community_signals SET status = 'invalidated', updated_at = ? WHERE id = ? AND event_id = ? AND status = 'approved'`
+            ).bind(now, sig.id, sig.event_id),
+            env.DB.prepare(
+                `INSERT INTO community_signal_reviews (id, signal_id, reviewer_id, previous_status, new_status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+            ).bind(reviewId, sig.id, 'SYSTEM_SWEEPER', 'approved', 'invalidated', 'Evidence dropped below threshold', now)
+        );
+    }
+    
+    await env.DB.batch(statements);
+}
