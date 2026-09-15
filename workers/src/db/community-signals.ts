@@ -1,6 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
 
-export type SignalType = 'emerging_theme' | 'common_question' | 'divergent_view' | 'repeated_observation';
+export type SignalType = 'emerging_theme' | 'common_question' | 'divergent_view';
 export type SignalStatus = 'candidate' | 'approved' | 'rejected' | 'stale' | 'invalidated';
 
 export interface CommunitySignal {
@@ -128,17 +128,24 @@ export async function transitionSignalState(
       throw new Error(`Forbidden transition from ${currentStatus} to ${newStatus}`);
   }
 
+  if (newStatus === 'rejected' && (!reason || reason.trim() === '')) {
+      throw new Error('Rejection requires a non-empty reason');
+  }
+
   const now = Math.floor(Date.now() / 1000);
   const reviewId = crypto.randomUUID();
 
-  const statements = [
-      db.prepare(`UPDATE community_signals SET status = ?, updated_at = ? WHERE id = ? AND event_id = ?`)
-        .bind(newStatus, now, signalId, eventId),
-      db.prepare(`INSERT INTO community_signal_reviews (id, signal_id, reviewer_id, previous_status, new_status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-        .bind(reviewId, signalId, reviewerId, currentStatus, newStatus, reason || null, now)
-  ];
+  const updateRes = await db.prepare(
+      `UPDATE community_signals SET status = ?, updated_at = ? WHERE id = ? AND event_id = ? AND status = ?`
+  ).bind(newStatus, now, signalId, eventId, currentStatus).run();
 
-  await db.batch(statements);
+  if (updateRes.meta.changes === 0) {
+      throw new Error('Concurrent state transition detected');
+  }
+
+  await db.prepare(
+      `INSERT INTO community_signal_reviews (id, signal_id, reviewer_id, previous_status, new_status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(reviewId, signalId, reviewerId, currentStatus, newStatus, reason || null, now).run();
 }
 
 export async function addEvidenceToSignal(

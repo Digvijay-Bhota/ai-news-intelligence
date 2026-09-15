@@ -3,7 +3,7 @@
 CREATE TABLE IF NOT EXISTS community_signals (
     id TEXT PRIMARY KEY,
     event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    type TEXT NOT NULL CHECK(type IN ('emerging_theme', 'common_question', 'divergent_view', 'repeated_observation')),
+    type TEXT NOT NULL CHECK(type IN ('emerging_theme', 'common_question', 'divergent_view')),
     status TEXT NOT NULL CHECK(status IN ('candidate', 'approved', 'rejected', 'stale', 'invalidated')),
     content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -34,3 +34,5 @@ CREATE TABLE IF NOT EXISTS community_signal_generation_state (
     last_processed_post_id TEXT NOT NULL,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
+CREATE INDEX IF NOT EXISTS idx_community_signal_evidence_post ON community_signal_evidence(post_id);
+CREATE INDEX IF NOT EXISTS idx_community_signal_reviews_signal ON community_signal_reviews(signal_id);

@@ -41,7 +41,11 @@ describe('Community Signals DB', () => {
                             },
                             run: async () => {
                                 executedStatements.push({ q, args: currentBinds });
-                                return { success: true };
+                                // To simulate concurrent failures, if we bind a special string 'concurrent_fail', return 0 changes.
+                                if (q.includes('UPDATE community_signals') && currentBinds.includes('concurrent_fail')) {
+                                    return { success: true, meta: { changes: 0 } };
+                                }
+                                return { success: true, meta: { changes: 1 } };
                             },
                             statement: { q, currentBinds }
                         }
@@ -106,6 +110,30 @@ describe('Community Signals DB', () => {
         const db = createMockDB([]); 
         await expect(transitionSignalState(db, 1, 'sig_1', 'stale', 'user_1'))
             .rejects.toThrow('Forbidden transition from candidate to stale');
+    });
+
+    it('concurrent/stale transition rejected', async () => {
+        const db = createMockDB([]);
+        // pass 'concurrent_fail' to trigger the mock's 0 rows changed behavior
+        await expect(transitionSignalState(db, 1, 'concurrent_fail', 'approved', 'user_1'))
+            .rejects.toThrow('Concurrent state transition detected');
+        
+        // Assert no audit record was created
+        const insertRev = db.executedStatements.find((s: any) => s.q.includes('INSERT INTO community_signal_reviews'));
+        expect(insertRev).toBeUndefined();
+    });
+
+    it('rejected transition without reason rejected', async () => {
+        const db = createMockDB([]);
+        await expect(transitionSignalState(db, 1, 'sig_1', 'rejected', 'user_1', '   '))
+            .rejects.toThrow('Rejection requires a non-empty reason');
+    });
+
+    it('rejected transition with valid reason succeeds', async () => {
+        const db = createMockDB([]);
+        await transitionSignalState(db, 1, 'sig_1', 'rejected', 'user_1', 'valid reason');
+        const insertRev = db.executedStatements.find((s: any) => s.q.includes('INSERT INTO community_signal_reviews'));
+        expect(insertRev.args[5]).toBe('valid reason');
     });
 
     it('one cursor exists per event (ON CONFLICT)', async () => {
