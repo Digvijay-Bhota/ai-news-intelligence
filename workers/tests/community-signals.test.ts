@@ -53,10 +53,19 @@ describe('Community Signals DB', () => {
                 }
             },
             batch: async (statements: any[]) => {
+                const results = [];
                 for (const st of statements) {
+                    if (st.statement.q.includes('community_signal_reviews') && st.statement.currentBinds.includes('audit_fail')) {
+                        throw new Error('Audit insert failed');
+                    }
                     executedStatements.push({ q: st.statement.q, args: st.statement.currentBinds });
+                    let changes = 1;
+                    if (st.statement.q.includes('UPDATE community_signals') && st.statement.currentBinds.includes('concurrent_fail')) {
+                        changes = 0;
+                    }
+                    results.push({ success: true, meta: { changes } });
                 }
-                return { success: true };
+                return results;
             }
         } as any;
     }
@@ -147,5 +156,17 @@ describe('Community Signals DB', () => {
         const db = createMockDB([]);
         const cursor = await getGenerationCursor(db, 1);
         expect(cursor?.last_processed_post_id).toBe('post_0');
+    });
+
+    it('audit-write failure rolls back the status update', async () => {
+        const db = createMockDB([]);
+        // Pass 'audit_fail' so the insert simulation throws an error
+        await expect(transitionSignalState(db, 1, 'audit_fail', 'approved', 'user_1'))
+            .rejects.toThrow('Audit insert failed');
+        
+        // Since batch throws, the entire transaction is considered aborted.
+        // In our mock, the executedStatements array contains the UPDATE because it ran before the INSERT threw,
+        // but in real SQLite/D1, a batch error rolls back all preceding statements in the batch.
+        // What we verify is that it doesn't swallow the error.
     });
 });

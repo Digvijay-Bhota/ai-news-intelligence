@@ -135,17 +135,21 @@ export async function transitionSignalState(
   const now = Math.floor(Date.now() / 1000);
   const reviewId = crypto.randomUUID();
 
-  const updateRes = await db.prepare(
-      `UPDATE community_signals SET status = ?, updated_at = ? WHERE id = ? AND event_id = ? AND status = ?`
-  ).bind(newStatus, now, signalId, eventId, currentStatus).run();
+  const statements = [
+      db.prepare(
+          `UPDATE community_signals SET status = ?, updated_at = ? WHERE id = ? AND event_id = ? AND status = ?`
+      ).bind(newStatus, now, signalId, eventId, currentStatus),
+      db.prepare(
+          `INSERT INTO community_signal_reviews (id, signal_id, reviewer_id, previous_status, new_status, reason, created_at)
+           SELECT ?, ?, ?, ?, ?, ?, ? WHERE (SELECT changes() > 0)`
+      ).bind(reviewId, signalId, reviewerId, currentStatus, newStatus, reason || null, now)
+  ];
 
-  if (updateRes.meta.changes === 0) {
+  const results = await db.batch(statements);
+
+  if (results[0].meta.changes === 0) {
       throw new Error('Concurrent state transition detected');
   }
-
-  await db.prepare(
-      `INSERT INTO community_signal_reviews (id, signal_id, reviewer_id, previous_status, new_status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).bind(reviewId, signalId, reviewerId, currentStatus, newStatus, reason || null, now).run();
 }
 
 export async function addEvidenceToSignal(
