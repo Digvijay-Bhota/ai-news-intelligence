@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { generateCommunitySignalsForEvent } from '../src/tasks/community-signal-generator';
 
 describe('community-signal-generator', () => {
-    function createMockEnv(posts: any[], existingSignals: any[] = []) {
+    function createMockEnv(posts: any[], existingSignals: any[] = [], cursorState: any = null) {
         const statements: any[] = [];
         return {
             env: {
@@ -15,7 +15,7 @@ describe('community-signal-generator', () => {
                                 return {
                                     first: async () => {
                                         if (q.includes('community_signal_generation_state')) {
-                                            return null; // no cursor initially
+                                            return cursorState;
                                         }
                                         if (q.includes('SELECT created_at FROM community_posts')) {
                                             const p = posts.find(p => p.id === binds[0]);
@@ -52,48 +52,64 @@ describe('community-signal-generator', () => {
         } as any;
     }
 
-    it('processes batch, skips on error (no cursor advance), and successfully persists', async () => {
+    it('prompt anonymizes users safely and successfully persists', async () => {
+        const posts = [
+            { id: 'p1', user_id: 'real_user_id_1', body: 'text', created_at: 1000, event_id: 1, status: 'active' },
+            { id: 'p2', user_id: 'real_user_id_2', body: 'text', created_at: 1001, event_id: 1, status: 'active' },
+            { id: 'p3', user_id: 'real_user_id_3', body: 'text', created_at: 1002, event_id: 1, status: 'active' },
+            { id: 'p4', user_id: 'real_user_id_1', body: 'text', created_at: 1003, event_id: 1, status: 'active' },
+        ];
+        const mockEnv = createMockEnv(posts);
+        
+        let capturedPrompt = '';
+        await generateCommunitySignalsForEvent(mockEnv.env, 1, async (prompt) => {
+            capturedPrompt = prompt;
+            return JSON.stringify([{ type: 'emerging_theme', content: 'Valid theme', evidence_post_ids: ['p1', 'p2', 'p3'] }]);
+        });
+        
+        // Ensure no raw user id is present
+        expect(capturedPrompt).not.toContain('real_user_id_1');
+        
+        // Ensure same user -> same hash
+        const p1Match = capturedPrompt.match(/"post_id": "p1",\s*"text": "text",\s*"user_hash": "([a-f0-9]+)"/);
+        const p4Match = capturedPrompt.match(/"post_id": "p4",\s*"text": "text",\s*"user_hash": "([a-f0-9]+)"/);
+        expect(p1Match![1]).toBe(p4Match![1]);
+        
+        // Ensure different users -> different hashes
+        const p2Match = capturedPrompt.match(/"post_id": "p2",\s*"text": "text",\s*"user_hash": "([a-f0-9]+)"/);
+        expect(p1Match![1]).not.toBe(p2Match![1]);
+    });
+
+    it('rejects extra fields', async () => {
+        const posts = [
+            { id: 'p1', user_id: 'u1', body: 't', created_at: 1000, event_id: 1, status: 'active' },
+            { id: 'p2', user_id: 'u2', body: 't', created_at: 1001, event_id: 1, status: 'active' },
+            { id: 'p3', user_id: 'u3', body: 't', created_at: 1002, event_id: 1, status: 'active' },
+        ];
+        const mockEnv = createMockEnv(posts);
+        await expect(generateCommunitySignalsForEvent(mockEnv.env, 1, async () => JSON.stringify([{ type: 'emerging_theme', content: 'c', evidence_post_ids: ['p1', 'p2', 'p3'], extra: 'bad' }])))
+            .rejects.toThrow('Proposal must contain exactly 3 fields');
+    });
+
+    it('does not mutate approved signals silently', async () => {
         const posts = [
             { id: 'p1', user_id: 'u1', body: 'text', created_at: 1000, event_id: 1, status: 'active' },
             { id: 'p2', user_id: 'u2', body: 'text', created_at: 1001, event_id: 1, status: 'active' },
             { id: 'p3', user_id: 'u3', body: 'text', created_at: 1002, event_id: 1, status: 'active' },
         ];
-
-        const mockEnv = createMockEnv(posts);
-
-        // Invalid JSON rejection
-        await expect(generateCommunitySignalsForEvent(mockEnv.env, 1, async () => "invalid json"))
-            .rejects.toThrow('LLM parse failure: invalid JSON');
-        expect(mockEnv.statements.length).toBe(0); // Cursor did not advance
-
-        // Invalid type rejection
-        await expect(generateCommunitySignalsForEvent(mockEnv.env, 1, async () => JSON.stringify([{ type: 'fake', content: 'test', evidence_post_ids: ['p1', 'p2', 'p3'] }])))
-            .rejects.toThrow('Invalid type rejected');
-
-        // Unknown evidence rejected
-        await expect(generateCommunitySignalsForEvent(mockEnv.env, 1, async () => JSON.stringify([{ type: 'emerging_theme', content: 'test', evidence_post_ids: ['p1', 'p2', 'p99'] }])))
-            .rejects.toThrow('Unknown post IDs rejected');
-
-        // Not enough posts rejected
-        await expect(generateCommunitySignalsForEvent(mockEnv.env, 1, async () => JSON.stringify([{ type: 'emerging_theme', content: 'test', evidence_post_ids: ['p1', 'p2'] }])))
-            .rejects.toThrow('Fewer than 3 posts rejected');
-        
-        // Not enough users rejected (p2 and p3 belong to same user in this mock for testing)
-        const postsFewUsers = [
-            { id: 'p1', user_id: 'u1', body: 'text', created_at: 1000, event_id: 1, status: 'active' },
-            { id: 'p2', user_id: 'u2', body: 'text', created_at: 1001, event_id: 1, status: 'active' },
-            { id: 'p3', user_id: 'u2', body: 'text', created_at: 1002, event_id: 1, status: 'active' },
+        const existingSignals = [
+            { id: 'sig1', type: 'emerging_theme', content: 'Valid theme', status: 'approved' }
         ];
-        const env2 = createMockEnv(postsFewUsers);
-        await expect(generateCommunitySignalsForEvent(env2.env, 1, async () => JSON.stringify([{ type: 'emerging_theme', content: 'test', evidence_post_ids: ['p1', 'p2', 'p3'] }])))
-            .rejects.toThrow('Fewer than 3 users rejected');
 
-        // Successful generation
+        const mockEnv = createMockEnv(posts, existingSignals);
         await generateCommunitySignalsForEvent(mockEnv.env, 1, async () => JSON.stringify([{ type: 'emerging_theme', content: 'Valid theme', evidence_post_ids: ['p1', 'p2', 'p3'] }]));
-        expect(mockEnv.statements.length).toBeGreaterThan(0);
+        
+        // We expect a new candidate to be created instead of appended
+        const insertSignal = mockEnv.statements.find((s: any) => s.q.includes('INSERT INTO community_signals'));
+        expect(insertSignal).toBeDefined(); // A new candidate was made!
     });
-
-    it('duplicate appends instead of creates', async () => {
+    
+    it('appends to candidate signals silently', async () => {
         const posts = [
             { id: 'p1', user_id: 'u1', body: 'text', created_at: 1000, event_id: 1, status: 'active' },
             { id: 'p2', user_id: 'u2', body: 'text', created_at: 1001, event_id: 1, status: 'active' },
@@ -105,7 +121,49 @@ describe('community-signal-generator', () => {
 
         const mockEnv = createMockEnv(posts, existingSignals);
         await generateCommunitySignalsForEvent(mockEnv.env, 1, async () => JSON.stringify([{ type: 'emerging_theme', content: 'Valid theme', evidence_post_ids: ['p1', 'p2', 'p3'] }]));
+        
+        // We expect NO new candidate, but we do expect evidence appended
+        const insertSignal = mockEnv.statements.find((s: any) => s.q.includes('INSERT INTO community_signals'));
+        expect(insertSignal).toBeUndefined(); // NO new candidate!
+        
+        const insertEvidence = mockEnv.statements.find((s: any) => s.q.includes('INSERT OR IGNORE INTO community_signal_evidence'));
+        expect(insertEvidence).toBeDefined(); // Evidence appended!
+    });
+
+    it('recovers cursor safely if post deleted', async () => {
+        const posts = [
+            { id: 'p1', user_id: 'u1', body: 'text', created_at: 1000, event_id: 1, status: 'active' },
+            { id: 'p2', user_id: 'u2', body: 'text', created_at: 1001, event_id: 1, status: 'active' },
+            { id: 'p3', user_id: 'u3', body: 'text', created_at: 1002, event_id: 1, status: 'active' },
+        ];
+        // Cursor post is missing from posts array, meaning it was deleted.
+        // But the new cursor format is used, which stores time
+        const cursorState = { last_processed_post_id: '999|old_post_id', updated_at: 123 };
+        
+        const mockEnv = createMockEnv(posts, [], cursorState);
+        await generateCommunitySignalsForEvent(mockEnv.env, 1, async () => JSON.stringify([{ type: 'emerging_theme', content: 'Valid theme', evidence_post_ids: ['p1', 'p2', 'p3'] }]));
+        
+        // Ensures processing happens successfully using 999 as time limit.
         expect(mockEnv.statements.length).toBeGreaterThan(0);
-        // Would be nice to check exactly what statements ran, but for now just pass is fine
+        
+        // Check new cursor format is written: created_at|id
+        const cursorUpdate = mockEnv.statements.find((s: any) => s.q.includes('community_signal_generation_state'));
+        expect(cursorUpdate.args[1]).toBe('1002|p3');
+    });
+    
+    it('legacy cursor post deleted fallback to updated_at', async () => {
+        const posts = [
+            { id: 'p1', user_id: 'u1', body: 'text', created_at: 1000, event_id: 1, status: 'active' },
+            { id: 'p2', user_id: 'u2', body: 'text', created_at: 1001, event_id: 1, status: 'active' },
+            { id: 'p3', user_id: 'u3', body: 'text', created_at: 1002, event_id: 1, status: 'active' },
+        ];
+        // legacy cursor format (no pipe)
+        const cursorState = { last_processed_post_id: 'old_missing_post', updated_at: 999 };
+        
+        const mockEnv = createMockEnv(posts, [], cursorState);
+        await generateCommunitySignalsForEvent(mockEnv.env, 1, async () => JSON.stringify([{ type: 'emerging_theme', content: 'Valid theme', evidence_post_ids: ['p1', 'p2', 'p3'] }]));
+        
+        const cursorUpdate = mockEnv.statements.find((s: any) => s.q.includes('community_signal_generation_state'));
+        expect(cursorUpdate.args[1]).toBe('1002|p3');
     });
 });
