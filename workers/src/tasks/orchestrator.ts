@@ -9,6 +9,7 @@ import { processArticle } from './processor';
 import { computeArticleFingerprint, generateAndSaveEventBrief } from './brief-generator';
 import { generateAndSaveNarrativeDelta } from './narrative-delta-generator';
 import { generateAndSaveClaimComparisons } from './claim-comparison-generator';
+import { generateCommunitySignalsForEvent } from './community-signal-generator';
 
 const MAX_SOURCES = 10;
 const MAX_ARTICLES = 20;
@@ -111,6 +112,14 @@ export async function runPipeline(env: Env): Promise<void> {
           const now = Math.floor(Date.now() / 1000);
           for (const event of activeEvents) {
             if (!event.id || !event.event_hash) continue;
+
+            // Phase 14: Bounded Scheduled Community Signal Generation
+            try {
+              await generateCommunitySignalsForEvent(env, event.id);
+            } catch (_signalErr) {
+              // Failure isolates to this event's community signals
+            }
+
             try {
               const detail = await db.getEventDetailByHash(event.event_hash);
               if (!detail || !detail.articles || detail.articles.length === 0) continue;

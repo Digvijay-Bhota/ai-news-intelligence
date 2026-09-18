@@ -14,6 +14,8 @@ describe('community-signal-generator', () => {
                             bind: (...args: any[]) => {
                                 binds = args;
                                 return {
+                                    q,
+                                    args,
                                     first: async () => {
                                         if (q.includes('community_signal_generation_state')) {
                                             return cursorState;

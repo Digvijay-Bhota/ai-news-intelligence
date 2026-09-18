@@ -5,6 +5,7 @@ import * as dbClientModule from '../src/db/client';
 import * as fetcherModule from '../src/tasks/fetcher';
 import * as processorModule from '../src/tasks/processor';
 import * as briefGenModule from '../src/tasks/brief-generator';
+import * as commGenModule from '../src/tasks/community-signal-generator';
 
 describe('Orchestrator', () => {
   it('runs successful pipeline', async () => {
@@ -169,6 +170,38 @@ describe('Orchestrator', () => {
       await runPipeline(env);
 
       expect(mockDbClient.updateArticleStatus).toHaveBeenCalledWith(100, 'failed');
+    });
+  });
+
+  describe('Phase 14 Scheduled Community Signal Generation', () => {
+    it('calls generateCommunitySignalsForEvent for active events and isolates failures', async () => {
+      const env = createMockEnv();
+      const mockDbClient = {
+        createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        listSources: vi.fn().mockResolvedValue([]),
+        listArticles: vi.fn().mockResolvedValue({ articles: [] }),
+        listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
+        updatePipelineJobStatus: vi.fn(),
+        recoverStaleProcessingArticles: vi.fn(),
+        hasEventBriefsTable: vi.fn().mockResolvedValue(true),
+        getRecentActiveEvents: vi.fn().mockResolvedValue([
+          { id: 1, event_hash: 'hash-1' },
+          { id: 2, event_hash: 'hash-2' }
+        ]),
+        getEventDetailByHash: vi.fn().mockResolvedValue(null),
+      };
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+      
+      const commSpy = vi.spyOn(commGenModule, 'generateCommunitySignalsForEvent')
+        .mockRejectedValueOnce(new Error('Signal gen fail')) // Event 1 fails
+        .mockResolvedValueOnce(undefined); // Event 2 succeeds
+
+      await runPipeline(env);
+
+      expect(commSpy).toHaveBeenCalledTimes(2);
+      expect(commSpy).toHaveBeenNthCalledWith(1, env, 1);
+      expect(commSpy).toHaveBeenNthCalledWith(2, env, 2);
+      expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined);
     });
   });
 
