@@ -358,6 +358,8 @@ CREATE INDEX IF NOT EXISTS idx_user_preferences_user ON user_preferences(user_id
 CREATE INDEX IF NOT EXISTS idx_saved_articles_user ON saved_articles(user_id);
 CREATE INDEX IF NOT EXISTS idx_hidden_stories_user ON hidden_stories(user_id);
 CREATE INDEX IF NOT EXISTS idx_rate_limit_id_window ON rate_limit_logs(identifier, window_start);
+-- One row per IP/token, endpoint and window; the rate limiter's upsert relies on it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limit_unique ON rate_limit_logs(identifier, endpoint, window_start);
 CREATE INDEX IF NOT EXISTS idx_request_logs_nonce ON request_logs(nonce);
 
 -- Seed data
