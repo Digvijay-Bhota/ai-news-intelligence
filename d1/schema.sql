@@ -352,6 +352,7 @@ CREATE INDEX IF NOT EXISTS idx_article_events_event_id ON article_events(event_i
 CREATE INDEX IF NOT EXISTS idx_dedup_hashes_hash ON dedup_hashes(hash);
 CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status ON pipeline_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_ai_jobs_status ON ai_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_article_job ON ai_jobs(article_raw_id, job_type, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_source_health_source ON source_health(source_id);
 CREATE INDEX IF NOT EXISTS idx_analytics_daily_date ON analytics_daily(date);
 CREATE INDEX IF NOT EXISTS idx_user_preferences_user ON user_preferences(user_id);
