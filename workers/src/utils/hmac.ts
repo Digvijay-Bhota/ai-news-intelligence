@@ -123,9 +123,18 @@ export async function buildSignedRequest(
 }
 
 /**
+ * SHA-256 of a UTF-8 string as lowercase hex.
+ * Contract for pipeline_tokens.token_secret_hash.
+ */
+export async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return arrayBufferToHex(digest);
+}
+
+/**
  * Constant-time string comparison to prevent timing attacks.
  */
-function timingSafeEqual(a: string, b: string): boolean {
+export function timingSafeEqual(a: string, b: string): boolean {
   let result = 0;
   const len = Math.max(a.length, b.length);
   for (let i = 0; i < len; i++) {
