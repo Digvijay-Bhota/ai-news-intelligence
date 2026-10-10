@@ -15,8 +15,13 @@ export interface IngestedArticle {
   raw_content: string | null;
 }
 
+/** A NULL, empty or whitespace-only feed_url means the source has no feed to fetch. */
+export function hasFeedUrl(source: Pick<Source, 'feed_url'>): source is Pick<Source, 'feed_url'> & { feed_url: string } {
+  return typeof source.feed_url === 'string' && source.feed_url.trim() !== '';
+}
+
 export async function fetchAndIngest(env: Env, source: Source): Promise<number> {
-  if (!source.feed_url) return 0;
+  if (!hasFeedUrl(source)) return 0;
 
   const response = await fetch(source.feed_url);
   if (!response.ok) {
@@ -32,6 +37,9 @@ export async function fetchAndIngest(env: Env, source: Source): Promise<number> 
     const hash = await generateArticleHash(article.title, article.url);
     const existingHash = await db.getDedupHash(hash);
     if (existingHash) continue;
+
+    // An edited title changes the hash but keeps the guid; external_id is unique.
+    if (await db.getArticleByExternalId(article.external_id)) continue;
 
     const newArticle = await db.createArticle({
       external_id: article.external_id,

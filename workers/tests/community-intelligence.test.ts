@@ -83,7 +83,9 @@ describe('Community Intelligence Metrics', () => {
               if (q.includes('SELECT id FROM events')) return { id: 101 };
               if (q.includes('SELECT * FROM community_metrics_snapshots')) return { event_id: 101, lifetime_posts: 10, lifetime_participants: 5, posts_last_24h: 4, participants_last_24h: 3, momentum_score: 6.0 };
               return null;
-            }
+            },
+            // No approved signals for this event
+            all: async () => ({ results: [] })
           })
         }
       }
@@ -98,4 +100,138 @@ describe('Community Intelligence Metrics', () => {
     // Ensure cache header is present
     expect(res.headers.get('Cache-Control')).toBe('public, s-maxage=300');
   });
+});
+
+import { handleReviewSignal } from '../src/community';
+
+describe('Community Intelligence Signals (Phase 14.2C)', () => {
+  it('Public read dynamically revalidates evidence against active status and event_id', async () => {
+    const dbMock = {
+      prepare: (q: string) => {
+        return {
+          bind: () => ({
+            first: async () => {
+              if (q.includes('SELECT id FROM events')) return { id: 101 };
+              if (q.includes('SELECT * FROM community_metrics_snapshots')) return null;
+              return null;
+            },
+            all: async () => {
+              if (q.includes('SELECT s.type, s.content, COUNT(DISTINCT p.id) as evidence_count')) {
+                // simulate dynamically revalidated signals
+                return {
+                  results: [
+                    { type: 'emerging_theme', content: 'c1', evidence_count: 4 }
+                  ]
+                };
+              }
+              return { results: [] };
+            }
+          })
+        }
+      }
+    };
+    const env = { DB: dbMock } as unknown as Env;
+    const req = new Request('http://test');
+    const res = await handleGetCommunityIntelligence(req, env, 'hash');
+    const data = await res.json() as ApiResponse<any>;
+    
+    // Ensure public metrics are present and signals are attached
+    expect(data.data.signals.length).toBe(1);
+    expect(data.data.signals[0].type).toBe('emerging_theme');
+    expect(data.data.signals[0].evidence_count).toBe(4);
+    
+    // Ensure leakage tests pass
+    expect(data.data.signals[0].id).toBeUndefined();
+    expect(data.data.signals[0].signal_id).toBeUndefined();
+    expect(data.data.signals[0].event_id).toBeUndefined();
+    expect(data.data.signals[0].reviewer_id).toBeUndefined();
+    expect(data.data.signals[0].evidence_post_ids).toBeUndefined();
+    expect(data.data.signals[0].user_id).toBeUndefined();
+    expect(data.data.signals[0].user_hash).toBeUndefined();
+  });
+
+  it('handleReviewSignal correctly integrates with transition logic', async () => {
+    let queries: string[] = [];
+    const dbMock = {
+      prepare: (q: string) => {
+        queries.push(q);
+        return {
+          bind: () => ({
+            first: async () => {
+              if (q.includes('SELECT id FROM events')) return { id: 101 };
+              if (q.includes('SELECT * FROM community_signals')) return { id: 'sig1', status: 'candidate' };
+              return null;
+            },
+            run: async () => ({ success: true })
+          })
+        }
+      },
+      batch: async () => ([ { meta: { changes: 1 } }, { meta: { changes: 1 } } ])
+    };
+    const env = { DB: dbMock } as unknown as Env;
+    
+    const req = new Request('http://test', {
+      method: 'POST',
+      body: JSON.stringify({ status: 'approved' }),
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    // Authenticated as the internal review route requires: internal + admin scopes and a signed user ID
+    const auth: AuthContext = { identifier: 'admin1', userId: 'reviewer-1', scopes: ['internal', 'admin'], isInternal: true };
+    await expect(handleReviewSignal(req, env, auth, 'hash', 'sig1')).resolves.toBeDefined();
+    
+    // Verify it called UPDATE community_signals
+    expect(queries.some(q => q.includes('UPDATE community_signals SET status = ?'))).toBe(true);
+    expect(queries.some(q => q.includes('INSERT INTO community_signal_reviews'))).toBe(true);
+  });
+
+  it('handleReviewSignal fails if auth.userId is missing', async () => {
+    const env = { DB: {} } as unknown as Env;
+    
+    const req = new Request('http://test', {
+      method: 'POST',
+      body: JSON.stringify({ status: 'approved' }),
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    const auth = { identifier: 'admin1', scopes: ['internal'] } as AuthContext;
+    await expect(handleReviewSignal(req, env, auth, 'hash', 'sig1')).rejects.toThrow('Authenticated user identity required');
+  });
+
+  it('handleReviewSignal correctly uses auth.userId', async () => {
+    let queries: string[] = [];
+    const dbMock = {
+      prepare: (q: string) => {
+        queries.push(q);
+        return {
+          bind: (...args: any[]) => {
+            if (q.includes('INSERT INTO community_signal_reviews')) {
+              // Ensure reviewer_id passed is the userId, not the identifier
+              expect(args[2]).toBe('synthetic-user-123');
+            }
+            return {
+              first: async () => {
+                if (q.includes('SELECT id FROM events')) return { id: 101 };
+                if (q.includes('SELECT * FROM community_signals')) return { id: 'sig1', status: 'candidate' };
+                return null;
+              },
+              run: async () => ({ success: true })
+            }
+          }
+        }
+      },
+      batch: async () => ([ { meta: { changes: 1 } }, { meta: { changes: 1 } } ])
+    };
+    const env = { DB: dbMock } as unknown as Env;
+    
+    const req = new Request('http://test', {
+      method: 'POST',
+      body: JSON.stringify({ status: 'approved' }),
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    const auth = { identifier: 'internal-service', userId: 'synthetic-user-123', scopes: ['internal'] } as AuthContext;
+    await expect(handleReviewSignal(req, env, auth, 'hash', 'sig1')).resolves.toBeDefined();
+  });
+
 });

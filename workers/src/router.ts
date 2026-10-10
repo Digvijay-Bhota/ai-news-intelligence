@@ -1275,6 +1275,16 @@ export async function route(request: Request, env: Env): Promise<Response> {
       return applyCors(request, res, env, rateLimitHeaders(rateInfo));
     }
 
+    const internalReviewMatch = path.match(/^\/internal\/v1\/events\/([a-zA-Z0-9_-]+)\/community\/signals\/([a-zA-Z0-9_-]+)\/review$/);
+    if (internalReviewMatch && request.method === 'POST') {
+      const auth = await authenticateInternal(request, env);
+      requireScopes(auth, ['internal', 'admin']);
+      const rateInfo = await applyInternalRateLimit(auth.identifier, '/internal/v1/events/:hash/community/signals/:id/review', env);
+      const comm = await import('./community');
+      const res = await comm.handleReviewSignal(request, env, auth, internalReviewMatch[1], internalReviewMatch[2]);
+      return applyCors(request, res, env, rateLimitHeaders(rateInfo));
+    }
+
     const internalCommMatch = path.match(/^\/internal\/v1\/community\/posts\/([a-zA-Z0-9_-]+)\/moderate$/);
     if (internalCommMatch && request.method === 'POST') {
       const auth = await authenticateInternal(request, env);

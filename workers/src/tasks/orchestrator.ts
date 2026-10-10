@@ -4,11 +4,12 @@
 
 import type { Env } from '../types';
 import { createDbClient } from '../db/client';
-import { fetchAndIngest } from './fetcher';
+import { fetchAndIngest, hasFeedUrl } from './fetcher';
 import { processArticle } from './processor';
 import { computeArticleFingerprint, generateAndSaveEventBrief } from './brief-generator';
 import { generateAndSaveNarrativeDelta } from './narrative-delta-generator';
 import { generateAndSaveClaimComparisons } from './claim-comparison-generator';
+import { generateCommunitySignalsForEvent } from './community-signal-generator';
 
 const MAX_SOURCES = 10;
 const MAX_ARTICLES = 20;
@@ -31,6 +32,18 @@ export async function runPipeline(env: Env): Promise<void> {
     for (const source of sources.slice(0, MAX_SOURCES)) {
       const now = Math.floor(Date.now() / 1000);
       const health = await db.getSourceHealth(source.id);
+      if (!hasFeedUrl(source)) {
+        // Nothing is fetched, so this is neither a success nor a failure:
+        // keep the previous timestamps and failure count.
+        await db.updateSourceHealth(source.id, {
+          status: 'unconfigured',
+          last_success_at: health?.last_success_at ?? null,
+          last_failure_at: health?.last_failure_at ?? null,
+          consecutive_failures: health?.consecutive_failures ?? 0,
+          error_message: 'No feed URL configured'
+        });
+        continue;
+      }
       try {
         await fetchAndIngest(env, source);
         await db.updateSourceHealth(source.id, {
@@ -99,6 +112,14 @@ export async function runPipeline(env: Env): Promise<void> {
           const now = Math.floor(Date.now() / 1000);
           for (const event of activeEvents) {
             if (!event.id || !event.event_hash) continue;
+
+            // Phase 14: Bounded Scheduled Community Signal Generation
+            try {
+              await generateCommunitySignalsForEvent(env, event.id);
+            } catch (_signalErr) {
+              // Failure isolates to this event's community signals
+            }
+
             try {
               const detail = await db.getEventDetailByHash(event.event_hash);
               if (!detail || !detail.articles || detail.articles.length === 0) continue;

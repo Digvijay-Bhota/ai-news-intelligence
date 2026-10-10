@@ -382,7 +382,37 @@ export async function handleGetCommunityIntelligence(_request: Request, env: Env
   }
 
   const { event_id, ...publicMetrics } = snapshot as any;
-  return success({ metrics: publicMetrics }, 200, {
+
+  // Dynamically revalidate approved signals
+  const validSignalsRes = await env.DB.prepare(`
+    SELECT s.type, s.content, COUNT(DISTINCT p.id) as evidence_count
+    FROM community_signals s
+    JOIN community_signal_evidence e ON s.id = e.signal_id
+    JOIN community_posts p ON e.post_id = p.id AND p.status = 'active' AND p.event_id = s.event_id
+    WHERE s.event_id = ? AND s.status = 'approved'
+    GROUP BY s.id
+    HAVING COUNT(DISTINCT p.id) >= 3 AND COUNT(DISTINCT p.user_id) >= 3
+  `).bind(event.id).all<{ type: string, content: string, evidence_count: number }>();
+
+  const publicSignals = validSignalsRes.results || [];
+
+  return success({ metrics: publicMetrics, signals: publicSignals }, 200, {
     'Cache-Control': 'public, s-maxage=300'
   });
+}
+
+import { transitionSignalState } from './db/community-signals';
+
+export async function handleReviewSignal(request: Request, env: Env, auth: AuthContext, eventHash: string, signalId: string): Promise<Response> {
+  const userId = requireAuthenticatedUser(auth);
+  const body = (await parseBody(request, false)) as any;
+  const newStatus = requireString(body.status, 'status') as any;
+  const reason = body.reason;
+
+  const event = await env.DB.prepare('SELECT id FROM events WHERE event_hash = ?').bind(eventHash).first<{ id: number }>();
+  if (!event) throw new NotFoundError('Event not found');
+
+  await transitionSignalState(env.DB, event.id, signalId, newStatus, userId, reason);
+  
+  return success(null);
 }
