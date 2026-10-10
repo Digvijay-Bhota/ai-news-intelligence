@@ -83,7 +83,9 @@ describe('Community Intelligence Metrics', () => {
               if (q.includes('SELECT id FROM events')) return { id: 101 };
               if (q.includes('SELECT * FROM community_metrics_snapshots')) return { event_id: 101, lifetime_posts: 10, lifetime_participants: 5, posts_last_24h: 4, participants_last_24h: 3, momentum_score: 6.0 };
               return null;
-            }
+            },
+            // No approved signals for this event
+            all: async () => ({ results: [] })
           })
         }
       }
@@ -174,7 +176,8 @@ describe('Community Intelligence Signals (Phase 14.2C)', () => {
       headers: { 'Content-Type': 'application/json' }
     });
     
-    const auth = { identifier: 'admin1', scopes: ['internal'] } as AuthContext;
+    // Authenticated as the internal review route requires: internal + admin scopes and a signed user ID
+    const auth: AuthContext = { identifier: 'admin1', userId: 'reviewer-1', scopes: ['internal', 'admin'], isInternal: true };
     await expect(handleReviewSignal(req, env, auth, 'hash', 'sig1')).resolves.toBeDefined();
     
     // Verify it called UPDATE community_signals
