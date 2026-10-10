@@ -31,29 +31,7 @@ NONCE_HEADER = "X-Nonce"
 TIMESTAMP_HEADER = "X-Timestamp"
 REPLAY_WINDOW_SECONDS = "300"
 
-[env.development]
-name = "ai-news-intelligence-dev"
-[env.development.vars]
-ENVIRONMENT = "development"
-VERSION = "0.8.0-dev"
-CORS_ORIGIN = "*"
-PUBLIC_RATE_LIMIT_WINDOW_SECONDS = "60"
-PUBLIC_RATE_LIMIT_MAX_REQUESTS = "100"
-INTERNAL_RATE_LIMIT_WINDOW_SECONDS = "60"
-INTERNAL_RATE_LIMIT_MAX_REQUESTS = "1000"
-PUBLIC_BODY_LIMIT_BYTES = "65536"
-INTERNAL_BODY_LIMIT_BYTES = "262144"
-HMAC_ALGORITHM = "SHA-256"
-HMAC_HEADER = "X-HMAC-Signature"
-NONCE_HEADER = "X-Nonce"
-TIMESTAMP_HEADER = "X-Timestamp"
-REPLAY_WINDOW_SECONDS = "300"
-
-[env.production]
-name = "ai-news-intelligence-prod"
-[env.production.vars]
-ENVIRONMENT = "production"
-VERSION = "0.8.0"
-CORS_ORIGIN = "https://your-domain.com"
-PUBLIC_RATE_LIMIT_MAX_REQUESTS = "200"
-INTERNAL_RATE_LIMIT_MAX_REQUESTS = "5000"
+# The top-level configuration above is the single production Worker.
+# No named environments ([env.*]) are defined: Wrangler does not inherit
+# d1_databases, kv_namespaces or vars into them, so an environment without its
+# own dedicated resources would deploy a Worker with no database or cache.
