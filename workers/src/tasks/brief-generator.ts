@@ -186,14 +186,6 @@ export async function generateAndSaveEventBrief(
     return existing;
   }
 
-  // 3. Track AI job
-  const aiJob = await db.createAiJob({
-    article_raw_id: null,
-    job_type: 'event_brief',
-    model: 'gemini-3.6-flash',
-    status: 'running',
-  });
-
   const validArticleIds = new Set(articles.map(a => a.id));
   const distinctSources = new Set(articles.map(a => a.source_id));
 
@@ -201,7 +193,7 @@ export async function generateAndSaveEventBrief(
   const latestBrief = await db.getLatestEventBrief(event.id);
   const nextVersion = existing ? existing.version : (latestBrief ? latestBrief.version + 1 : 1);
 
-  // 3b. Atomic generation lease to prevent duplicate external Gemini calls across workers
+  // 3. Atomic generation lease to prevent duplicate external Gemini calls across workers
   const lease = await db.acquireEventBriefLease({
     event_id: event.id,
     article_fingerprint: fingerprint,
@@ -217,7 +209,17 @@ export async function generateAndSaveEventBrief(
     throw new Error(`Generation in progress: another worker holds active lease for event ${event.id}`);
   }
 
+  // 3b. Track the AI job only once this worker holds the lease, so a lease
+  // conflict never leaves a running job behind.
+  let aiJobId: number | null = null;
   try {
+    aiJobId = (await db.createAiJob({
+      article_raw_id: null,
+      job_type: 'event_brief',
+      model: 'gemini-3.6-flash',
+      status: 'running',
+    })).id;
+
     // 4. Synthesize with Gemini
     const rawBrief = await retryWithBackoff(() =>
       generateEventBriefFromGemini(
@@ -251,14 +253,18 @@ export async function generateAndSaveEventBrief(
       error_message: null,
     });
 
-    await db.updateAiJobStatus(aiJob.id, 'completed', JSON.stringify({ brief_id: savedBrief.id, version: nextVersion }));
+    await db.updateAiJobStatus(aiJobId, 'completed', JSON.stringify({ brief_id: savedBrief.id, version: nextVersion }));
     return savedBrief;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error during event brief generation';
-    await db.createAiLog(aiJob.id, errorMsg, 'error');
-    await db.updateAiJobStatus(aiJob.id, 'failed', undefined, errorMsg);
+    // Bookkeeping failures must not skip releasing the lease below or mask the original error.
+    if (aiJobId !== null) {
+      await db.createAiLog(aiJobId, errorMsg, 'error').catch(() => {});
+      await db.updateAiJobStatus(aiJobId, 'failed', undefined, errorMsg).catch(() => {});
+    }
 
-    // Record failure status in event_briefs for provenance/observability if useful
+    // Record failure status in event_briefs for provenance/observability; this also
+    // moves the row out of 'generating', releasing the lease for a retry.
     await db.saveEventBrief({
       event_id: event.id,
       content: JSON.stringify({ error: errorMsg }),
