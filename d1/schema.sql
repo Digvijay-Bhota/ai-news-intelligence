@@ -364,10 +364,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limit_unique ON rate_limit_logs(ident
 CREATE INDEX IF NOT EXISTS idx_request_logs_nonce ON request_logs(nonce);
 
 -- Seed data
-INSERT OR IGNORE INTO sources (name, base_url, source_type, active) VALUES
-  ('TechCrunch', 'https://techcrunch.com', 'rss', 1),
-  ('The Verge', 'https://theverge.com', 'rss', 1),
-  ('Ars Technica', 'https://arstechnica.com', 'rss', 1);
+-- Feed URLs are the ones each publisher declares (see migration 0012 for sources).
+-- Ars Technica's feed URL could not be verified from the publisher, so it stays NULL
+-- and the fetcher skips it until a verified URL is set.
+INSERT OR IGNORE INTO sources (name, feed_url, base_url, source_type, active) VALUES
+  ('TechCrunch', 'https://techcrunch.com/feed/', 'https://techcrunch.com', 'rss', 1),
+  ('The Verge', 'https://www.theverge.com/rss/index.xml', 'https://theverge.com', 'rss', 1),
+  ('Ars Technica', NULL, 'https://arstechnica.com', 'rss', 1);
 
 INSERT OR IGNORE INTO topics (name, slug, description) VALUES
   ('Artificial Intelligence', 'artificial-intelligence', 'AI and machine learning news'),
