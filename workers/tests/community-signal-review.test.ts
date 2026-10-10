@@ -26,9 +26,11 @@ import {
   type ReviewConfig,
 } from '../scripts/signal-review/client.mjs';
 
-const ADMIN = { id: 'tok-review-admin', secret: 'review-admin-secret', scopes: 'internal,admin' };
-const LOW = { id: 'tok-review-low', secret: 'review-low-secret', scopes: 'internal' };
 const REVIEWER = 'reviewer@example.test';
+// Each reviewer token's name is the reviewer identity it may sign reviews as.
+const ADMIN = { id: 'tok-review-admin', secret: 'review-admin-secret', scopes: 'internal,admin', name: REVIEWER };
+const SECOND = { id: 'tok-review-admin-2', secret: 'review-admin-2-secret', scopes: 'internal,admin', name: 'second-reviewer@example.test' };
+const LOW = { id: 'tok-review-low', secret: 'review-low-secret', scopes: 'internal', name: 'low-scope@example.test' };
 const LIST_A = 'http://localhost/internal/v1/events/evt-a/community/signals/candidates';
 
 const bindings = workerEnv as unknown as { DB: D1Database; CACHE: KVNamespace };
@@ -77,9 +79,9 @@ async function reviews() {
 
 beforeEach(async () => {
   for (const stmt of splitSchema(schemaSql)) await DB.prepare(stmt).run();
-  for (const t of [ADMIN, LOW]) {
+  for (const t of [ADMIN, SECOND, LOW]) {
     await DB.prepare('INSERT INTO pipeline_tokens (token_id, token_secret_hash, name, scopes) VALUES (?1, ?2, ?3, ?4)')
-      .bind(t.id, await sha256Hex(t.secret), t.id, t.scopes).run();
+      .bind(t.id, await sha256Hex(t.secret), t.name, t.scopes).run();
   }
   const evA = (await DB.prepare("INSERT INTO events (event_hash, title, severity, status) VALUES ('evt-a', 'A', 'low', 'active') RETURNING id").first<{ id: number }>())!.id;
   const evB = (await DB.prepare("INSERT INTO events (event_hash, title, severity, status) VALUES ('evt-b', 'B', 'low', 'active') RETURNING id").first<{ id: number }>())!.id;
@@ -200,7 +202,7 @@ describe('Operator CLI client', () => {
     expect(await signPayload(noUser, TEST_SECRET)).toBe(await generateHmac(noUser, TEST_SECRET));
   });
 
-  it('approves a candidate through the review endpoint, recording the signed reviewer', async () => {
+  it('approves a candidate through the review endpoint, recording the token-bound reviewer', async () => {
     await approveSignal(config, 'evt-a', 'sig-a-candidate', viaRouter);
     expect(await signalStatus('sig-a-candidate')).toBe('approved');
     expect(await reviews()).toEqual([{ signal_id: 'sig-a-candidate', reviewer_id: REVIEWER, previous_status: 'candidate', new_status: 'approved', reason: null }]);
@@ -245,6 +247,34 @@ describe('Operator CLI client', () => {
     const lowScope = await route(await signed(url, { method: 'POST', token: LOW, userId: REVIEWER, body: { status: 'approved' } }), env);
     expect(lowScope.status).toBe(403);
     expect(await signalStatus('sig-a-candidate')).toBe('candidate');
+  });
+
+  it('rejects a signed reviewer identity that differs from the token name (403), writing nothing', async () => {
+    // Valid HMAC, nonce/timestamp, token ID + secret and internal + admin scopes; only the identity differs.
+    const impostor = { ...config, reviewerId: 'impostor@example.test' };
+    for (const attempt of [
+      approveSignal(impostor, 'evt-a', 'sig-a-candidate', viaRouter),
+      rejectSignal(impostor, 'evt-a', 'sig-a-weak', 'Looks wrong', viaRouter),
+    ]) {
+      await expect(attempt).rejects.toMatchObject({ status: 403, message: 'Reviewer identity does not match the authenticated token' });
+    }
+    expect(await signalStatus('sig-a-candidate')).toBe('candidate');
+    expect(await signalStatus('sig-a-weak')).toBe('candidate');
+    expect(await reviews()).toEqual([]);
+
+    // Listing only needs the internal + admin scopes.
+    await expect(listCandidates(impostor, 'evt-a', {}, viaRouter)).resolves.toMatchObject({ has_more: false });
+  });
+
+  it('prevents one reviewer token from signing reviews as another reviewer', async () => {
+    const second = { ...config, tokenId: SECOND.id, tokenSecret: SECOND.secret };
+    await expect(approveSignal({ ...second, reviewerId: REVIEWER }, 'evt-a', 'sig-a-candidate', viaRouter))
+      .rejects.toMatchObject({ status: 403 });
+    expect(await signalStatus('sig-a-candidate')).toBe('candidate');
+    expect(await reviews()).toEqual([]);
+
+    await approveSignal({ ...second, reviewerId: SECOND.name }, 'evt-a', 'sig-a-candidate', viaRouter);
+    expect(await reviews()).toEqual([expect.objectContaining({ signal_id: 'sig-a-candidate', reviewer_id: SECOND.name, new_status: 'approved' })]);
   });
 
   it('validates configuration without echoing secret values', () => {

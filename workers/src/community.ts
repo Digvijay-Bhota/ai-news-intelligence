@@ -409,6 +409,9 @@ const DEFAULT_CANDIDATE_LIMIT = 20;
 
 export async function handleReviewSignal(request: Request, env: Env, auth: AuthContext, eventHash: string, signalId: string): Promise<Response> {
   const userId = requireAuthenticatedUser(auth);
+  // The recorded reviewer must be the identity configured on the authenticated token
+  // (pipeline_tokens.name), so one token cannot sign reviews as another reviewer.
+  if (userId !== auth.tokenName) throw new ForbiddenError('Reviewer identity does not match the authenticated token');
   const body = (await parseBody(request, false)) as any;
   if (!body || typeof body !== 'object') throw new BadRequestError('Request body must be a JSON object');
   const newStatus = requireString(body.status, 'status') as SignalStatus;

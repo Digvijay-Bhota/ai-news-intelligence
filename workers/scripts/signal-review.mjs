@@ -29,7 +29,8 @@ Required environment variables:
   ${ENV_VARS.hmacSecret}                 The Worker's HMAC signing secret
   ${ENV_VARS.tokenId}      pipeline_tokens.token_id of a token with scopes internal,admin
   ${ENV_VARS.tokenSecret}  That token's secret (its SHA-256 is stored, never the secret)
-  ${ENV_VARS.reviewerId}   Your reviewer identity, recorded as reviewer_id
+  ${ENV_VARS.reviewerId}   Your reviewer identity, recorded as reviewer_id. Must exactly match
+                              the name of your own token, or reviews are refused (HTTP 403)
 
 Exit codes: 0 success, 1 API or network error, 2 usage or configuration error.`;
 
