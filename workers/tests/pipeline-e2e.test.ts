@@ -164,8 +164,10 @@ describe('Pipeline E2E (local D1)', () => {
     // Pipeline run and source health recorded
     const run = await db.prepare("SELECT * FROM pipeline_jobs WHERE job_type = 'pipeline-run'").first<any>();
     expect(run.status).toBe('completed');
-    const health = await db.prepare('SELECT * FROM source_health').first<any>();
-    expect(health).toMatchObject({ status: 'healthy', consecutive_failures: 0 });
+    // Other seeded sources also get health rows (e.g. 'unconfigured' when they have no feed URL).
+    const e2eSource = await db.prepare("SELECT id FROM sources WHERE name = 'E2E Wire'").first<{ id: number }>();
+    const health = await db.prepare('SELECT * FROM source_health WHERE source_id = ?1').bind(e2eSource!.id).first<any>();
+    expect(health).toMatchObject({ source_id: e2eSource!.id, status: 'healthy', consecutive_failures: 0 });
 
     // Feed API
     const feedRes = await route(await signedGet('/api/v1/feed'), env);
