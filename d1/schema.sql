@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS dedup_hashes (
 CREATE TABLE IF NOT EXISTS source_health (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_id INTEGER NOT NULL UNIQUE REFERENCES sources(id) ON DELETE CASCADE,
-  status TEXT DEFAULT 'healthy', -- healthy, degraded, down
+  status TEXT DEFAULT 'healthy', -- healthy, degraded, down, unconfigured (no feed URL)
   last_success_at INTEGER,
   last_failure_at INTEGER,
   consecutive_failures INTEGER DEFAULT 0,
