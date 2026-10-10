@@ -401,13 +401,22 @@ export async function handleGetCommunityIntelligence(_request: Request, env: Env
   });
 }
 
-import { transitionSignalState } from './db/community-signals';
+import { transitionSignalState, listCandidateSignals, CANDIDATE_LIST_MAX_LIMIT, type SignalStatus } from './db/community-signals';
+
+const REVIEW_STATUSES: readonly SignalStatus[] = ['approved', 'rejected', 'stale', 'invalidated'];
+const MAX_REVIEW_REASON_LENGTH = 1000;
+const DEFAULT_CANDIDATE_LIMIT = 20;
 
 export async function handleReviewSignal(request: Request, env: Env, auth: AuthContext, eventHash: string, signalId: string): Promise<Response> {
   const userId = requireAuthenticatedUser(auth);
   const body = (await parseBody(request, false)) as any;
-  const newStatus = requireString(body.status, 'status') as any;
-  const reason = body.reason;
+  if (!body || typeof body !== 'object') throw new BadRequestError('Request body must be a JSON object');
+  const newStatus = requireString(body.status, 'status') as SignalStatus;
+  if (!REVIEW_STATUSES.includes(newStatus)) throw new BadRequestError(`status must be one of: ${REVIEW_STATUSES.join(', ')}`);
+  const reason = body.reason ?? undefined;
+  if (reason !== undefined && (typeof reason !== 'string' || reason.length > MAX_REVIEW_REASON_LENGTH)) {
+    throw new BadRequestError(`reason must be a string of at most ${MAX_REVIEW_REASON_LENGTH} characters`);
+  }
 
   const event = await env.DB.prepare('SELECT id FROM events WHERE event_hash = ?').bind(eventHash).first<{ id: number }>();
   if (!event) throw new NotFoundError('Event not found');
@@ -415,4 +424,21 @@ export async function handleReviewSignal(request: Request, env: Env, auth: AuthC
   await transitionSignalState(env.DB, event.id, signalId, newStatus, userId, reason);
   
   return success(null);
+}
+
+/**
+ * Internal (internal + admin scopes, enforced by the router): candidate signals awaiting review.
+ */
+export async function handleListCandidateSignals(request: Request, env: Env, eventHash: string): Promise<Response> {
+  const limitParam = new URL(request.url).searchParams.get('limit');
+  const limit = limitParam === null ? DEFAULT_CANDIDATE_LIMIT : Number(limitParam);
+  if (!Number.isInteger(limit) || limit < 1 || limit > CANDIDATE_LIST_MAX_LIMIT) {
+    throw new BadRequestError(`limit must be an integer between 1 and ${CANDIDATE_LIST_MAX_LIMIT}`);
+  }
+
+  const event = await env.DB.prepare('SELECT id FROM events WHERE event_hash = ?').bind(eventHash).first<{ id: number }>();
+  if (!event) throw new NotFoundError('Event not found');
+
+  const { candidates, has_more } = await listCandidateSignals(env.DB, event.id, limit);
+  return success({ candidates, has_more, limit }, 200, { 'Cache-Control': 'no-store' });
 }

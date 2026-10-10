@@ -1,4 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
+import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors';
 
 export type SignalType = 'emerging_theme' | 'common_question' | 'divergent_view';
 export type SignalStatus = 'candidate' | 'approved' | 'rejected' | 'stale' | 'invalidated';
@@ -120,16 +121,16 @@ export async function transitionSignalState(
 ): Promise<void> {
   const signal = await getSignal(db, eventId, signalId);
   if (!signal) {
-      throw new Error('Signal not found');
+      throw new NotFoundError('Signal not found');
   }
 
   const currentStatus = signal.status;
   if (!ALLOWED_TRANSITIONS[currentStatus].includes(newStatus)) {
-      throw new Error(`Forbidden transition from ${currentStatus} to ${newStatus}`);
+      throw new ConflictError(`Forbidden transition from ${currentStatus} to ${newStatus}`);
   }
 
   if (newStatus === 'rejected' && (!reason || reason.trim() === '')) {
-      throw new Error('Rejection requires a non-empty reason');
+      throw new BadRequestError('Rejection requires a non-empty reason');
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -148,7 +149,7 @@ export async function transitionSignalState(
   const results = await db.batch(statements);
 
   if (results[0].meta.changes === 0) {
-      throw new Error('Concurrent state transition detected');
+      throw new ConflictError('Concurrent state transition detected');
   }
 }
 
@@ -269,4 +270,97 @@ export async function persistGenerationBatch(
     );
 
     await db.batch(statements);
+}
+
+// Candidate review listing (internal operators only)
+
+export const CANDIDATE_LIST_MAX_LIMIT = 50;
+const EVIDENCE_PER_CANDIDATE = 10;
+const EVIDENCE_BODY_CHARS = 500;
+// Same thresholds the public read applies before showing an approved signal.
+const PUBLIC_MIN_POSTS = 3;
+const PUBLIC_MIN_AUTHORS = 3;
+
+export interface CandidateEvidence {
+    post_id: string;
+    body: string;
+    body_truncated: boolean;
+    created_at: number;
+}
+
+export interface CandidateSignalSummary {
+    id: string;
+    type: SignalType;
+    content: string;
+    created_at: number;
+    active_evidence_count: number;
+    distinct_author_count: number;
+    meets_public_threshold: boolean;
+    evidence: CandidateEvidence[];
+}
+
+/**
+ * Oldest-first candidate signals for one event. Evidence counts and excerpts only
+ * include active posts on the same event; author identities are only ever counted.
+ */
+export async function listCandidateSignals(
+    db: D1Database,
+    eventId: number,
+    limit: number
+): Promise<{ candidates: CandidateSignalSummary[]; has_more: boolean }> {
+    const rows = (await db.prepare(`
+        SELECT s.id, s.type, s.content, s.created_at,
+               COUNT(DISTINCT p.id) AS active_evidence_count,
+               COUNT(DISTINCT p.user_id) AS distinct_author_count
+        FROM community_signals s
+        LEFT JOIN community_signal_evidence e ON e.signal_id = s.id
+        LEFT JOIN community_posts p ON p.id = e.post_id AND p.event_id = s.event_id AND p.status = 'active'
+        WHERE s.event_id = ? AND s.status = 'candidate'
+        GROUP BY s.id
+        ORDER BY s.created_at ASC, s.id ASC
+        LIMIT ?
+    `).bind(eventId, limit + 1).all<{
+        id: string; type: SignalType; content: string; created_at: number;
+        active_evidence_count: number; distinct_author_count: number;
+    }>()).results ?? [];
+
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    if (page.length === 0) return { candidates: [], has_more: false };
+
+    const placeholders = page.map(() => '?').join(',');
+    const evidenceRows = (await db.prepare(`
+        SELECT signal_id, post_id, body, body_length, created_at FROM (
+            SELECT e.signal_id, p.id AS post_id, substr(p.body, 1, ?) AS body, length(p.body) AS body_length,
+                   p.created_at,
+                   ROW_NUMBER() OVER (PARTITION BY e.signal_id ORDER BY p.created_at ASC, p.id ASC) AS rn
+            FROM community_signal_evidence e
+            JOIN community_posts p ON p.id = e.post_id
+            WHERE e.signal_id IN (${placeholders}) AND p.event_id = ? AND p.status = 'active'
+        ) WHERE rn <= ?
+        ORDER BY signal_id, created_at ASC, post_id ASC
+    `).bind(EVIDENCE_BODY_CHARS, ...page.map(r => r.id), eventId, EVIDENCE_PER_CANDIDATE).all<{
+        signal_id: string; post_id: string; body: string; body_length: number; created_at: number;
+    }>()).results ?? [];
+
+    const evidenceBySignal = new Map<string, CandidateEvidence[]>();
+    for (const r of evidenceRows) {
+        const list = evidenceBySignal.get(r.signal_id) ?? [];
+        list.push({ post_id: r.post_id, body: r.body, body_truncated: r.body_length > EVIDENCE_BODY_CHARS, created_at: r.created_at });
+        evidenceBySignal.set(r.signal_id, list);
+    }
+
+    return {
+        candidates: page.map(r => ({
+            id: r.id,
+            type: r.type,
+            content: r.content,
+            created_at: r.created_at,
+            active_evidence_count: r.active_evidence_count,
+            distinct_author_count: r.distinct_author_count,
+            meets_public_threshold: r.active_evidence_count >= PUBLIC_MIN_POSTS && r.distinct_author_count >= PUBLIC_MIN_AUTHORS,
+            evidence: evidenceBySignal.get(r.id) ?? [],
+        })),
+        has_more: hasMore,
+    };
 }
