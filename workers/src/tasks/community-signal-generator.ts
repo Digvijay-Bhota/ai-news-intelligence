@@ -15,7 +15,7 @@ export interface LlmProposal {
 
 export async function generateSemanticProposal(prompt: string, env: Env, mockAI?: (prompt: string) => Promise<string>): Promise<string> {
     if (mockAI) return await mockAI(prompt);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${env.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${env.GEMINI_API_KEY}`;
     const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -114,6 +114,13 @@ Never invent evidence or post IDs.
 Do not include database identifiers in your content, and keep it under 150 chars.
 Only classify into these exact types: "emerging_theme", "common_question", "divergent_view".
 
+CRITICAL EVIDENCE RULES:
+1. Every proposed signal MUST contain at least 3 distinct evidence_post_ids.
+2. Those evidence posts MUST represent at least 3 distinct users (user_hash).
+3. Never return a proposal with fewer than 3 qualifying evidence posts.
+4. If insufficient evidence exists, return NO proposal rather than fabricating evidence.
+5. Every evidence ID MUST come from the supplied batch.
+
 Active posts:
 ${JSON.stringify(inputPosts, null, 2)}
 
@@ -122,7 +129,7 @@ Output ONLY a JSON array matching exactly this schema:
   {
     "type": "emerging_theme",
     "content": "Semantic summary (max 150 chars)",
-    "evidence_post_ids": ["post_id_1", "post_id_2"]
+    "evidence_post_ids": ["post_id_1", "post_id_2", "post_id_3"]
   }
 ]`;
 
@@ -209,4 +216,41 @@ Output ONLY a JSON array matching exactly this schema:
 
     // 6. Persist atomically
     await persistGenerationBatch(db, eventId, newCandidates, appends, newLastProcessedPostId);
+}
+
+export async function sweepInvalidatedSignals(env: Env): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    // Find all 'approved' signals that currently do NOT have 3 active posts / 3 users
+    // Since it's a sweeper, we can do this with a single query and update them.
+    // D1 allows UPDATE ... FROM or we can select then update.
+    
+    const invalidSignalsRes = await env.DB.prepare(`
+        SELECT s.id, s.event_id
+        FROM community_signals s
+        LEFT JOIN community_signal_evidence e ON s.id = e.signal_id
+        LEFT JOIN community_posts p ON e.post_id = p.id AND p.status = 'active' AND p.event_id = s.event_id
+        WHERE s.status = 'approved'
+        GROUP BY s.id
+        HAVING COUNT(DISTINCT p.id) < 3 OR COUNT(DISTINCT p.user_id) < 3
+        LIMIT 100
+    `).all<{id: string, event_id: number}>();
+    
+    const invalidSignals = invalidSignalsRes.results || [];
+    
+    if (invalidSignals.length === 0) return;
+
+    const statements = [];
+    for (const sig of invalidSignals) {
+        const reviewId = crypto.randomUUID();
+        statements.push(
+            env.DB.prepare(
+                `UPDATE community_signals SET status = 'invalidated', updated_at = ? WHERE id = ? AND event_id = ? AND status = 'approved'`
+            ).bind(now, sig.id, sig.event_id),
+            env.DB.prepare(
+                `INSERT INTO community_signal_reviews (id, signal_id, reviewer_id, previous_status, new_status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+            ).bind(reviewId, sig.id, 'SYSTEM_SWEEPER', 'approved', 'invalidated', 'Evidence dropped below threshold', now)
+        );
+    }
+    
+    await env.DB.batch(statements);
 }
