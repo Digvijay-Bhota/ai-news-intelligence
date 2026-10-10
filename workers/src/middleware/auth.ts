@@ -7,7 +7,7 @@
 
 import type { Env } from '../types';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors';
-import { extractHmacPayload, verifyHmac } from '../utils/hmac';
+import { extractHmacPayload, verifyHmac, sha256Hex, timingSafeEqual } from '../utils/hmac';
 import { checkReplayProtection } from '../utils/replay';
 import { createDbClient } from '../db/client';
 
@@ -21,7 +21,7 @@ export interface AuthContext {
 /**
  * Authenticate any request using HMAC.
  * For public API: uses IP as identifier (no token lookup).
- * For internal API: validates pipeline token.
+ * For internal API: validates pipeline token ID and its secret (X-Token-Secret).
  * Extracts authenticated user identity bound to the verified HMAC signature.
  */
 export async function authenticate(
@@ -50,10 +50,20 @@ export async function authenticate(
     if (!tokenId) {
       throw new UnauthorizedError('Missing X-Token-ID header');
     }
+    const tokenSecret = request.headers.get('X-Token-Secret');
+    if (!tokenSecret) {
+      throw new UnauthorizedError('Missing X-Token-Secret header');
+    }
 
     const db = createDbClient(env);
     const token = await db.getPipelineTokenById(tokenId);
     if (!token) {
+      throw new UnauthorizedError('Invalid pipeline token');
+    }
+    // token_secret_hash = lowercase hex SHA-256 of the UTF-8 token secret.
+    // Same message as an unknown token ID so responses don't reveal which part was wrong.
+    const secretHash = await sha256Hex(tokenSecret);
+    if (!timingSafeEqual(secretHash, token.token_secret_hash ?? '')) {
       throw new UnauthorizedError('Invalid pipeline token');
     }
     if (token.expires_at && token.expires_at < Math.floor(Date.now() / 1000)) {
