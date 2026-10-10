@@ -33,6 +33,9 @@ export async function fetchAndIngest(env: Env, source: Source): Promise<number> 
     const existingHash = await db.getDedupHash(hash);
     if (existingHash) continue;
 
+    // An edited title changes the hash but keeps the guid; external_id is unique.
+    if (await db.getArticleByExternalId(article.external_id)) continue;
+
     const newArticle = await db.createArticle({
       external_id: article.external_id,
       source_id: source.id,
