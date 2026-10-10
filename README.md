@@ -45,6 +45,19 @@ npm run typecheck
 npm test
 ```
 
+Local development server:
+
+```bash
+cd workers
+npm run dev
+```
+
+`npm run dev` runs `wrangler dev`, which uses local D1 and KV emulation by default.
+Do not add `--remote`: it runs against the real Cloudflare resources.
+
+There is no separately deployable development environment. One can be added once
+dedicated development D1 and KV resources exist.
+
 ## Database setup
 
 Run these commands from the `workers/` directory, where `wrangler.toml` is; the SQL paths are relative to it.
@@ -86,7 +99,19 @@ Use the same choice as above: `schema.sql` for a fresh database, the `0012` back
 
 ## Deployment
 
+> **Warning:** deploying replaces the live production Worker. Deploy only with explicit approval.
+
 ```bash
 cd workers
 npx wrangler deploy
 ```
+
+This deploys the top-level configuration in `workers/wrangler.toml` to the Worker
+`ai-news-intelligence`, the single production Worker. The frontend's `BACKEND_API`
+service binding targets this Worker.
+
+Do not use `--env production` (or any `--env`). `wrangler.toml` defines no named
+environments, because they do not inherit the D1 and KV bindings. Wrangler does not
+reject an undefined environment: `--env <name>` only warns, then deploys a second
+Worker named `ai-news-intelligence-<name>` with the production D1 and KV bindings
+and the same hourly cron.
