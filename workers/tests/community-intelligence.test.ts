@@ -177,7 +177,8 @@ describe('Community Intelligence Signals (Phase 14.2C)', () => {
     });
     
     // Authenticated as the internal review route requires: internal + admin scopes and a signed user ID
-    const auth: AuthContext = { identifier: 'admin1', userId: 'reviewer-1', scopes: ['internal', 'admin'], isInternal: true };
+    // matching the token's configured name
+    const auth: AuthContext = { identifier: 'admin1', userId: 'reviewer-1', tokenName: 'reviewer-1', scopes: ['internal', 'admin'], isInternal: true };
     await expect(handleReviewSignal(req, env, auth, 'hash', 'sig1')).resolves.toBeDefined();
     
     // Verify it called UPDATE community_signals
@@ -230,7 +231,7 @@ describe('Community Intelligence Signals (Phase 14.2C)', () => {
       headers: { 'Content-Type': 'application/json' }
     });
     
-    const auth = { identifier: 'internal-service', userId: 'synthetic-user-123', scopes: ['internal'] } as AuthContext;
+    const auth = { identifier: 'internal-service', userId: 'synthetic-user-123', tokenName: 'synthetic-user-123', scopes: ['internal'] } as AuthContext;
     await expect(handleReviewSignal(req, env, auth, 'hash', 'sig1')).resolves.toBeDefined();
   });
 

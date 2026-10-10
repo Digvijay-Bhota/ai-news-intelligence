@@ -16,6 +16,8 @@ export interface AuthContext {
   scopes: string[];
   isInternal: boolean;
   userId?: string;
+  /** Internal requests only: the authenticated pipeline token's configured name. */
+  tokenName?: string;
 }
 
 /**
@@ -44,6 +46,7 @@ export async function authenticate(
 
   let identifier: string;
   let scopes: string[] = ['read'];
+  let tokenName: string | undefined;
 
   if (isInternal) {
     const tokenId = request.headers.get('X-Token-ID');
@@ -72,6 +75,7 @@ export async function authenticate(
 
     identifier = tokenId;
     scopes = token.scopes.split(',').map((s) => s.trim());
+    tokenName = token.name;
   } else {
     // Public API: IP-based identifier
     identifier = request.headers.get('CF-Connecting-IP') ??
@@ -79,7 +83,7 @@ export async function authenticate(
       'unknown';
   }
 
-  return { identifier, scopes, isInternal, userId: payload.userId };
+  return { identifier, scopes, isInternal, userId: payload.userId, tokenName };
 }
 
 /**
