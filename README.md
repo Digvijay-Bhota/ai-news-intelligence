@@ -45,6 +45,45 @@ npm run typecheck
 npm test
 ```
 
+## Database setup
+
+Run these commands from the `workers/` directory, where `wrangler.toml` is; the SQL paths are relative to it.
+
+### Local database
+
+Fresh local database — `schema.sql` creates the tables and seeds the starter sources with their feed URLs:
+
+```bash
+cd workers
+npx wrangler d1 execute ai-news-db --local --file=../d1/schema.sql
+```
+
+Existing local database seeded before feed URLs were added — backfill the feed URLs:
+
+```bash
+cd workers
+npx wrangler d1 execute ai-news-db --local --file=../d1/migrations/0012_seed_source_feed_urls.sql
+```
+
+The backfill only fills feed URLs that are missing (NULL) or blank. A source whose feed URL
+has already been set to a non-empty value is left unchanged, so customized URLs are not
+overwritten and the backfill is safe to re-run.
+
+Ars Technica is seeded without a feed URL (not yet verified), so it is skipped during ingestion.
+
+### Remote database
+
+> **Warning:** `--remote` runs the SQL against the real Cloudflare D1 database, not a local copy.
+> Do not run these commands without explicit approval.
+
+```bash
+cd workers
+npx wrangler d1 execute ai-news-db --remote --file=../d1/schema.sql
+npx wrangler d1 execute ai-news-db --remote --file=../d1/migrations/0012_seed_source_feed_urls.sql
+```
+
+Use the same choice as above: `schema.sql` for a fresh database, the `0012` backfill for an existing one.
+
 ## Deployment
 
 ```bash
