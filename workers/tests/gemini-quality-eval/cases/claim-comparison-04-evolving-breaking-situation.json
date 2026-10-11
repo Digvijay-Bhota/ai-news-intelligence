@@ -1,0 +1,53 @@
+{
+  "id": "claim-comparison-04-evolving-breaking-situation",
+  "task": "claim_comparison",
+  "scenario_category": "an active, rapidly updating breaking situation",
+  "description": "Same-day reports on an active wildfire show the fire growing and containment estimates changing within hours. Tests whether a model correctly labels this 'evolving' rather than mistaking rapid legitimate updates for a contradiction between sources ('disputed').",
+  "event": {
+    "title": "Wildfire burning near Cedar Ridge, containment efforts underway",
+    "description": "An active wildfire's size and containment percentage are updated multiple times over the course of one day as the situation develops.",
+    "severity": "high"
+  },
+  "articles": [
+    {
+      "id": 111,
+      "source_id": 111,
+      "source": "Wildfire Response Network",
+      "title": "Cedar Ridge fire grows to 2,000 acres, 10% contained",
+      "summary": "Early-morning report: fire at 2,000 acres, 10% contained.",
+      "raw_content": "Fire crews reported the Cedar Ridge wildfire has burned approximately 2,000 acres as of early Thursday morning, with containment at 10%. Evacuation orders remain in effect for nearby residential areas.",
+      "published_at": 1746000000
+    },
+    {
+      "id": 112,
+      "source_id": 111,
+      "source": "Wildfire Response Network",
+      "title": "Cedar Ridge fire grows to 5,500 acres, containment drops to 5%",
+      "summary": "Afternoon update from the same source: fire grew to 5,500 acres and containment estimate dropped to 5%.",
+      "raw_content": "Fire officials said the Cedar Ridge wildfire has grown to roughly 5,500 acres by Thursday afternoon, with containment revised down to 5% as winds pushed the fire in a new direction. Evacuation orders have been expanded to cover additional areas.",
+      "published_at": 1746018000
+    },
+    {
+      "id": 113,
+      "source_id": 112,
+      "source": "Regional Emergency Alerts",
+      "title": "Expanded evacuation zone confirmed as fire continues to grow",
+      "summary": "A second source corroborates the expanded evacuation zone described in the afternoon update.",
+      "raw_content": "A regional emergency alert confirmed the evacuation zone for the Cedar Ridge fire has been expanded, consistent with fire officials' afternoon report that the fire has grown and containment has decreased.",
+      "published_at": 1746019000
+    }
+  ],
+  "must_preserve_facts": [
+    "The fire's size grew from approximately 2,000 to 5,500 acres over the course of the day",
+    "The containment percentage decreased from 10% to 5% as the fire grew",
+    "The evacuation zone was expanded"
+  ],
+  "must_not_invent": [
+    "A cause of the fire (not stated in any article)",
+    "A final/current acreage beyond what the latest report states (5,500 acres, not a larger invented figure)"
+  ],
+  "known_ambiguities": [
+    "Articles 111 and 112 report different acreage and containment figures from the SAME source at different times on the same day — this is the fire genuinely growing and the containment estimate being revised, not two sources disagreeing. This should be classified 'evolving', not 'disputed': the key distinguishing feature from the contradictory-accounts case is that these are time-ordered updates to the same evolving fact, not simultaneous conflicting accounts."
+  ],
+  "validation_notes": "Exercises claim_comparison with two articles (111, 112) sharing the same source_id (111) and a third from a different source_id (112) — tests that the model doesn't need every claim to come from distinct sources, and correctly distinguishes 'evolving' from 'disputed' for this genuinely time-ordered, rapidly-changing situation."
+}

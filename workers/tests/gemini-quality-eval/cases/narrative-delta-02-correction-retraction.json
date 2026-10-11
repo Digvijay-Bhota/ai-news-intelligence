@@ -1,0 +1,57 @@
+{
+  "id": "narrative-delta-02-correction-retraction",
+  "task": "narrative_delta",
+  "scenario_category": "an article correcting an earlier report",
+  "description": "An official source corrects an earlier, inaccurate casualty count for a factory explosion. Tests whether the model represents this as a retraction/contradiction rather than silently blending the two figures.",
+  "event": {
+    "title": "Casualty count corrected after factory explosion",
+    "description": "Fire department issues a corrected casualty count following an explosion at a manufacturing facility.",
+    "severity": "high"
+  },
+  "articles": [
+    {
+      "id": 51,
+      "source_id": 51,
+      "source": "Fire Department Press Office",
+      "title": "Fire department corrects casualty count from factory explosion",
+      "summary": "Officials say the earlier report of one critical injury was based on mistaken identity; actual count is two injured, both stable.",
+      "raw_content": "The fire department issued a correction Thursday to its earlier casualty report from Tuesday's explosion at the Carrow Street manufacturing facility. Officials said the earlier report of one critically injured victim was based on a case of mistaken identity during initial triage. The department now confirms two people were injured, and both are in stable condition. No fatalities occurred.",
+      "published_at": 1740010000
+    }
+  ],
+  "narrative_delta_context": {
+    "previous_brief": {
+      "summary": "An explosion occurred at a manufacturing facility on Carrow Street. Early reports indicate three people were injured, with one in critical condition.",
+      "why_it_matters": "The explosion raises questions about safety conditions at the facility.",
+      "key_developments": [
+        "An explosion occurred at the Carrow Street manufacturing facility.",
+        "Early reports indicate three people were injured, including one in critical condition."
+      ],
+      "key_entities": [
+        { "name": "Carrow Street facility", "type": "location", "relevance": "Site of the explosion" }
+      ],
+      "uncertainties": [
+        "The exact casualty count may change as more information becomes available."
+      ],
+      "source_references": [
+        { "article_id": 51, "claim_context": "Early reports of three injured, one critical" }
+      ]
+    },
+    "previous_version": 1,
+    "current_version": 2
+  },
+  "must_preserve_facts": [
+    "The corrected casualty count is two injured, both in stable condition",
+    "The earlier report of one critical injury was retracted and attributed to mistaken identity during triage",
+    "No fatalities occurred"
+  ],
+  "must_not_invent": [
+    "The identity of the person mistakenly reported as critically injured",
+    "A cause for the explosion (not stated in the correction)",
+    "Any claim that three people were actually injured (the prior figure was explicitly retracted)"
+  ],
+  "known_ambiguities": [
+    "The previous brief's casualty figures were wrong and have now been officially retracted. A good narrative delta must represent this as a correction/retraction (e.g. change_type 'retracted' or 'contradicted' in changed_claims, or an entry in removed_or_no_longer_supported) — not silently average, blend, or ignore the discrepancy between the old and new figures."
+  ],
+  "validation_notes": "Only one new article (ID 51) exists for the current version, but it directly contradicts the previous brief's key facts. This specifically tests the 'changed_claims'/'removed_or_no_longer_supported' fields rather than 'newly_confirmed' alone — a delta that only adds the new figure without acknowledging the old one was wrong would miss the point of this case, though the schema validator cannot detect that by itself."
+}

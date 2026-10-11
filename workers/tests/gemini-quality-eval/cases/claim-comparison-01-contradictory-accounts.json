@@ -1,0 +1,52 @@
+{
+  "id": "claim-comparison-01-contradictory-accounts",
+  "task": "claim_comparison",
+  "scenario_category": "contradictory accounts from different sources",
+  "description": "Three outlets disagree both on the cause of a building collapse and on the number of people injured.",
+  "event": {
+    "title": "Partial building collapse under investigation",
+    "description": "Sources disagree on the cause and casualty count of a partial building collapse.",
+    "severity": "high"
+  },
+  "articles": [
+    {
+      "id": 81,
+      "source_id": 81,
+      "source": "Structural Safety News",
+      "title": "Engineers say age-related structural failure likely cause of collapse",
+      "summary": "Independent engineers cited by this outlet attribute the collapse to structural failure due to the building's age; 5 injured reported.",
+      "raw_content": "Independent structural engineers consulted by this outlet said the partial collapse of the downtown building was likely caused by age-related structural failure, noting the building was constructed over 80 years ago. Five people were reported injured, none critically.",
+      "published_at": 1743000000
+    },
+    {
+      "id": 82,
+      "source_id": 82,
+      "source": "City Engineering Desk",
+      "title": "City engineer points to recent renovation work as likely cause",
+      "summary": "The city's chief engineer, quoted directly, says ongoing renovation work is a more likely cause than the building's age.",
+      "raw_content": "The city's chief structural engineer, quoted directly, said recent renovation work at the site is a more likely cause of the collapse than the building's age alone, citing modifications made to load-bearing walls in the past year. The engineer did not rule out age as a contributing factor.",
+      "published_at": 1743004000
+    },
+    {
+      "id": 83,
+      "source_id": 83,
+      "source": "Metro Emergency Report",
+      "title": "Eight injured in building collapse, fire department says",
+      "summary": "The fire department's official injury count is eight, higher than the five reported elsewhere.",
+      "raw_content": "The fire department's official count puts the number of people injured in the building collapse at eight, higher than earlier reports. All eight were transported to area hospitals; none of the injuries are reported as life-threatening.",
+      "published_at": 1743006000
+    }
+  ],
+  "must_preserve_facts": [
+    "There is disagreement about the cause: structural age (source 81) vs. recent renovation work (source 82)",
+    "There is disagreement about the injury count: 5 (source 81) vs. 8 (source 83, official fire department count)"
+  ],
+  "must_not_invent": [
+    "A single definitive official cause (none of the sources agree, and no final determination is reported)",
+    "A single definitive injury count presented without noting the discrepancy"
+  ],
+  "known_ambiguities": [
+    "Both the cause and the casualty count are genuinely disputed across sources, not just reported with varying detail. The cause claim and the injury-count claim should likely each be tagged 'disputed', since they represent direct, substantive disagreement rather than mere evolving/unconfirmed reporting."
+  ],
+  "validation_notes": "Exercises validateClaimComparisons' status enum and source attribution across 3 distinct source_ids (81, 82, 83). A model that picks only one cause or one injury count without surfacing the disagreement would be a quality failure invisible to the schema validator, which only checks structural validity and article/source ID grounding."
+}

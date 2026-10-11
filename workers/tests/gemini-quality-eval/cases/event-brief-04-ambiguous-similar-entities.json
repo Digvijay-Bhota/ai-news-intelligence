@@ -1,0 +1,54 @@
+{
+  "id": "event-brief-04-ambiguous-similar-entities",
+  "task": "event_brief",
+  "scenario_category": "ambiguous event where two similar events could be confused",
+  "description": "Two unrelated companies with very similar names each announce layoffs in the same week. Tests whether a model keeps the two distinct real-world entities apart rather than merging them into one event.",
+  "event": {
+    "title": "Summit Biotech Inc. announces 400 layoffs",
+    "description": "Summit Biotech Inc. cuts 400 jobs amid a pipeline restructuring. A separate, similarly named company, Summit BioSciences Corp, announced unrelated layoffs the same week.",
+    "severity": "medium"
+  },
+  "articles": [
+    {
+      "id": 31,
+      "source_id": 31,
+      "source": "BioIndustry Report",
+      "title": "Summit Biotech Inc. to cut 400 jobs in pipeline restructuring",
+      "summary": "Summit Biotech Inc. announces 400 layoffs as it narrows its drug development pipeline.",
+      "raw_content": "Summit Biotech Inc. announced it will lay off 400 employees, about 15% of its workforce, as part of a restructuring that narrows its drug development pipeline to two late-stage programs. CEO Priya Nandakumar said the decision reflects a strategic focus on the company's most advanced candidates. The layoffs are expected to be completed within two months.",
+      "published_at": 1738000000
+    },
+    {
+      "id": 32,
+      "source_id": 32,
+      "source": "Pharma Workforce Weekly",
+      "title": "Summit Biotech confirms 400-person reduction, cites pipeline focus",
+      "summary": "Second outlet corroborates Summit Biotech Inc.'s 400-job layoff and pipeline-focus rationale.",
+      "raw_content": "Summit Biotech Inc. confirmed layoffs affecting 400 employees as the company narrows its research pipeline to two late-stage drug candidates. A company spokesperson said affected employees would receive severance and job placement support. The company's stock was largely unchanged following the announcement.",
+      "published_at": 1738005000
+    },
+    {
+      "id": 33,
+      "source_id": 33,
+      "source": "Regional Business Journal",
+      "title": "Summit BioSciences Corp cuts 150 jobs at manufacturing site",
+      "summary": "An unrelated company with a similar name, Summit BioSciences Corp, announces a separate, smaller layoff at a manufacturing facility.",
+      "raw_content": "Summit BioSciences Corp, a contract manufacturer unrelated to drug developer Summit Biotech Inc., announced it is cutting 150 jobs at its regional manufacturing facility, citing reduced demand from client companies. The company said the facility will continue to operate at reduced capacity. Summit BioSciences Corp is not affiliated with Summit Biotech Inc., which separately announced its own layoffs the same week.",
+      "published_at": 1738008000
+    }
+  ],
+  "must_preserve_facts": [
+    "Summit Biotech Inc. laid off 400 employees as part of a pipeline restructuring",
+    "Summit BioSciences Corp separately laid off 150 employees at a manufacturing facility",
+    "The two companies are explicitly unrelated to each other (per article 33)"
+  ],
+  "must_not_invent": [
+    "A combined layoff figure (e.g. '550 jobs cut') that merges the two distinct companies' actions",
+    "Any claim that the two companies are affiliated, related, or part of the same event",
+    "A single shared cause for both companies' layoffs (their stated reasons are different and unrelated)"
+  ],
+  "known_ambiguities": [
+    "Summit Biotech Inc. and Summit BioSciences Corp are different, unrelated companies with confusingly similar names announcing unrelated layoffs in the same week. Article 33 is deliberately included in this case's evidence set (all three article IDs are valid grounding targets) to test whether a model correctly keeps the two companies separate as described, rather than conflating them into a single 400+150 event. This is a semantic entity-identity error the mechanical validator cannot detect — it can only confirm article_id membership, not whether the model correctly distinguished the two entities."
+  ],
+  "validation_notes": "All three article IDs (31, 32, 33) are valid grounding targets for source_references, so a brief that incorrectly merges the two companies will still pass schema/grounding validation. Catching the entity-conflation error requires human review against must_not_invent above."
+}

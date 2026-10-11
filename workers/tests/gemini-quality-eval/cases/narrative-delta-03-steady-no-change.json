@@ -1,0 +1,55 @@
+{
+  "id": "narrative-delta-03-steady-no-change",
+  "task": "narrative_delta",
+  "scenario_category": "a story that changes materially over time (negative case: no material change)",
+  "description": "A trial proceeds through routine procedural steps with no substantive new developments. Tests whether the model avoids inventing a sense of change when none occurred.",
+  "event": {
+    "title": "Trial proceedings continue in fraud case",
+    "description": "Ongoing criminal fraud trial continues with routine procedural steps.",
+    "severity": "low"
+  },
+  "articles": [
+    {
+      "id": 61,
+      "source_id": 61,
+      "source": "Courthouse Reporter",
+      "title": "Fraud trial recesses, set to resume next week",
+      "summary": "The trial recessed for the week with no new testimony reported; next hearing date set.",
+      "raw_content": "The fraud trial of former finance executive Marcus Idelle recessed Friday afternoon after a routine scheduling conference. The judge set the next hearing date for the following Monday. No new testimony or evidence was presented during Friday's brief session.",
+      "published_at": 1741000000
+    }
+  ],
+  "narrative_delta_context": {
+    "previous_brief": {
+      "summary": "A criminal fraud trial against former finance executive Marcus Idelle is underway, having begun with opening statements.",
+      "why_it_matters": "The trial's outcome could affect oversight of the company's finance practices.",
+      "key_developments": [
+        "Opening statements were delivered in the fraud trial against Marcus Idelle."
+      ],
+      "key_entities": [
+        { "name": "Marcus Idelle", "type": "person", "relevance": "Defendant in the fraud trial" }
+      ],
+      "uncertainties": [
+        "The trial's outcome and duration remain unknown."
+      ],
+      "source_references": [
+        { "article_id": 61, "claim_context": "Opening statements delivered" }
+      ]
+    },
+    "previous_version": 1,
+    "current_version": 2
+  },
+  "must_preserve_facts": [
+    "The trial recessed with no new testimony or evidence presented",
+    "A next hearing date was set"
+  ],
+  "must_not_invent": [
+    "Any verdict or trial outcome (the trial is still ongoing)",
+    "New testimony content (none was presented)",
+    "A sense of significant development or turning point that did not actually occur"
+  ],
+  "known_ambiguities": [
+    "This case is a deliberate 'no real change' control: the only new fact is a procedural recess and a new hearing date. A good narrative delta should reflect this directly in its summary (per prompt rule 4: 'if there is no meaningful change, state in summary that the core story remains steady') and should NOT pad out newly_confirmed, changed_claims, or open_questions with invented significance."
+  ],
+  "validation_notes": "Expect unchanged_core to be populated and newly_confirmed/changed_claims/removed_or_no_longer_supported to be empty or minimal. A delta that manufactures dramatic 'changes' from a routine recess would be a quality failure the schema validator cannot catch — only human review (usefulness/invented-claims dimensions) can."
+}

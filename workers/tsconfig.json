@@ -22,6 +22,6 @@
       "~/*": ["src/*"]
     }
   },
-  "include": ["src/**/*", "tests/**/*", "vitest.config.ts"],
+  "include": ["src/**/*", "tests/**/*", "scripts/**/*.ts", "vitest.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

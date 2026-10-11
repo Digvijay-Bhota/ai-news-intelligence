@@ -1,0 +1,64 @@
+{
+  "id": "narrative-delta-04-corroboration-evolves",
+  "task": "narrative_delta",
+  "scenario_category": "claims with different levels of corroboration",
+  "description": "Merger talks move from single-sourced/unconfirmed to multi-sourced/confirmed, while a new leadership detail remains disputed between the two newer sources.",
+  "event": {
+    "title": "Merger talks between Delacroix Foods and Harlan Grocers",
+    "description": "Reports of merger talks between two grocery chains evolve from unconfirmed to multi-source confirmed, with one disputed detail.",
+    "severity": "medium"
+  },
+  "articles": [
+    {
+      "id": 71,
+      "source_id": 71,
+      "source": "Retail Business Today",
+      "title": "Delacroix-Harlan merger talks confirmed by two sources",
+      "summary": "Two independent sources now confirm merger talks; current CEO expected to lead combined company.",
+      "raw_content": "Merger talks between Delacroix Foods and Harlan Grocers, previously reported based on a single unconfirmed source, are now confirmed independently by two people familiar with the discussions. Both sources said the talks are in early stages. One of the two sources said Delacroix's current CEO, Renata Boyle, is expected to lead the combined company if a deal is reached.",
+      "published_at": 1742000000
+    },
+    {
+      "id": 72,
+      "source_id": 72,
+      "source": "Grocery Trade Journal",
+      "title": "Merger talks confirmed; leadership question still open, sources say",
+      "summary": "A second outlet corroborates the talks but says leadership of a combined company remains undecided.",
+      "raw_content": "A second set of sources corroborated that Delacroix Foods and Harlan Grocers are in early merger discussions. However, this outlet's sources said no decision has been made about who would lead a combined company if a deal were completed, directly disputing a report that Delacroix's CEO is expected to take that role.",
+      "published_at": 1742006000
+    }
+  ],
+  "narrative_delta_context": {
+    "previous_brief": {
+      "summary": "A single unconfirmed source reported that Delacroix Foods and Harlan Grocers may be discussing a merger. Neither company has commented.",
+      "why_it_matters": "A merger would combine two significant regional grocery chains.",
+      "key_developments": [
+        "An unconfirmed, single-sourced report describes possible merger talks between Delacroix Foods and Harlan Grocers."
+      ],
+      "key_entities": [
+        { "name": "Delacroix Foods", "type": "organization", "relevance": "Reported party to the merger talks" },
+        { "name": "Harlan Grocers", "type": "organization", "relevance": "Reported party to the merger talks" }
+      ],
+      "uncertainties": [
+        "Whether the merger talks are actually occurring is unconfirmed by a second source."
+      ],
+      "source_references": [
+        { "article_id": 71, "claim_context": "Single-source report of possible merger talks" }
+      ]
+    },
+    "previous_version": 1,
+    "current_version": 2
+  },
+  "must_preserve_facts": [
+    "The existence of merger talks is now confirmed by two independent sources (an upgrade from the previous single-source report)",
+    "Whether Delacroix's current CEO would lead a combined company is disputed between the two newer sources"
+  ],
+  "must_not_invent": [
+    "Final merger terms, price, or a signed deal (not reported — talks are described as early-stage)",
+    "A resolved answer to the leadership question (it is explicitly disputed, not settled)"
+  ],
+  "known_ambiguities": [
+    "The leadership detail is reported differently by article 71 (CEO expected to lead) and article 72 (no decision made, directly disputing article 71). A good delta should flag this as a disputed/uncertain point (e.g. in open_questions or as a changed_claim with an appropriate change_type) rather than asserting either version as settled fact."
+  ],
+  "validation_notes": "Tests that the model correctly treats 'confirmation strength increasing' (single-source to two-source) as a genuine newly_confirmed development, while NOT over-confidently resolving the leadership detail that the two new sources actually disagree on."
+}

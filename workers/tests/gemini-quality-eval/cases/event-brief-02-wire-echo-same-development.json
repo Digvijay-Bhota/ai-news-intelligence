@@ -1,0 +1,54 @@
+{
+  "id": "event-brief-02-wire-echo-same-development",
+  "task": "event_brief",
+  "scenario_category": "several articles describing the same development",
+  "description": "Two outlets republish the same wire-service text about a regulatory fine; a third outlet adds one genuinely new detail. Tests whether a model treats wire-service reprints as independent confirmation.",
+  "event": {
+    "title": "Regulators fine Atlas Retail Holdings over breach-disclosure delay",
+    "description": "Atlas Retail Holdings is fined after a delay in disclosing a customer data breach.",
+    "severity": "medium"
+  },
+  "articles": [
+    {
+      "id": 11,
+      "source_id": 11,
+      "source": "National Wire Service (via Daybreak Business)",
+      "title": "Atlas Retail Holdings fined over delayed breach disclosure",
+      "summary": "Regulator fines Atlas Retail Holdings for delaying disclosure of a data breach affecting customers.",
+      "raw_content": "Federal regulators have fined Atlas Retail Holdings for failing to promptly disclose a data breach that exposed customer information. The regulator said the company waited several months longer than required before notifying affected customers. Atlas Retail Holdings said it is reviewing its data-handling procedures. The company said millions of customer records may have been affected, though it did not provide an exact figure.",
+      "published_at": 1736000000
+    },
+    {
+      "id": 12,
+      "source_id": 12,
+      "source": "National Wire Service (via Midtown Herald)",
+      "title": "Atlas Retail Holdings fined over delayed breach disclosure",
+      "summary": "Same wire-service report as above, republished under a different outlet name.",
+      "raw_content": "Federal regulators have fined Atlas Retail Holdings for failing to promptly disclose a data breach that exposed customer information. The regulator said the company waited several months longer than required before notifying affected customers. Atlas Retail Holdings said it is reviewing its data-handling procedures. The company said millions of customer records may have been affected, though it did not provide an exact figure.",
+      "published_at": 1736000900
+    },
+    {
+      "id": 13,
+      "source_id": 13,
+      "source": "Regulatory Watch Daily",
+      "title": "Atlas Retail Holdings fine set at $4.2 million, filing shows",
+      "summary": "An original follow-up reporting the specific fine amount, not present in the wire report.",
+      "raw_content": "A regulatory filing reviewed by Regulatory Watch Daily shows the fine against Atlas Retail Holdings over its delayed breach disclosure was set at $4.2 million. The filing does not specify how many customers were affected. Atlas Retail Holdings has not commented beyond its earlier statement that it is reviewing its data-handling procedures.",
+      "published_at": 1736010000
+    }
+  ],
+  "must_preserve_facts": [
+    "Atlas Retail Holdings was fined for delaying disclosure of a data breach",
+    "The fine amount was $4.2 million",
+    "The company said it is reviewing its data-handling procedures"
+  ],
+  "must_not_invent": [
+    "An exact number of affected customers (only 'millions', not a precise figure, is reported)",
+    "Any executive resignation or departure (not reported by any source)",
+    "A specific cause of the breach itself (not described — only the disclosure delay is)"
+  ],
+  "known_ambiguities": [
+    "Articles 11 and 12 are the identical wire-service text republished under two outlet names (same underlying report, not independent corroboration). A good brief's source_references and treatment of corroboration should not be inflated by counting this as two independent confirmations; article 13 is the only genuinely new, independent detail (the fine amount)."
+  ],
+  "validation_notes": "Exercises the prompt's rule 4 ('If multiple articles originate from the same wire service or outlet, avoid treating them as separate independent confirmations'). Mechanically, all three article IDs remain valid citation targets — distinguishing real vs. duplicate corroboration here is an editorial judgment call for human review, not something the schema validator can detect."
+}

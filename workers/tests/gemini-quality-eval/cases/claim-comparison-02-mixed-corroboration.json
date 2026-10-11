@@ -1,0 +1,52 @@
+{
+  "id": "claim-comparison-02-mixed-corroboration",
+  "task": "claim_comparison",
+  "scenario_category": "claims with different levels of corroboration",
+  "description": "A single product-recall event contains one well-corroborated claim, one consensus claim, and one thinly sourced claim that should not be elevated to the same confidence level.",
+  "event": {
+    "title": "Household appliance recall announced",
+    "description": "A manufacturer recalls a kitchen appliance; some details are well-confirmed, others are only lightly sourced.",
+    "severity": "medium"
+  },
+  "articles": [
+    {
+      "id": 91,
+      "source_id": 91,
+      "source": "Consumer Safety Wire",
+      "title": "Brightline Appliances recalls 220,000 units of countertop ovens",
+      "summary": "Confirmed via company statement: the recall covers 220,000 units and is voluntary.",
+      "raw_content": "Brightline Appliances announced a voluntary recall of approximately 220,000 countertop ovens due to a fire risk in the heating element. The company said the recall is voluntary and customers can receive a full refund or replacement. The recall was confirmed in a company press release.",
+      "published_at": 1744000000
+    },
+    {
+      "id": 92,
+      "source_id": 92,
+      "source": "Home Goods Report",
+      "title": "Brightline confirms 220,000-unit voluntary recall",
+      "summary": "Second outlet confirms the same recall scope and voluntary nature via the same company statement.",
+      "raw_content": "Confirming Brightline Appliances' press release, this outlet verified the recall covers 220,000 countertop ovens and is voluntary, with refund or replacement options offered to affected customers.",
+      "published_at": 1744002000
+    },
+    {
+      "id": 93,
+      "source_id": 93,
+      "source": "Consumer Litigation Tracker",
+      "title": "Sources say recall driven by pending injury lawsuit, company has not confirmed",
+      "summary": "A single outlet, citing an anonymous source, claims the recall was prompted by a specific lawsuit; not corroborated or confirmed by the company.",
+      "raw_content": "According to a single person described as familiar with internal discussions, the recall decision was driven in part by a pending lawsuit alleging a burn injury from one of the ovens. Brightline Appliances has not confirmed this account, and no other outlet has corroborated it. The person did not provide details about the lawsuit.",
+      "published_at": 1744005000
+    }
+  ],
+  "must_preserve_facts": [
+    "The recall covers approximately 220,000 units and is voluntary (confirmed by company statement and two outlets)",
+    "The claim that a specific lawsuit drove the recall decision comes from a single anonymous source and has not been confirmed by the company or corroborated elsewhere"
+  ],
+  "must_not_invent": [
+    "Specific details of the alleged lawsuit (none are given in the source)",
+    "Confirmation of the lawsuit claim by the company (explicitly not confirmed)"
+  ],
+  "known_ambiguities": [
+    "The recall scope/voluntary-nature claim (articles 91, 92) is well-corroborated and should likely be tagged 'consensus'. The lawsuit-motivation claim (article 93) is thinly and anonymously sourced with no corroboration and should be tagged 'unconfirmed', not elevated to the same confidence level as the recall-scope claim just because both appear in the same event."
+  ],
+  "validation_notes": "Tests that a model applies different status values ('consensus' vs 'unconfirmed') to different claims WITHIN the same event rather than assigning a single uniform confidence level to everything reported about this event."
+}
