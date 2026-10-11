@@ -1,11 +1,15 @@
+/// <reference types="vite/client" />
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { route } from '../src/router';
 import { createMockEnv, createMockD1Database, createMockKVNamespace, TEST_SECRET } from './setup';
 import { buildSignedRequest } from '../src/utils/hmac';
 import { computeEventChangeCursor, evaluateEventDelta } from '../src/utils/change-engine';
 import type { ApiResponse, PersonalizedFeedResult, SinceLastSeenFeedResult, UserEventRead } from '../src/types';
+// fs.readFileSync is not implemented in the Workers test runtime; load these
+// static files the same way brief-generation-lease.test.ts and
+// gemini-escalation.test.ts already do, via Vite's ?raw import.
+import migrationSql from '../../d1/migrations/0005_since_last_seen.sql?raw';
+import schemaSql from '../../d1/schema.sql?raw';
 
 describe('Phase 11C — Since-Last-Seen Intelligence', () => {
   const baseD1 = createMockD1Database(true);
@@ -45,8 +49,7 @@ describe('Phase 11C — Since-Last-Seen Intelligence', () => {
   // --------------------------------------------------------------------------
   describe('Migration 0005 — Schema Integrity & Compatibility', () => {
     it('migration file exists and adheres to SQLite ALTER TABLE non-constant default restriction', () => {
-      const migrationPath = join(__dirname, '../../d1/migrations/0005_since_last_seen.sql');
-      const content = readFileSync(migrationPath, 'utf8');
+      const content = migrationSql;
 
       // SQLite ALTER TABLE ADD COLUMN requires constant default (0), then backfill
       expect(content).toContain('ALTER TABLE users');
@@ -66,8 +69,7 @@ describe('Phase 11C — Since-Last-Seen Intelligence', () => {
     });
 
     it('d1/schema.sql includes Phase 11C schema additions', () => {
-      const schemaPath = join(__dirname, '../../d1/schema.sql');
-      const content = readFileSync(schemaPath, 'utf8');
+      const content = schemaSql;
 
       expect(content).toContain('acknowledged_through');
       expect(content).toContain('user_event_reads');

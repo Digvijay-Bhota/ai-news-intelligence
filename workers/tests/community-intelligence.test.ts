@@ -71,7 +71,8 @@ describe('Community Intelligence Metrics', () => {
   it('Internal generation rejects unauthorized', async () => {
     const auth: AuthContext = { userId: '1', identifier: 'x', scopes: ['user'], isInternal: true };
     const env = { DB: {} } as unknown as Env;
-    await expect(handleGenerateCommunityIntelligence(new Request('http://test'), env, auth, 'hash')).rejects.toThrowError('Requires internal/admin scope');
+    // requireScopes() throws this exact message at every call site in the router (see src/middleware/auth.ts).
+    await expect(handleGenerateCommunityIntelligence(new Request('http://test'), env, auth, 'hash')).rejects.toThrowError('Required scopes: internal, admin');
   });
 
   it('Public API returns clean snapshot', async () => {

@@ -54,9 +54,17 @@ describe('Community Signals DB', () => {
             },
             batch: async (statements: any[]) => {
                 const results = [];
+                let lastChanges = 1;
                 for (const st of statements) {
                     if (st.statement.q.includes('community_signal_reviews') && st.statement.currentBinds.includes('audit_fail')) {
                         throw new Error('Audit insert failed');
+                    }
+                    // Mirrors real SQLite: a statement guarded by "WHERE (SELECT changes() > 0)"
+                    // (see transitionSignalState in src/db/community-signals.ts) is sent to the
+                    // database but inserts no row when the preceding statement changed nothing.
+                    if (st.statement.q.includes('WHERE (SELECT changes() > 0)') && lastChanges === 0) {
+                        results.push({ success: true, meta: { changes: 0 } });
+                        continue;
                     }
                     executedStatements.push({ q: st.statement.q, args: st.statement.currentBinds });
                     let changes = 1;
@@ -64,6 +72,7 @@ describe('Community Signals DB', () => {
                         changes = 0;
                     }
                     results.push({ success: true, meta: { changes } });
+                    lastChanges = changes;
                 }
                 return results;
             }
