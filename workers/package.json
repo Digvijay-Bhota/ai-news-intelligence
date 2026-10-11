@@ -9,7 +9,8 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:ledger": "vitest run --config vitest.ledger.config.ts"
   },
   "dependencies": {
     "hono": "^4.5.0"

@@ -112,6 +112,37 @@ rather than fabricating a result.
 
 ---
 
+## Comparison runner (implemented; not yet executed)
+
+`scripts/gemini-quality-comparison-runner.ts` implements the controlled
+comparison proposed below. It calls the real production generators once per
+(case, model) pair, for at most 24 requests in total.
+
+```bash
+# Dry-run (default): read-only, no network, no API key, no ledger writes.
+npx vite-node scripts/gemini-quality-comparison-runner.ts
+# Live run — requires separate approval and GEMINI_QUALITY_EVAL_API_KEY
+# (GEMINI_API_KEY is never used as a fallback). Note the `--`.
+npx vite-node scripts/gemini-quality-comparison-runner.ts -- --execute
+```
+
+- **Request ledger location:** `~/.local/state/ai-news-intelligence/gemini-quality-eval/`
+  (resolved from the OS user database, not `$HOME`). It holds the 24 budget
+  slots, per-pair reservations, and run-logs, and is shared by every
+  worktree, clone, `--eval-root`, and `--experiment-id` on this machine. No
+  flag or environment variable relocates it. Outputs still go to this
+  directory's `outputs/`.
+- A reservation is written and fsync'd before its request is sent, and is
+  never refunded. A failed pair is never retried, and an interrupted
+  ("ambiguous") pair is never re-sent.
+- **Limitation:** this is a local file ledger. It cannot coordinate usage
+  across different physical machines or OS user accounts; each of those
+  would have its own 24-request budget.
+- Tests (mocked network, temporary ledger; never the real one):
+  `npm run test:ledger` and `npx vitest run tests/gemini-quality-eval-runner.test.ts`.
+
+---
+
 ## Phase 5 — proposal for a future, separately approved comparison
 
 This is a proposal only. **Nothing below is executed by this phase.**
