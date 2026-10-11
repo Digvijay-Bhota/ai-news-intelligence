@@ -1,17 +1,24 @@
-# Gemini quality-evaluation harness (Phase 1 — offline, no model calls)
+# Gemini quality-evaluation harness and comparison runner
 
-This directory prepares a reproducible, **offline** framework to later
-compare `gemini-3.5-flash-lite` (the default free-tier model) against
+This directory holds a reproducible framework for comparing
+`gemini-3.5-flash-lite` (the default free-tier model) against
 `gemini-3.6-flash` (the paid model, reached today only via the bounded
 escalation path or explicit direct routing — see
 `workers/src/types.ts`'s `GEMINI_MODEL_ROUTES` comment) for the three
 multi-article synthesis tasks: event briefs, narrative deltas, and claim
 comparisons.
 
-**This phase does not call either model and does not claim either model is
-better.** It only builds the benchmark, the rubric, and the tooling needed
-to run and record that comparison once a separate, explicitly approved
-experiment (Phase 5 below) actually generates outputs to review.
+It has two parts:
+
+- **Phase 1 — offline harness:** the 12 benchmark cases, the human scoring
+  rubric, and the report/score tool. None of these ever calls a model.
+- **Phase 2 — comparison runner** (see "Comparison runner" below): can make
+  at most 24 real Gemini requests (12 cases × 2 models). It is implemented
+  and tested with mocked network calls only. **It has not been executed.**
+  A live run (`--execute`) requires separate, explicit approval and a
+  dedicated API key.
+
+Nothing here claims either model is better.
 
 ## What exists today
 
@@ -21,15 +28,30 @@ tests/gemini-quality-eval/
                          real validateEventBrief / validateNarrativeDelta /
                          validateClaimComparisons from src/tasks/*— never a
                          reimplementation. No network access, no fs.
+  runner.ts              Pure runner logic: plan, run-log records, pair-state
+                         classification, redaction. No fs, no network.
+  ledger.ts              Request-ledger primitives: 24-slot budget,
+                         reservations, write-once fsync'd files.
+  ledger-state.ts        Verified reads, report/score sources, offline
+                         reconciliation.
+  test-support.ts        Shared fixtures for the runner/ledger tests.
   rubric.md              The human scoring rubric (6 dimensions; see below).
   cases/                 12 synthetic benchmark fixtures (see below).
-  sample-outputs/        Hand-written fixtures used only by this phase's own
+  sample-outputs/        Hand-written fixtures used only by the harness's own
                          tests, clearly labeled — NOT real model output.
-  outputs/                Empty. Where real saved model outputs will go once
-                         Phase 5 is approved and run.
-  scores/                 Empty. Where human reviewer scorecards will go.
-tests/gemini-quality-eval.test.ts   Offline tests for the harness itself.
-scripts/gemini-quality-eval.ts       The CLI tool (see "Using the tool" below).
+  outputs/               Local convenience copies of verified, valid outputs,
+                         written by the runner. Never authoritative: report
+                         and score read the request ledger. Empty until run.
+  scores/                Human reviewer scorecards (per checkout). Empty.
+tests/gemini-quality-eval.test.ts        Offline tests for the harness.
+tests/gemini-quality-eval-*.test.ts,
+tests/gemini-quality-comparison-runner*.test.ts
+                                         Runner/ledger tests (npm run test:ledger).
+scripts/gemini-quality-eval.ts           Report/score tool ("Using the tool").
+scripts/run-gemini-quality-comparison.ts Runner entry point ("Comparison runner").
+scripts/gemini-quality-comparison-runner.ts
+                                         Runner implementation; importing it
+                                         never runs anything.
 ```
 
 ## The 12 benchmark cases
@@ -83,12 +105,12 @@ cd workers
 # Confirm every case fixture carries the required documentation.
 npx vite-node scripts/gemini-quality-eval.ts -- check-cases
 
-# Build and print the comparison report (honest "missing" for every
-# (case, model) pair until real outputs exist in outputs/).
+# Build and print the comparison report from the verified outputs in the
+# shared request ledger (honest "missing" for every unattempted pair).
 npx vite-node scripts/gemini-quality-eval.ts -- report
 
-# Record a human score for a (case, model) pair that already has a saved,
-# mechanically-valid output in outputs/.
+# Record a human score for a (case, model) pair that has a verified,
+# mechanically-valid saved output in the request ledger.
 npx vite-node scripts/gemini-quality-eval.ts -- score <case-id> <model> \
   --reviewer "<name>" --factual <1-5> --preservation <1-5> --unsupported <1-5> \
   --uncertainty <1-5> --usefulness <1-5> --verdict <pass|fail|needs_review> \
@@ -112,18 +134,87 @@ rather than fabricating a result.
 
 ---
 
-## Phase 5 — proposal for a future, separately approved comparison
+## Comparison runner (implemented; not yet executed)
 
-This is a proposal only. **Nothing below is executed by this phase.**
+`scripts/gemini-quality-comparison-runner.ts` implements the controlled
+comparison proposed below. It calls the real production generators once per
+(case, model) pair, for at most 24 requests in total. Its executable entry
+point is the wrapper `scripts/run-gemini-quality-comparison.ts`; importing the
+implementation module never runs anything.
+
+```bash
+# Dry-run (default): read-only, no network, writes nothing, never uses a key.
+npx vite-node scripts/run-gemini-quality-comparison.ts
+# Offline recovery / local copies: no key, no requests (see below).
+npx vite-node scripts/run-gemini-quality-comparison.ts -- --reconcile
+# Live run — requires separate approval and GEMINI_QUALITY_EVAL_API_KEY
+# (GEMINI_API_KEY is never used as a fallback). Note the `--`.
+npx vite-node scripts/run-gemini-quality-comparison.ts -- --execute
+```
+
+- **Request ledger:** `~/.local/state/ai-news-intelligence/gemini-quality-eval/`
+  (resolved from the OS user database, not `$HOME`; no flag or environment
+  variable relocates it). Shared by every worktree, clone and `--eval-root` on
+  this machine, and keyed only by (case, model) — there is no experiment ID,
+  so no checkout can request a pair that was ever reserved. Layout:
+  `LEDGER_FORMAT`, `request-budget/` (24 slot files), `reservations/`,
+  `run-logs/`, `outputs/` (valid outputs), `rejected-outputs/` (model text
+  that failed validation). A ledger in any other layout (including the
+  per-experiment layout of the first runner version) is refused, never
+  migrated or deleted.
+- **Write order per pair:** reservation (before the request, never refunded)
+  → request (at most one; no retries of any kind) → the model's output →
+  run-log recording that output's SHA-256 (the commit point). A valid output
+  goes to the ledger's `outputs/` and then a convenience copy to this
+  checkout's `outputs/`. Output that fails mechanical validation (schema,
+  grounding, or unparseable JSON) is preserved as the model's exact raw text
+  in `rejected-outputs/` and recorded as `invalid` with its validation
+  errors — never discarded, never treated as valid, never retried. Every
+  ledger file is published atomically, write-once, and fsync'd. Output that
+  would contain the API key is never stored.
+- **States:** `not_attempted`, `ambiguous` (reserved, no outcome — never
+  re-sent), `incomplete` (output saved, completion not recorded),
+  `completed`, `invalid` (output failed validation; preserved for review),
+  `failed` (no model output, e.g. HTTP/network error; never retried), and
+  `corrupt` (impossible combination or SHA-256 mismatch — reported
+  precisely; `--execute` and `--reconcile` refuse to proceed, nothing is
+  reset or repeated).
+- **`--reconcile`** (also run automatically at the start of `--execute`)
+  completes `incomplete` pairs offline — a saved valid output only if it
+  re-validates, a saved rejected output only if it still fails validation —
+  and copies every verified valid output into this checkout's `outputs/`.
+  It never overwrites a local file; a differing one is reported and left
+  alone.
+- **Report and scoring** (`scripts/gemini-quality-eval.ts`) read only
+  hash-verified outputs from the ledger, so any checkout — even one with an
+  empty `outputs/` — reports the same results, and a local file is never
+  reported or scored as valid. Preserved invalid outputs are reported as
+  `invalid` with their validation errors and ledger path; they cannot be
+  scored. `--outputs-dir` was removed for this reason.
+- **Limitation:** this is a local file ledger. It cannot coordinate usage
+  across different physical machines or OS user accounts; each of those
+  would have its own 24-request budget.
+- Tests (mocked network, temporary ledgers; the real one is refused under
+  Vitest): `npm run test:ledger` and
+  `npx vitest run tests/gemini-quality-eval-runner.test.ts`. Workers CI runs
+  both, and then fails if the real user-level ledger exists.
+
+---
+
+## Experiment design (implemented by the comparison runner)
+
+This section records the design the comparison runner implements. **The
+experiment has not been run;** executing it still requires separate,
+explicit approval.
 
 ### Scope
 - All 12 cases above, run once against each model for each case's task —
-  **24 total Gemini API requests maximum** (12 cases × 2 models). No
-  retries beyond what the existing model-router already does for a genuine
-  transient failure; a request that fails for a reason unrelated to the
-  experiment (e.g. a transient 5xx) may be attempted again, but the
-  experiment must stop and report rather than silently retrying past this
-  cap.
+  **24 total Gemini API requests maximum** (12 cases × 2 models).
+- **No retries of any kind.** Each pair is requested at most once; a
+  failed, invalid or interrupted request keeps its reservation and is never
+  re-sent, even after a transient error such as a 5xx. The runner calls the
+  generators directly, not through the model router, so the router's
+  retries and model fallbacks do not apply.
 - Model per task: for every case, the "Lite" output is generated with
   `gemini-3.5-flash-lite` (the task's existing free-tier default) and the
   comparison output is generated with `gemini-3.6-flash`, using the exact
@@ -138,34 +229,43 @@ The production automatic-escalation budget
 `GEMINI_MODEL_ROUTES` call to `gemini-3.6-flash` — that is deliberate,
 documented, operator-selected routing with no daily cap of its own (see
 `workers/src/types.ts`). This experiment calls `gemini-3.6-flash` directly
-for benchmarking, so it **must not rely on the production escalation budget
-as a safety net** — it has none here. Instead, the experiment's own runner
-must enforce its own hard ceiling (24 requests, see above) independently of
-and in addition to anything in `gemini-escalation.ts`, and must stop and
-report immediately on reaching it rather than continuing.
+for benchmarking, so it **does not rely on the production escalation budget
+as a safety net** — it has none here. Instead, the runner enforces its own
+hard ceiling (24 requests, see above) through the shared request ledger,
+independently of and in addition to anything in `gemini-escalation.ts`, and
+stops and reports as soon as it is reached.
 
-### How outputs will be stored and reviewed
-- Raw parsed JSON outputs saved to `tests/gemini-quality-eval/outputs/` as
-  `<case-id>.<model>.json`, exactly as the real harness already expects.
+### How outputs are stored and reviewed
+- Valid outputs: the authoritative, SHA-256-verified copy is in the request
+  ledger's `outputs/<case-id>.<model>.json`; a convenience copy is written to
+  `tests/gemini-quality-eval/outputs/` in the checkout that runs or
+  reconciles.
+- Outputs that fail mechanical validation: the model's exact raw text is
+  preserved in the ledger's `rejected-outputs/<case-id>.<model>.rejected.txt`
+  and reported as `invalid`, with the validation errors from its run-log.
+  Reviewers can read it there; it is not scored with the rubric.
 - Human review recorded via the existing `score` CLI command into
-  `tests/gemini-quality-eval/scores/`, following `rubric.md`.
+  `tests/gemini-quality-eval/scores/`, following `rubric.md`. Only a
+  verified, mechanically valid output can be scored.
 - At least one reviewer per `(case, model)` pair; cases where the rubric's
   dimension 3 (unsupported claims) is ambiguous should get a second,
   independent reviewer before a final verdict is recorded.
 
-### How quotas, cost, and usage will be bounded
-- The 24-request hard cap above is enforced by the experiment's own runner
-  script (separate from and in addition to production's escalation budget),
-  which must refuse to issue request 25.
-- The runner must use a dedicated, clearly-labeled API key/project (never
-  the production `GEMINI_API_KEY`) so usage is separately attributable and
-  cannot silently draw down the production project's quota.
-- The runner must log each request's case ID, model, and timestamp (never
-  the API key, never raw request/response bodies beyond what's saved to
-  `outputs/`) so the 24-request ceiling is independently auditable after
-  the fact.
+### How quotas, cost, and usage are bounded
+- The 24-request hard cap above is enforced by the runner's request ledger
+  (separate from and in addition to production's escalation budget), which
+  refuses request 25.
+- The runner uses only `GEMINI_QUALITY_EVAL_API_KEY`, a dedicated,
+  clearly-labeled key/project (never the production `GEMINI_API_KEY`), so
+  usage is separately attributable and cannot silently draw down the
+  production project's quota.
+- Each attempt's run-log records the case ID, model, timestamps, outcome,
+  response metadata (status, finish reason, token usage) and the saved
+  output's SHA-256 — never the API key and never the request. The only
+  response content stored is the model's output itself (valid or rejected),
+  so the 24-request ceiling is independently auditable after the fact.
 
-### How the experiment will remain isolated from production
+### How the experiment remains isolated from production
 - It must run from an isolated worktree/branch, never from a branch that
   gets merged to `main` without separate review of its results.
 - It must not touch production D1, KV, Cloudflare configuration, or
@@ -178,7 +278,7 @@ report immediately on reaching it rather than continuing.
   table at all (it calls `gemini-3.6-flash` directly, not through the
   escalation path).
 
-### How results will be evaluated without assuming Gemini 3.6 is better
+### How results are evaluated without assuming Gemini 3.6 is better
 - The comparison report and rubric treat the two models symmetrically: the
   same 12 cases, the same rubric, the same reviewer pool, applied blind to
   which model produced which saved output where practical (e.g. by
@@ -192,6 +292,6 @@ report immediately on reaching it rather than continuing.
   representative claim about production traffic; any write-up of results
   must say so explicitly, consistent with this phase's own rubric.md.
 
-This proposal requires separate, explicit approval (including provisioning
-a dedicated API key/project and confirming the 24-request cap) before any
-request is made.
+Running the experiment (`--execute`) requires separate, explicit approval
+(including provisioning a dedicated API key/project and confirming the
+24-request cap) before any request is made.
