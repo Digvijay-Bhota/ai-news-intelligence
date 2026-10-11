@@ -10,6 +10,7 @@ import { computeArticleFingerprint, generateAndSaveEventBrief } from './brief-ge
 import { generateAndSaveNarrativeDelta } from './narrative-delta-generator';
 import { generateAndSaveClaimComparisons } from './claim-comparison-generator';
 import { generateCommunitySignalsForEvent } from './community-signal-generator';
+import { GeminiDeferredError } from './model-router';
 
 const MAX_SOURCES = 10;
 const MAX_ARTICLES = 20;
@@ -68,18 +69,24 @@ export async function runPipeline(env: Env): Promise<void> {
     // 2. Processing (Pending)
     const { articles } = await db.listArticles({ status: 'pending', limit: 100 });
     let totalAttempts = 0;
+    // An article gets at most one processing attempt per run, and a deferral
+    // (no Gemini model currently available) ends article processing for the run.
+    const attemptedThisRun = new Set<number>();
+    let deferred = false;
 
     for (const article of articles) {
-      if (totalAttempts >= MAX_ARTICLES) break;
+      if (totalAttempts >= MAX_ARTICLES || deferred) break;
       const claimed = await db.claimArticle(article.id);
       if (!claimed) continue;
 
       totalAttempts++;
+      attemptedThisRun.add(article.id);
       try {
         await processArticle(env, article);
       } catch (e) {
-        await db.updateArticleStatus(article.id, 'failed');
         // processor handles ai_job status and logs
+        deferred = e instanceof GeminiDeferredError;
+        await db.updateArticleStatus(article.id, deferred ? 'pending' : 'failed');
       }
     }
 
@@ -87,17 +94,21 @@ export async function runPipeline(env: Env): Promise<void> {
     await db.recoverStaleProcessingArticles(900); // 15 minutes
 
     const remainingSlots = MAX_ARTICLES - totalAttempts;
-    if (remainingSlots > 0) {
+    if (remainingSlots > 0 && !deferred) {
       const retryCandidates = await db.listRetryableFailedArticles(remainingSlots);
       for (const article of retryCandidates) {
-        if (totalAttempts >= MAX_ARTICLES) break;
+        if (totalAttempts >= MAX_ARTICLES || deferred) break;
+        if (attemptedThisRun.has(article.id)) continue;
         const claimed = await db.claimFailedArticle(article.id);
         if (!claimed) continue;
 
         totalAttempts++;
+        attemptedThisRun.add(article.id);
         try {
           await processArticle(env, article);
         } catch (e) {
+          // A deferred retry returns to 'failed' with its retry budget untouched.
+          deferred = e instanceof GeminiDeferredError;
           await db.updateArticleStatus(article.id, 'failed');
         }
       }

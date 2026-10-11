@@ -420,6 +420,9 @@ describe('DbClient', () => {
       expect(query).toContain("job_type = 'enrichment'");
       expect(query).toContain("LIKE '%429%' THEN 5");
       expect(query).toContain("ELSE 2");
+      // A deferred job made no judgement on the article, so it must not count
+      // against the article's retry budget (see model-router.ts GeminiDeferredError).
+      expect(query).toContain("status <> 'deferred'");
     });
   });
 

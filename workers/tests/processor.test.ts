@@ -1,11 +1,23 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processArticle } from '../src/tasks/processor';
 import { createMockEnv } from './setup';
 import * as dbClientModule from '../src/db/client';
 import * as geminiModule from '../src/tasks/gemini';
+import { ApiError } from '../src/utils/errors';
+import { GeminiApiError } from '../src/tasks/gemini-errors';
+import { GeminiDeferredError, resetModelRouterMemory } from '../src/tasks/model-router';
 import type { ArticleRaw } from '../src/types';
 
+const dailyQuotaError = (model: string) =>
+  new GeminiApiError(`Gemini API error: 429 [quota_exceeded]`, {
+    httpStatus: 429, apiStatus: 'quota_exceeded', reason: null, quotaIds: [], retryAfterSeconds: null, safeMessage: null, model,
+  });
+
 describe('Article Processor', () => {
+  beforeEach(() => {
+    resetModelRouterMemory();
+  });
+
   it('processes article successfully', async () => {
     const env = createMockEnv();
     const article: ArticleRaw = {
@@ -302,57 +314,63 @@ describe('Article Processor', () => {
     expect(mockDbClient.createEvent).toHaveBeenCalled();
     expect(mockDbClient.linkArticleEvent).toHaveBeenCalledWith(1, 30, 1.0);
   });
-});
 
-import { retryWithBackoff } from '../src/tasks/processor';
-import { ApiError } from '../src/utils/errors';
+  it('defers (not fails) and logs attempt metadata as a warning when every enrichment model is quota-limited', async () => {
+    const env = createMockEnv();
+    const article: ArticleRaw = {
+      id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
+      raw_content: 'content', published_at: null, fetched_at: 0, language: 'en', status: 'pending', created_at: 0
+    };
 
-describe('retryWithBackoff', () => {
-  it('retries on 429', async () => {
-    let calls = 0;
-    const fn = vi.fn().mockImplementation(async () => {
-      calls++;
-      if (calls < 2) throw new ApiError(429, 'Rate limit');
-      return 'success';
-    });
+    const mockDbClient = {
+      createAiJob: vi.fn().mockResolvedValue({ id: 10 }),
+      createAiLog: vi.fn(),
+      updateAiJobStatus: vi.fn(),
+    };
+    vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+    vi.spyOn(geminiModule, 'generateEnrichment').mockRejectedValue(dailyQuotaError('m'));
 
-    await expect(retryWithBackoff(fn)).resolves.toBe('success');
-    expect(calls).toBe(2);
+    await expect(processArticle(env, article)).rejects.toBeInstanceOf(GeminiDeferredError);
+
+    // A deferral is not a judgement on the article, so the ai_job lands in 'deferred', not 'failed'.
+    expect(mockDbClient.updateAiJobStatus).toHaveBeenCalledWith(10, 'deferred', undefined, expect.any(String));
+    expect(mockDbClient.createAiLog).toHaveBeenCalledWith(10, expect.any(String), 'warning', expect.any(String));
   });
 
-  it('retries on 500', async () => {
-    let calls = 0;
-    const fn = vi.fn().mockImplementation(async () => {
-      calls++;
-      if (calls < 3) throw new ApiError(500, 'Internal Server Error');
-      return 'success';
-    });
+  it('records the model that actually served enrichment when the primary model failed over to a fallback', async () => {
+    const env = createMockEnv();
+    const article: ArticleRaw = {
+      id: 1, external_id: 'e1', source_id: 1, title: 'Title', summary: 'S', url: 'u',
+      raw_content: 'content', published_at: null, fetched_at: 0, language: 'en', status: 'pending', created_at: 0
+    };
 
-    await expect(retryWithBackoff(fn)).resolves.toBe('success');
-    expect(calls).toBe(3);
-  });
+    const mockDbClient = {
+      createAiJob: vi.fn().mockResolvedValue({ id: 10 }),
+      createArticleContent: vi.fn(),
+      getTopicBySlug: vi.fn().mockResolvedValue(null),
+      createTopic: vi.fn().mockResolvedValue(20),
+      linkArticleTopic: vi.fn(),
+      getRecentActiveEvents: vi.fn().mockResolvedValue([]),
+      getEventByHash: vi.fn().mockResolvedValue(null),
+      createEvent: vi.fn().mockResolvedValue(30),
+      linkArticleEvent: vi.fn(),
+      updateArticleStatus: vi.fn(),
+      updateAiJobStatus: vi.fn(),
+      createAiLog: vi.fn(),
+    };
+    vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
 
-  it('retries on 503', async () => {
-    let calls = 0;
-    const fn = vi.fn().mockImplementation(async () => {
-      calls++;
-      if (calls < 2) throw new ApiError(503, 'Service Unavailable');
-      return 'success';
-    });
+    const mockEnrichment = { summary: 's', topics: [], events: [] };
+    vi.spyOn(geminiModule, 'generateEnrichment')
+      .mockRejectedValueOnce(dailyQuotaError('gemini-3.5-flash-lite'))
+      .mockResolvedValueOnce(mockEnrichment as any);
 
-    await expect(retryWithBackoff(fn)).resolves.toBe('success');
-    expect(calls).toBe(2);
-  });
+    await processArticle(env, article);
 
-  it('does not retry on 400', async () => {
-    const fn = vi.fn().mockRejectedValue(new ApiError(400, 'Bad Request'));
-    await expect(retryWithBackoff(fn)).rejects.toThrow(ApiError);
-    expect(fn).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not retry on unclassified errors', async () => {
-    const fn = vi.fn().mockRejectedValue(new Error('Some random error 500'));
-    await expect(retryWithBackoff(fn)).rejects.toThrow('Some random error 500');
-    expect(fn).toHaveBeenCalledTimes(1);
+    // Planned model (primary) was gemini-3.5-flash-lite; the fallback served the request,
+    // so the ai_job's model column must be updated to reflect that, not the plan.
+    expect(mockDbClient.updateAiJobStatus).toHaveBeenCalledWith(
+      10, 'completed', JSON.stringify(mockEnrichment), undefined, 'gemini-3.1-flash-lite'
+    );
   });
 });

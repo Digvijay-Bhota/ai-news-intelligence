@@ -7,6 +7,8 @@ export interface Env {
   CACHE: KVNamespace;
   HMAC_SECRET: string;
   GEMINI_API_KEY: string;
+  /** Optional JSON per-task model route override; only allowlisted models are used. */
+  GEMINI_MODEL_ROUTES?: string;
   PIPELINE_TOKEN_ID: string;
   ENVIRONMENT: string;
   CORS_ORIGIN: string;

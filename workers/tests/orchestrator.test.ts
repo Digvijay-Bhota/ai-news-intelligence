@@ -6,6 +6,7 @@ import * as fetcherModule from '../src/tasks/fetcher';
 import * as processorModule from '../src/tasks/processor';
 import * as briefGenModule from '../src/tasks/brief-generator';
 import * as commGenModule from '../src/tasks/community-signal-generator';
+import { GeminiDeferredError } from '../src/tasks/model-router';
 
 describe('Orchestrator', () => {
   it('runs successful pipeline', async () => {
@@ -319,6 +320,86 @@ describe('Orchestrator', () => {
       await runPipeline(env);
 
       expect(briefSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('Gemini model deferral (no eligible model available)', () => {
+    it('returns a deferred pending-pass article to pending and stops the run without starting the retry pass', async () => {
+      const env = createMockEnv();
+      const mockArticles = [{ id: 1 }, { id: 2 }];
+      const mockDbClient = {
+        createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        listSources: vi.fn().mockResolvedValue([]),
+        listArticles: vi.fn().mockResolvedValue({ articles: mockArticles }),
+        claimArticle: vi.fn().mockResolvedValue(true),
+        listRetryableFailedArticles: vi.fn(),
+        claimFailedArticle: vi.fn(),
+        updateArticleStatus: vi.fn(),
+        updatePipelineJobStatus: vi.fn(),
+        recoverStaleProcessingArticles: vi.fn(),
+      };
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+      const deferredErr = new GeminiDeferredError('enrichment', 'models_unavailable', [], null);
+      const processSpy = vi.spyOn(processorModule, 'processArticle').mockRejectedValue(deferredErr);
+
+      await runPipeline(env);
+
+      // The deferral ends article processing for this run: article 2 is never attempted,
+      // and the retry pass never runs.
+      expect(processSpy).toHaveBeenCalledTimes(1);
+      expect(mockDbClient.updateArticleStatus).toHaveBeenCalledWith(1, 'pending');
+      expect(mockDbClient.updateArticleStatus).not.toHaveBeenCalledWith(1, 'failed');
+      expect(mockDbClient.listRetryableFailedArticles).not.toHaveBeenCalled();
+    });
+
+    it('returns a deferred retry-pass article to failed (its retry budget untouched) and stops the run', async () => {
+      const env = createMockEnv();
+      const mockRetries = [{ id: 100 }, { id: 101 }];
+      const mockDbClient = {
+        createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        listSources: vi.fn().mockResolvedValue([]),
+        listArticles: vi.fn().mockResolvedValue({ articles: [] }),
+        claimArticle: vi.fn(),
+        listRetryableFailedArticles: vi.fn().mockResolvedValue(mockRetries),
+        claimFailedArticle: vi.fn().mockResolvedValue(true),
+        updateArticleStatus: vi.fn(),
+        updatePipelineJobStatus: vi.fn(),
+        recoverStaleProcessingArticles: vi.fn(),
+      };
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+      const deferredErr = new GeminiDeferredError('enrichment', 'models_unavailable', [], null);
+      const processSpy = vi.spyOn(processorModule, 'processArticle').mockRejectedValue(deferredErr);
+
+      await runPipeline(env);
+
+      // Article 101 is never attempted once the first retry defers.
+      expect(processSpy).toHaveBeenCalledTimes(1);
+      expect(mockDbClient.claimFailedArticle).toHaveBeenCalledTimes(1);
+      expect(mockDbClient.updateArticleStatus).toHaveBeenCalledWith(100, 'failed');
+    });
+
+    it('does not attempt the same article twice in one run across the pending and retry passes', async () => {
+      const env = createMockEnv();
+      const mockArticles = [{ id: 1 }];
+      const mockDbClient = {
+        createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        listSources: vi.fn().mockResolvedValue([]),
+        listArticles: vi.fn().mockResolvedValue({ articles: mockArticles }),
+        claimArticle: vi.fn().mockResolvedValue(true),
+        // If the orchestrator asked for retry candidates, article 1 (already attempted) must be filtered out by id.
+        listRetryableFailedArticles: vi.fn().mockResolvedValue([{ id: 1 }]),
+        claimFailedArticle: vi.fn(),
+        updateArticleStatus: vi.fn(),
+        updatePipelineJobStatus: vi.fn(),
+        recoverStaleProcessingArticles: vi.fn(),
+      };
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
+      const processSpy = vi.spyOn(processorModule, 'processArticle').mockResolvedValue(undefined);
+
+      await runPipeline(env);
+
+      expect(processSpy).toHaveBeenCalledTimes(1);
+      expect(mockDbClient.claimFailedArticle).not.toHaveBeenCalled();
     });
   });
 });

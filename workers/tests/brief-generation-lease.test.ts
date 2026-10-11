@@ -159,7 +159,11 @@ describe('Event brief generation lease and AI job lifecycle (local D1)', () => {
   });
 
   it('a released lease can be retried, and a stale lease can be taken over', async () => {
+    // event_brief now routes through the free-tier Flash-Lite chain (2 models), so a single
+    // transient failure falls back within the same call; the call only fails end-to-end when
+    // every model in the route fails.
     const gemini = vi.spyOn(geminiModule, 'generateEventBriefFromGemini')
+      .mockRejectedValueOnce(new Error('Transient failure'))
       .mockRejectedValueOnce(new Error('Transient failure'))
       .mockResolvedValueOnce(validBrief(articles.map((a) => a.id)));
 

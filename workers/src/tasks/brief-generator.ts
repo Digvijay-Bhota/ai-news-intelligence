@@ -5,7 +5,7 @@
 import type { Env, ArticleRaw, EventBrief, EventBriefRow } from '../types';
 import { createDbClient } from '../db/client';
 import { generateEventBriefFromGemini } from './gemini';
-import { retryWithBackoff } from './processor';
+import { attemptsMetadata, getModelRoute, runGeminiTask } from './model-router';
 
 /**
  * Computes a deterministic SHA-256 fingerprint representing the exact article set and state of an event.
@@ -188,6 +188,7 @@ export async function generateAndSaveEventBrief(
 
   const validArticleIds = new Set(articles.map(a => a.id));
   const distinctSources = new Set(articles.map(a => a.source_id));
+  const plannedModel = getModelRoute(env, 'event_brief')[0];
 
   // Determine brief version number (reuse version on retry of existing fingerprint)
   const latestBrief = await db.getLatestEventBrief(event.id);
@@ -200,7 +201,7 @@ export async function generateAndSaveEventBrief(
     article_ids: JSON.stringify(Array.from(validArticleIds)),
     source_count: distinctSources.size,
     article_count: articles.length,
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
     version: nextVersion,
   });
 
@@ -216,13 +217,13 @@ export async function generateAndSaveEventBrief(
     aiJobId = (await db.createAiJob({
       article_raw_id: null,
       job_type: 'event_brief',
-      model: 'gemini-3.6-flash',
+      model: plannedModel,
       status: 'running',
     })).id;
 
-    // 4. Synthesize with Gemini
-    const rawBrief = await retryWithBackoff(() =>
-      generateEventBriefFromGemini(
+    // 4. Synthesize with Gemini; 5. strictly validate output & verify grounding per model attempt
+    const { value: rawBrief, model: servedModel } = await runGeminiTask(env, 'event_brief', async (model) => {
+      const raw = await generateEventBriefFromGemini(
         env,
         { title: event.title, description: event.description, severity: event.severity },
         articles.map(a => ({
@@ -232,12 +233,12 @@ export async function generateAndSaveEventBrief(
           raw_content: a.raw_content,
           source: a.source || `Source #${a.source_id}`,
           published_at: a.published_at,
-        }))
-      )
-    );
-
-    // 5. Strictly validate output & verify grounding
-    validateEventBrief(rawBrief, validArticleIds);
+        })),
+        model
+      );
+      validateEventBrief(raw, validArticleIds);
+      return raw;
+    });
 
     // 6. Durably save brief
     const savedBrief = await db.saveEventBrief({
@@ -247,19 +248,22 @@ export async function generateAndSaveEventBrief(
       article_ids: JSON.stringify(Array.from(validArticleIds)),
       source_count: distinctSources.size,
       article_count: articles.length,
-      model: 'gemini-3.6-flash',
+      model: servedModel,
       version: nextVersion,
       status: 'completed',
       error_message: null,
     });
 
-    await db.updateAiJobStatus(aiJobId, 'completed', JSON.stringify({ brief_id: savedBrief.id, version: nextVersion }));
+    await db.updateAiJobStatus(
+      aiJobId, 'completed', JSON.stringify({ brief_id: savedBrief.id, version: nextVersion }),
+      undefined, servedModel === plannedModel ? undefined : servedModel
+    );
     return savedBrief;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error during event brief generation';
     // Bookkeeping failures must not skip releasing the lease below or mask the original error.
     if (aiJobId !== null) {
-      await db.createAiLog(aiJobId, errorMsg, 'error').catch(() => {});
+      await db.createAiLog(aiJobId, errorMsg, 'error', attemptsMetadata('event_brief', error)).catch(() => {});
       await db.updateAiJobStatus(aiJobId, 'failed', undefined, errorMsg).catch(() => {});
     }
 
@@ -272,7 +276,7 @@ export async function generateAndSaveEventBrief(
       article_ids: JSON.stringify(Array.from(validArticleIds)),
       source_count: distinctSources.size,
       article_count: articles.length,
-      model: 'gemini-3.6-flash',
+      model: plannedModel,
       version: nextVersion,
       status: 'failed',
       error_message: errorMsg,

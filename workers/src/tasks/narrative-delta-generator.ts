@@ -8,7 +8,7 @@
 import type { Env, ArticleRaw, NarrativeDelta, EventNarrativeDeltaRow, EventBrief, EventBriefRow } from '../types';
 import { createDbClient } from '../db/client';
 import { generateNarrativeDeltaFromGemini } from './gemini';
-import { retryWithBackoff } from './processor';
+import { attemptsMetadata, getModelRoute, runGeminiTask } from './model-router';
 
 const VALID_CHANGE_TYPES = new Set(['refined', 'expanded', 'contradicted', 'retracted', 'uncertain']);
 
@@ -185,13 +185,15 @@ export async function generateAndSaveNarrativeDelta(
     return existing;
   }
 
+  const plannedModel = getModelRoute(env, 'narrative_delta')[0];
+
   // Attempt atomic generation lease to prevent duplicate external Gemini calls across workers
   const lease = await db.acquireNarrativeDeltaLease({
     event_id: event.id,
     previous_version: previousBriefRow.version,
     current_version: currentBriefRow.version,
     article_fingerprint: currentBriefRow.article_fingerprint,
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
   });
 
   if (!lease) {
@@ -208,15 +210,15 @@ export async function generateAndSaveNarrativeDelta(
   const aiJob = await db.createAiJob({
     article_raw_id: null,
     job_type: 'event_narrative_delta',
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
     status: 'running',
   });
 
   const validArticleIds = new Set(articles.map(a => a.id));
 
   try {
-    const rawDelta = await retryWithBackoff(() =>
-      generateNarrativeDeltaFromGemini(
+    const { value: rawDelta, model: servedModel } = await runGeminiTask(env, 'narrative_delta', async (model) => {
+      const raw = await generateNarrativeDeltaFromGemini(
         env,
         { title: event.title, description: event.description, severity: event.severity },
         previousBrief,
@@ -229,11 +231,12 @@ export async function generateAndSaveNarrativeDelta(
           raw_content: a.raw_content,
           source: a.source || `Source #${a.source_id}`,
           published_at: a.published_at,
-        }))
-      )
-    );
-
-    validateNarrativeDelta(rawDelta, validArticleIds, previousBriefRow.version, currentBriefRow.version);
+        })),
+        model
+      );
+      validateNarrativeDelta(raw, validArticleIds, previousBriefRow.version, currentBriefRow.version);
+      return raw;
+    });
 
     const savedDelta = await db.saveNarrativeDelta({
       event_id: event.id,
@@ -241,16 +244,19 @@ export async function generateAndSaveNarrativeDelta(
       current_version: currentBriefRow.version,
       content: JSON.stringify(rawDelta),
       article_fingerprint: currentBriefRow.article_fingerprint,
-      model: 'gemini-3.6-flash',
+      model: servedModel,
       status: 'completed',
       error_message: null,
     });
 
-    await db.updateAiJobStatus(aiJob.id, 'completed', JSON.stringify({ delta_id: savedDelta.id, versions: `${previousBriefRow.version}->${currentBriefRow.version}` }));
+    await db.updateAiJobStatus(
+      aiJob.id, 'completed', JSON.stringify({ delta_id: savedDelta.id, versions: `${previousBriefRow.version}->${currentBriefRow.version}` }),
+      undefined, servedModel === plannedModel ? undefined : servedModel
+    );
     return savedDelta;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error during narrative delta generation';
-    await db.createAiLog(aiJob.id, errorMsg, 'error');
+    await db.createAiLog(aiJob.id, errorMsg, 'error', attemptsMetadata('narrative_delta', error));
     await db.updateAiJobStatus(aiJob.id, 'failed', undefined, errorMsg);
 
     await db.saveNarrativeDelta({
@@ -259,7 +265,7 @@ export async function generateAndSaveNarrativeDelta(
       current_version: currentBriefRow.version,
       content: JSON.stringify({ error: errorMsg }),
       article_fingerprint: currentBriefRow.article_fingerprint,
-      model: 'gemini-3.6-flash',
+      model: plannedModel,
       status: 'failed',
       error_message: errorMsg,
     }).catch(() => {});

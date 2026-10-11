@@ -8,7 +8,7 @@
 import type { Env, ArticleRaw, ClaimComparison, EventClaimComparisonRow, EventBriefRow } from '../types';
 import { createDbClient } from '../db/client';
 import { generateClaimComparisonsFromGemini } from './gemini';
-import { retryWithBackoff } from './processor';
+import { attemptsMetadata, getModelRoute, runGeminiTask } from './model-router';
 
 const VALID_CLAIM_STATUSES = new Set(['consensus', 'disputed', 'unconfirmed', 'evolving']);
 
@@ -136,12 +136,14 @@ export async function generateAndSaveClaimComparisons(
     return existing;
   }
 
+  const plannedModel = getModelRoute(env, 'claim_comparison')[0];
+
   // Attempt atomic generation lease to prevent duplicate external Gemini calls across workers
   const lease = await db.acquireClaimComparisonsLease({
     event_id: event.id,
     version: briefRow.version,
     article_fingerprint: briefRow.article_fingerprint,
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
   });
 
   if (!lease) {
@@ -151,7 +153,7 @@ export async function generateAndSaveClaimComparisons(
   const aiJob = await db.createAiJob({
     article_raw_id: null,
     job_type: 'event_claim_comparison',
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
     status: 'running',
   });
 
@@ -159,8 +161,8 @@ export async function generateAndSaveClaimComparisons(
   const validSourceIds = new Set(articles.map(a => a.source_id));
 
   try {
-    const rawComparisons = await retryWithBackoff(() =>
-      generateClaimComparisonsFromGemini(
+    const { value: rawComparisons, model: servedModel } = await runGeminiTask(env, 'claim_comparison', async (model) => {
+      const raw = await generateClaimComparisonsFromGemini(
         env,
         { title: event.title, description: event.description, severity: event.severity },
         articles.map(a => ({
@@ -171,27 +173,31 @@ export async function generateAndSaveClaimComparisons(
           raw_content: a.raw_content,
           source: a.source || `Source #${a.source_id}`,
           published_at: a.published_at,
-        }))
-      )
-    );
-
-    validateClaimComparisons(rawComparisons, validArticleIds, validSourceIds);
+        })),
+        model
+      );
+      validateClaimComparisons(raw, validArticleIds, validSourceIds);
+      return raw;
+    });
 
     const savedComp = await db.saveClaimComparisons({
       event_id: event.id,
       version: briefRow.version,
       content: JSON.stringify(rawComparisons),
       article_fingerprint: briefRow.article_fingerprint,
-      model: 'gemini-3.6-flash',
+      model: servedModel,
       status: 'completed',
       error_message: null,
     });
 
-    await db.updateAiJobStatus(aiJob.id, 'completed', JSON.stringify({ comp_id: savedComp.id, claims: rawComparisons.length }));
+    await db.updateAiJobStatus(
+      aiJob.id, 'completed', JSON.stringify({ comp_id: savedComp.id, claims: rawComparisons.length }),
+      undefined, servedModel === plannedModel ? undefined : servedModel
+    );
     return savedComp;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error during claim comparison generation';
-    await db.createAiLog(aiJob.id, errorMsg, 'error');
+    await db.createAiLog(aiJob.id, errorMsg, 'error', attemptsMetadata('claim_comparison', error));
     await db.updateAiJobStatus(aiJob.id, 'failed', undefined, errorMsg);
 
     await db.saveClaimComparisons({
@@ -199,7 +205,7 @@ export async function generateAndSaveClaimComparisons(
       version: briefRow.version,
       content: JSON.stringify([]),
       article_fingerprint: briefRow.article_fingerprint,
-      model: 'gemini-3.6-flash',
+      model: plannedModel,
       status: 'failed',
       error_message: errorMsg,
     }).catch(() => {});

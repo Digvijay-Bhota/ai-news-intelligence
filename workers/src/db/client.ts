@@ -587,20 +587,21 @@ export class DbClient {
     return this.db.prepare('SELECT * FROM events WHERE event_hash = ?1').bind(event_hash).first<Event>();
   }
 
-  async updateAiJobStatus(id: number, status: string, result?: string, error_message?: string): Promise<void> {
+  /** `model` records the model that actually served the job when it differs from the one planned. */
+  async updateAiJobStatus(id: number, status: string, result?: string, error_message?: string, model?: string): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     await this.db
       .prepare(
-        'UPDATE ai_jobs SET status = ?1, result = ?2, error_message = ?3, completed_at = ?4 WHERE id = ?5'
+        'UPDATE ai_jobs SET status = ?1, result = ?2, error_message = ?3, completed_at = ?4, model = COALESCE(?6, model) WHERE id = ?5'
       )
-      .bind(status, result ?? null, error_message ?? null, now, id)
+      .bind(status, result ?? null, error_message ?? null, now, id, model ?? null)
       .run();
   }
 
-  async createAiLog(ai_job_id: number, message: string, log_level: string = 'info'): Promise<void> {
+  async createAiLog(ai_job_id: number, message: string, log_level: string = 'info', metadata?: string): Promise<void> {
     await this.db
-      .prepare('INSERT INTO ai_logs (ai_job_id, message, log_level) VALUES (?1, ?2, ?3)')
-      .bind(ai_job_id, message, log_level)
+      .prepare('INSERT INTO ai_logs (ai_job_id, message, log_level, metadata) VALUES (?1, ?2, ?3, ?4)')
+      .bind(ai_job_id, message, log_level, metadata ?? null)
       .run();
   }
 
@@ -646,6 +647,8 @@ export class DbClient {
           SELECT COUNT(*)
           FROM ai_jobs j
           WHERE j.article_raw_id = a.id AND j.job_type = 'enrichment'
+            -- deferred jobs: no model was available, so they are not attempts
+            AND j.status <> 'deferred'
         ) < IFNULL((
           SELECT CASE
             WHEN latest_failed_job.error_message LIKE '%429%' THEN 5
