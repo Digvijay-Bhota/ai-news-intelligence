@@ -221,7 +221,14 @@ ANALYTICAL OBJECTIVES:
 2. PRESERVE UNCHANGED FACTS: Acknowledge core elements that stayed consistent in "unchanged_core".
 3. STRICT SOURCE CITATIONS: In all "source_references" arrays, cite ONLY the exact integer article IDs specified in the id attribute of the <article_context id="..."> tags.
 4. NO INVENTED CHANGES: If there is no meaningful change, state in summary that the core story remains steady and provide empty arrays where appropriate.
-5. Return a valid JSON object ONLY. No markdown, no code fences.
+5. CHANGE TYPES: Every "change_type" in "changed_claims" MUST be exactly one of these five values. Never use any other word or synonym (for example, "corrected", "updated" or "revised" are NOT allowed):
+   - "refined": the earlier claim is made more precise.
+   - "expanded": additional detail or scope is added without contradicting the earlier claim.
+   - "contradicted": current evidence conflicts with the earlier statement without an explicit retraction.
+   - "retracted": the earlier claim was explicitly withdrawn or corrected.
+   - "uncertain": available evidence does not establish the claim's status.
+   When an official correction withdraws an earlier figure, use "retracted" for that earlier figure: put the withdrawn claim in "previous_statement" and state the corrected information separately in "current_statement".
+6. Return a valid JSON object ONLY. No markdown, no code fences.
 
 REQUIRED JSON OUTPUT FORMAT:
 {
@@ -263,7 +270,7 @@ export async function generateClaimComparisonsFromGemini(
   articles: { id: number; title: string; summary?: string | null; raw_content?: string | null; source: string; published_at: number | null; source_id: number }[],
   model: AllowedModel = DEFAULT_ROUTES.claim_comparison[0]
 ): Promise<unknown> {
-  const sandboxedEvidence = formatSandboxedArticleCollection(articles, 10);
+  const sandboxedEvidence = formatSandboxedArticleCollection(articles, 10, { includeSourceId: true });
 
   const prompt = `You are a cross-source news intelligence analyst.
 Your task is to analyze reporting across distinct newsrooms and identify discrete factual claims, comparing coverage to discover consensus and disagreement.
@@ -287,7 +294,11 @@ ANALYSIS GUIDELINES:
    - "evolving": Active breaking situation where different outlets report differing rapid updates.
 3. SOURCE ATTRIBUTION: For each claim, list the contributing sources with their source_id, source_name, specific reported position (1 sentence), and the article_ids from the evidence.
 4. REFERENTIAL INTEGRITY: Use ONLY exact integer article IDs from the <article_context id="..."> tags.
-5. Return a valid JSON array ONLY. No markdown, no code fences.
+5. SOURCE IDS ARE NOT ARTICLE IDS: Each <article_context> gives the article's ID in its id attribute and its publisher's ID in its <source_id> element. These are separate numbering systems, even when the numbers look alike.
+   - Copy each source entry's "source_id" exactly from the <source_id> element of the articles it cites. Never use an article ID, a position or count, or a guess as a source_id.
+   - Every article ID listed in a source entry's "article_ids" must have that same <source_id>. Several articles from one source belong in one source entry.
+   - Use that source's <source> text as "source_name".
+6. Return a valid JSON array ONLY. No markdown, no code fences.
 
 REQUIRED JSON OUTPUT FORMAT:
 [
@@ -296,10 +307,10 @@ REQUIRED JSON OUTPUT FORMAT:
     "status": "consensus|disputed|unconfirmed|evolving",
     "sources": [
       {
-        "source_id": 1,
+        "source_id": 12,
         "source_name": "Reuters",
         "position": "Reported that the merger talks stalled due to regulatory scrutiny.",
-        "article_ids": [101]
+        "article_ids": [101, 104]
       }
     ]
   }

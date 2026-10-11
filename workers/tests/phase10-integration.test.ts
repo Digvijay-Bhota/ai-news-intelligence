@@ -113,6 +113,7 @@ describe('Phase 10: End-to-End Grounding & Synthesis Integration', () => {
   it('validates cross-source claim comparison across newsrooms', () => {
     const validArticleIds = new Set(articlesV2.map(a => a.id));
     const validSourceIds = new Set(articlesV2.map(a => a.source_id));
+    const articleSourceIds = new Map(articlesV2.map(a => [a.id, a.source_id] as const));
 
     const simulatedClaimComparisons = [
       {
@@ -154,7 +155,7 @@ describe('Phase 10: End-to-End Grounding & Synthesis Integration', () => {
     ];
 
     expect(() =>
-      validateClaimComparisons(simulatedClaimComparisons, validArticleIds, validSourceIds)
+      validateClaimComparisons(simulatedClaimComparisons, validArticleIds, validSourceIds, articleSourceIds)
     ).not.toThrow();
 
     expect(simulatedClaimComparisons).toHaveLength(2);
@@ -189,6 +190,7 @@ describe('Phase 10: End-to-End Grounding & Synthesis Integration', () => {
   it('rejects cross-source claim with unregistered source or article IDs', () => {
     const validArticleIds = new Set([1, 2]);
     const validSourceIds = new Set([1, 2]);
+    const articleSourceIds = new Map([[1, 1], [2, 2]]);
 
     const simulatedBadClaims = [
       {
@@ -206,7 +208,7 @@ describe('Phase 10: End-to-End Grounding & Synthesis Integration', () => {
     ];
 
     expect(() =>
-      validateClaimComparisons(simulatedBadClaims, validArticleIds, validSourceIds)
+      validateClaimComparisons(simulatedBadClaims, validArticleIds, validSourceIds, articleSourceIds)
     ).toThrow('Referential violation: source_id 777');
   });
 });

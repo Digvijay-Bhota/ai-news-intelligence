@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { validateNarrativeDelta } from '../src/tasks/narrative-delta-generator';
+import narrativeDelta02 from './gemini-quality-eval/cases/narrative-delta-02-correction-retraction.json';
 
 const makeValidDelta = (articleIds: number[]) => ({
   previous_version: 1,
@@ -127,5 +128,54 @@ describe('validateNarrativeDelta', () => {
     expect(raw.removed_or_no_longer_supported).toEqual([]);
     expect(raw.unchanged_core).toEqual([]);
     expect(raw.open_questions).toEqual([]);
+  });
+});
+
+// ─── change_type vocabulary regression (offline Gemini evaluation, narrative-delta-02) ───
+describe('validateNarrativeDelta: official correction and the change_type contract', () => {
+  const validIds = new Set(narrativeDelta02.articles.map((a) => a.id));
+  const { previous_version, current_version } = narrativeDelta02.narrative_delta_context;
+
+  /** The exact output recorded from Gemini 3.5 Flash-Lite, with an overridable change_type. */
+  const recordedDelta = (changeType: string) => ({
+    summary:
+      'The fire department has issued a corrected casualty count for the Carrow Street manufacturing facility explosion, revising the initial report of three injured individuals with one critical to two injured individuals, both of whom are in stable condition.',
+    newly_confirmed: [{ statement: 'The total number of injured individuals is two, and both are in stable condition.', source_references: [51] }],
+    changed_claims: [
+      {
+        previous_statement: 'Three people were injured, with one in critical condition.',
+        current_statement: 'Two people were injured, and both are stable; the earlier critical injury report was attributed to mistaken identity.',
+        change_type: changeType,
+        source_references: [51],
+      },
+    ],
+    removed_or_no_longer_supported: [] as unknown[],
+    unchanged_core: ['An explosion occurred at the manufacturing facility on Carrow Street.'],
+    open_questions: ['What caused the explosion at the Carrow Street manufacturing facility?'],
+  });
+
+  it('rejects the recorded "corrected" change_type with the exact contract error', () => {
+    expect(() => validateNarrativeDelta(recordedDelta('corrected'), validIds, previous_version, current_version)).toThrow(
+      'Invalid changed_claims change_type at index 0: "corrected". Allowed values are: refined, expanded, contradicted, retracted, uncertain'
+    );
+  });
+
+  it('accepts the official casualty-count correction when the earlier figure is marked "retracted"', () => {
+    const delta = recordedDelta('retracted');
+    expect(() => validateNarrativeDelta(delta, validIds, previous_version, current_version)).not.toThrow();
+    expect(delta.changed_claims[0].change_type).toBe('retracted');
+  });
+
+  it('preserves the enum contract exactly: the five values are accepted, synonyms are not', () => {
+    const candidates = ['refined', 'expanded', 'contradicted', 'retracted', 'uncertain', 'corrected', 'correction', 'retraction', 'updated', 'revised', 'withdrawn'];
+    const accepted = candidates.filter((ct) => {
+      try {
+        validateNarrativeDelta(recordedDelta(ct), validIds, previous_version, current_version);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    expect(accepted).toEqual(['refined', 'expanded', 'contradicted', 'retracted', 'uncertain']);
   });
 });

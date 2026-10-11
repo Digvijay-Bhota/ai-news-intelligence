@@ -264,3 +264,51 @@ describe('Prompt Sandbox — Adversarial Security Tests', () => {
     });
   });
 });
+
+describe('Prompt Sandbox — source IDs (opt-in, for claim comparison)', () => {
+  const article = {
+    id: 113,
+    source_id: 112,
+    source: 'Regional Emergency Alerts',
+    published_at: 1746019000,
+    title: 'Expanded evacuation zone confirmed as fire continues to grow',
+    summary: 'A second source corroborates the expanded evacuation zone.',
+  };
+
+  it('does not emit source_id by default, so other prompts are byte-for-byte unchanged', () => {
+    const block = formatSandboxedArticle(article);
+    expect(block).not.toContain('source_id');
+    expect(block).toBe(
+      '<article_context id="113">\n' +
+        '  <source>Regional Emergency Alerts</source>\n' +
+        '  <published_at>2025-04-30T13:16:40.000Z</published_at>\n' +
+        '  <title>Expanded evacuation zone confirmed as fire continues to grow</title>\n' +
+        '  <content>A second source corroborates the expanded evacuation zone.</content>\n' +
+        '</article_context>'
+    );
+  });
+
+  it('emits the real source_id as its own element, distinct from the article id', () => {
+    const block = formatSandboxedArticle(article, { includeSourceId: true });
+    expect(block.startsWith('<article_context id="113">\n  <source_id>112</source_id>\n  <source>Regional Emergency Alerts</source>')).toBe(true);
+    // Everything else is identical to the default block.
+    expect(block.replace('\n  <source_id>112</source_id>', '')).toBe(formatSandboxedArticle(article));
+  });
+
+  it('passes the option through the collection formatter', () => {
+    const collection = formatSandboxedArticleCollection(
+      [{ ...article, id: 112, source_id: 111 }, article],
+      10,
+      { includeSourceId: true }
+    );
+    expect(collection.match(/<source_id>\d+<\/source_id>/g)).toEqual(['<source_id>111</source_id>', '<source_id>112</source_id>']);
+  });
+
+  it('fails closed on a missing or non-integer source_id when source IDs are requested', () => {
+    for (const bad of [undefined, null, 0, -1, 1.5, '12abc', '<source_id>9</source_id>']) {
+      expect(() => formatSandboxedArticle({ ...article, source_id: bad as never }, { includeSourceId: true })).toThrow(
+        /Invalid source ID in prompt sandbox/
+      );
+    }
+  });
+});
