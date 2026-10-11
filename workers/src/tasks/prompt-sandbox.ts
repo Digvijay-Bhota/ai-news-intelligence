@@ -8,12 +8,14 @@
  * - Untrusted text is strictly bounded in length.
  * - XML tag boundaries within untrusted content are neutralized to prevent breakout.
  * - Non-printable control characters and ANSI sequences are stripped.
- * - Article IDs are strictly validated as positive integers.
+ * - Article IDs (and, where exposed, source IDs) are strictly validated as positive integers.
  * - System instructions explicitly instruct the model to treat content as inert data.
  */
 
 export interface RawArticleInput {
   id: number | string;
+  /** The publisher's ID. Only emitted when a caller opts in via `includeSourceId`. */
+  source_id?: number | string | null;
   source?: string | null;
   published_at?: number | null;
   title?: string | null;
@@ -74,10 +76,29 @@ export function sanitizeUntrustedField(
   return trimmed.length > maxLength ? trimmed.slice(0, maxLength).trim() : trimmed;
 }
 
+export interface SandboxFormatOptions {
+  /**
+   * Emit the article's publisher ID as `<source_id>`. Article IDs and source IDs
+   * are separate numbering spaces; prompts that ask the model for a source_id must
+   * opt in so the model can copy the real value instead of guessing.
+   */
+  includeSourceId?: boolean;
+}
+
+/** Strictly validates an ID as a positive safe integer; throws otherwise. */
+function parsePositiveId(value: unknown, label: string): number {
+  const raw = String(value ?? '').trim();
+  const numeric = /^\d+$/.test(raw) ? parseInt(raw, 10) : NaN;
+  if (!Number.isSafeInteger(numeric) || numeric <= 0) {
+    throw new Error(`Invalid ${label} in prompt sandbox: ${value}`);
+  }
+  return numeric;
+}
+
 /**
  * Formats a single article into a machine-readable, structurally bounded XML block.
  */
-export function formatSandboxedArticle(article: RawArticleInput): string {
+export function formatSandboxedArticle(article: RawArticleInput, options: SandboxFormatOptions = {}): string {
   if (article.id === null || article.id === undefined) {
     throw new Error(`Invalid article ID in prompt sandbox: ${article.id}`);
   }
@@ -102,7 +123,11 @@ export function formatSandboxedArticle(article: RawArticleInput): string {
   const rawSnippet = article.summary || (article.raw_content ? article.raw_content.slice(0, 800) : 'No content available');
   const content = sanitizeUntrustedField(rawSnippet, 800, 'No content available');
 
-  return `<article_context id="${numericId}">
+  const sourceIdLine = options.includeSourceId
+    ? `\n  <source_id>${parsePositiveId(article.source_id, 'source ID')}</source_id>`
+    : '';
+
+  return `<article_context id="${numericId}">${sourceIdLine}
   <source>${source}</source>
   <published_at>${published}</published_at>
   <title>${title}</title>
@@ -115,10 +140,11 @@ export function formatSandboxedArticle(article: RawArticleInput): string {
  */
 export function formatSandboxedArticleCollection(
   articles: RawArticleInput[],
-  maxArticles = 10
+  maxArticles = 10,
+  options: SandboxFormatOptions = {}
 ): string {
   const bounded = articles.slice(0, maxArticles);
-  const articlesXml = bounded.map(formatSandboxedArticle).join('\n');
+  const articlesXml = bounded.map((article) => formatSandboxedArticle(article, options)).join('\n');
   return `<grounded_evidence>
 ${articlesXml}
 </grounded_evidence>`;

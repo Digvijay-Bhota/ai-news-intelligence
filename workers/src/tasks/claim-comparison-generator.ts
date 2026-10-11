@@ -17,12 +17,16 @@ const VALID_CLAIM_STATUSES = new Set(['consensus', 'disputed', 'unconfirmed', 'e
 /**
  * Validates the structured output of the Gemini claim comparisons synthesis.
  * Enforces referential integrity by ensuring every cited article ID and source ID
- * belongs to the event's actual evidence set.
+ * belongs to the event's actual evidence set, and that every article cited under
+ * a source entry was actually published by that source (`articleSourceIds` maps
+ * each article ID to its source ID). Article IDs and source IDs are separate
+ * numbering spaces, so a source_id that merely exists is not enough.
  */
 export function validateClaimComparisons(
   raw: unknown,
   validArticleIds: Set<number>,
-  validSourceIds: Set<number>
+  validSourceIds: Set<number>,
+  articleSourceIds: ReadonlyMap<number, number>
 ): asserts raw is ClaimComparison[] {
   if (!Array.isArray(raw)) {
     throw new GeminiOutputValidationError('Invalid claim comparisons structure: expected an array');
@@ -90,25 +94,35 @@ export function validateClaimComparisons(
         throw new GeminiOutputValidationError(`Invalid position statement at claim[${i}].sources[${s}]`);
       }
 
-      // Validate article_ids
-      if (!Array.isArray(src.article_ids)) {
-        src.article_ids = [];
-      } else {
-        const deduplicated = new Set<number>();
-        for (const aId of src.article_ids) {
-          const articleId = typeof aId === 'number' ? aId : parseInt(String(aId), 10);
-          if (isNaN(articleId)) {
-            throw new GeminiOutputValidationError(`Invalid article_id at claim[${i}].sources[${s}]`);
-          }
-          if (!validArticleIds.has(articleId)) {
-            throw new GeminiOutputValidationError(
-              `Grounding violation: article_id ${articleId} at claim[${i}].sources[${s}] is not in the event article set`
-            );
-          }
-          deduplicated.add(articleId);
-        }
-        src.article_ids = Array.from(deduplicated);
+      // Validate article_ids. Every source entry must cite at least one article:
+      // without one, its source_id cannot be checked against article ownership.
+      if (!Array.isArray(src.article_ids) || src.article_ids.length === 0) {
+        throw new GeminiOutputValidationError(
+          `Invalid article_ids at claim[${i}].sources[${s}]: article_ids must be a non-empty array`
+        );
       }
+      const deduplicated = new Set<number>();
+      for (const aId of src.article_ids) {
+        const articleId = typeof aId === 'number' ? aId : parseInt(String(aId), 10);
+        if (isNaN(articleId)) {
+          throw new GeminiOutputValidationError(`Invalid article_id at claim[${i}].sources[${s}]`);
+        }
+        if (!validArticleIds.has(articleId)) {
+          throw new GeminiOutputValidationError(
+            `Grounding violation: article_id ${articleId} at claim[${i}].sources[${s}] is not in the event article set`
+          );
+        }
+        const ownerSourceId = articleSourceIds.get(articleId);
+        if (ownerSourceId !== sourceId) {
+          throw new GeminiOutputValidationError(
+            ownerSourceId === undefined
+              ? `Referential violation: article_id ${articleId} at claim[${i}].sources[${s}] has no known source`
+              : `Referential violation: article_id ${articleId} at claim[${i}].sources[${s}] belongs to source_id ${ownerSourceId}, not source_id ${sourceId}`
+          );
+        }
+        deduplicated.add(articleId);
+      }
+      src.article_ids = Array.from(deduplicated);
     }
   }
 }
@@ -161,6 +175,7 @@ export async function generateAndSaveClaimComparisons(
 
   const validArticleIds = new Set(articles.map(a => a.id));
   const validSourceIds = new Set(articles.map(a => a.source_id));
+  const articleSourceIds = new Map(articles.map(a => [a.id, a.source_id] as const));
 
   try {
     const { value: rawComparisons, model: servedModel } = await runGeminiTaskWithEscalation(env, 'claim_comparison', async (model) => {
@@ -178,7 +193,7 @@ export async function generateAndSaveClaimComparisons(
         })),
         model
       );
-      validateClaimComparisons(raw, validArticleIds, validSourceIds);
+      validateClaimComparisons(raw, validArticleIds, validSourceIds, articleSourceIds);
       return raw;
     });
 

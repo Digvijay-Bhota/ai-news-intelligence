@@ -82,6 +82,10 @@ function validSourceIdSet(cases: EvalCase): Set<number> {
   return new Set(cases.articles.map((a) => a.source_id));
 }
 
+function articleSourceIdMap(cases: EvalCase): Map<number, number> {
+  return new Map(cases.articles.map((a) => [a.id, a.source_id] as const));
+}
+
 /**
  * Mechanically validates a saved model output against the real schema/grounding
  * rules for the case's task. Never throws; a validation failure is reported in
@@ -101,7 +105,7 @@ export function validateSavedOutput(evalCase: EvalCase, rawOutput: unknown): Val
         return { valid: true, errors: [] };
       }
       case 'claim_comparison':
-        validateClaimComparisons(rawOutput, validArticleIdSet(evalCase), validSourceIdSet(evalCase));
+        validateClaimComparisons(rawOutput, validArticleIdSet(evalCase), validSourceIdSet(evalCase), articleSourceIdMap(evalCase));
         return { valid: true, errors: [] };
     }
   } catch (e) {
