@@ -45,3 +45,21 @@ jobs:
       - name: Test
         working-directory: workers
         run: npm test
+
+      # Gemini quality-comparison runner and request-ledger tests. They need a
+      # real filesystem, so they run under vitest.ledger.config.ts instead of
+      # the Workers pool. Every network call is mocked and every test uses a
+      # temporary ledger; the real user-level ledger is refused under Vitest.
+      - name: Ledger and runner tests (temporary ledgers, mocked network)
+        working-directory: workers
+        run: npm run test:ledger
+
+      - name: Verify the real user-level request ledger was not created
+        run: |
+          # Same home directory the runner uses: the OS user database, not $HOME.
+          ledger="$(getent passwd "$(id -un)" | cut -d: -f6)/.local/state/ai-news-intelligence"
+          if [ -e "$ledger" ]; then
+            echo "::error::Tests created or modified the real request ledger at $ledger"
+            exit 1
+          fi
+          echo "Real request ledger absent as expected: $ledger"

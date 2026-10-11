@@ -14,11 +14,11 @@
  * counter file:
  *
  *   - A reservation for one (case, model) pair is "create this exact file,
- *     and fail loudly if it already exists" via Node's `wx` flag
- *     (O_CREAT | O_EXCL). That create is atomic at the OS level: when two
- *     processes race to create the SAME path, the OS guarantees exactly one
- *     of them succeeds — no read-then-write window, no separate lock file,
- *     no new dependency.
+ *     and fail loudly if it already exists". Every ledger file is published
+ *     with link() from a fully written temp file (createFileDurably), which
+ *     is atomic and exclusive at the OS level: when two processes race to
+ *     create the SAME path, exactly one succeeds — no read-then-write window,
+ *     no separate lock file, no new dependency.
  *   - The TOTAL cap across ALL pairs is enforced the same way, not by
  *     reading and comparing a count (which has a race window: two
  *     concurrent callers for two DIFFERENT pairs could both observe "room
@@ -44,7 +44,10 @@
  *     runner) is refused, never migrated, reset or deleted automatically.
  *   - Successful outputs are stored canonically IN the ledger (write-once,
  *     fsync'd) before the completing run-log, which records their SHA-256.
- *     A checkout's local outputs/ directory only holds convenience copies.
+ *     Output that fails mechanical validation is preserved the same way in
+ *     rejected-outputs/ (the model's raw text), recorded as 'invalid'.
+ *     A checkout's local outputs/ directory only holds convenience copies of
+ *     valid outputs.
  *     Limitation: this is a local file ledger. It cannot coordinate across
  *     different physical machines (or different OS user accounts); each of
  *     those has its own ledger and its own 24-request budget.
@@ -82,6 +85,7 @@ import {
 import {
   MAX_EXPERIMENT_REQUESTS,
   outputFileName,
+  rejectedOutputFileName,
   reservationFileName,
   runLogFileName,
   parseReservationFileName,
@@ -98,8 +102,10 @@ export interface LedgerRoots {
   reservationsDir: string;
   /** <ledger-root>/run-logs/<case>.<model>.run.json */
   runLogsDir: string;
-  /** <ledger-root>/outputs/<case>.<model>.json — the authoritative saved outputs. */
+  /** <ledger-root>/outputs/<case>.<model>.json — the authoritative saved (valid) outputs. */
   canonicalOutputsDir: string;
+  /** <ledger-root>/rejected-outputs/<case>.<model>.rejected.txt — raw model text that failed validation. */
+  rejectedOutputsDir: string;
   /** <eval-root>/outputs — this checkout's convenience copies; never authoritative. */
   localOutputsDir: string;
 }
@@ -110,7 +116,7 @@ const LEDGER_FORMAT_TEXT = JSON.stringify(LEDGER_FORMAT, null, 2) + '\n';
 /** Prefix of createFileDurably's private temp files; never read as ledger content. */
 const TEMP_PREFIX = '.tmp-';
 /** Top-level entries a format-2 ledger may contain. */
-const LEDGER_ENTRIES = new Set([LEDGER_FORMAT_FILE, 'request-budget', 'reservations', 'run-logs', 'outputs']);
+const LEDGER_ENTRIES = new Set([LEDGER_FORMAT_FILE, 'request-budget', 'reservations', 'run-logs', 'outputs', 'rejected-outputs']);
 
 /**
  * The single user-level ledger location for this machine and OS account:
@@ -145,6 +151,7 @@ export function resolveLedgerRoots(evalRoot: string, ledgerRoot: string): Ledger
     reservationsDir: join(ledger, 'reservations'),
     runLogsDir: join(ledger, 'run-logs'),
     canonicalOutputsDir: join(ledger, 'outputs'),
+    rejectedOutputsDir: join(ledger, 'rejected-outputs'),
     localOutputsDir: join(resolve(evalRoot), 'outputs'),
   };
 }
@@ -209,7 +216,14 @@ export async function ensureLedgerDirs(roots: LedgerRoots): Promise<void> {
   }
   const after = inspectLedgerLayout(roots);
   if (after.length > 0) throw new Error(after.join(' '));
-  for (const dir of [roots.budgetDir, roots.reservationsDir, roots.runLogsDir, roots.canonicalOutputsDir, roots.localOutputsDir]) {
+  for (const dir of [
+    roots.budgetDir,
+    roots.reservationsDir,
+    roots.runLogsDir,
+    roots.canonicalOutputsDir,
+    roots.rejectedOutputsDir,
+    roots.localOutputsDir,
+  ]) {
     ensureDirDurably(dir);
   }
 }
@@ -300,6 +314,12 @@ export function readCanonicalOutputBytes(roots: LedgerRoots, caseId: string, mod
   return existsSync(path) ? readFileSync(path) : null;
 }
 
+/** Raw bytes of the preserved rejected output, or null if none exists. Hash checks are the caller's job. */
+export function readRejectedOutputBytes(roots: LedgerRoots, caseId: string, model: EvalModel): Buffer | null {
+  const path = join(roots.rejectedOutputsDir, rejectedOutputFileName(caseId, model));
+  return existsSync(path) ? readFileSync(path) : null;
+}
+
 /** Every reservation filename currently on disk that parses as a valid (case, model) pair. */
 export function listReservedPairs(roots: LedgerRoots): Array<{ caseId: string; model: EvalModel }> {
   if (!existsSync(roots.reservationsDir)) return [];
@@ -321,15 +341,6 @@ export type ReserveResult =
   | { ok: false; reason: 'already_reserved' }
   | { ok: false; reason: 'cap_reached'; count: number };
 
-/**
- * Atomically reserves one (case, model) pair, persisting the reservation to
- * disk BEFORE the caller is allowed to send any network request. Safe to
- * call from multiple concurrent processes pointed at the same ledger
- * directory: the underlying `wx` open is a single atomic OS-level
- * create-or-fail, so two processes racing for the same pair can never both
- * "win". Never refunds; there is deliberately no corresponding "release" or
- * "reset" function anywhere in this module.
- */
 function isEexist(err: unknown): boolean {
   return Boolean(err && typeof err === 'object' && 'code' in err && (err as { code: unknown }).code === 'EEXIST');
 }
@@ -337,7 +348,7 @@ function isEexist(err: unknown): boolean {
 /**
  * Atomically claims one of exactly MAX_EXPERIMENT_REQUESTS pre-named budget
  * slots, trying each in order and taking the first not already claimed.
- * Each slot filename is only ever created once (`wx`), so the TOTAL number
+ * Each slot filename can only ever be created once, so the TOTAL number
  * of slot claims that can ever succeed — across any number of concurrent
  * processes, for any number of distinct (case, model) pairs — is bounded at
  * exactly MAX_EXPERIMENT_REQUESTS. This is what makes the overall cap
@@ -361,6 +372,14 @@ async function claimBudgetSlot(roots: LedgerRoots, claimRecord: string): Promise
   return null;
 }
 
+/**
+ * Atomically reserves one (case, model) pair, persisting the reservation to
+ * disk BEFORE the caller is allowed to send any network request. Safe to
+ * call from multiple concurrent processes pointed at the same ledger
+ * directory: the exclusive create means two processes racing for the same
+ * pair can never both "win". Never refunds; there is deliberately no
+ * corresponding "release" or "reset" function anywhere in this module.
+ */
 export async function reserveNext(
   roots: LedgerRoots,
   caseId: string,
@@ -443,6 +462,21 @@ export async function writeCanonicalOutputOnce(
   const bytes = serializeOutput(output);
   const result = await writeOnce(join(roots.canonicalOutputsDir, outputFileName(caseId, model)), bytes);
   return { result, sha256: sha256Hex(bytes) };
+}
+
+/**
+ * Preserves the model's raw text for an output that failed mechanical
+ * validation (write-once, fsync'd) and returns the SHA-256 of the stored
+ * bytes. Must happen BEFORE the 'invalid' run-log is written.
+ */
+export async function writeRejectedOutputOnce(
+  roots: LedgerRoots,
+  caseId: string,
+  model: EvalModel,
+  text: string
+): Promise<{ result: WriteOnceResult; sha256: string }> {
+  const result = await writeOnce(join(roots.rejectedOutputsDir, rejectedOutputFileName(caseId, model)), text);
+  return { result, sha256: sha256Hex(text) };
 }
 
 /** Writes this checkout's convenience copy of already-verified canonical bytes. Never overwrites. */

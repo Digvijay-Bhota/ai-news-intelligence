@@ -64,6 +64,17 @@ function mixedFetch() {
   );
 }
 
+/** A grounded-looking brief that fails real validation (why_it_matters too short). */
+const SCHEMA_INVALID_TEXT = JSON.stringify({ ...JSON.parse(VALID_BRIEF_JSON), why_it_matters: 'x' });
+const PROSE_TEXT = 'The council approved the expansion. (Answered in prose, not JSON.)';
+
+/** Lite returns schema-invalid JSON, 3.6-flash returns prose (unparseable). */
+function invalidOutputFetch() {
+  return vi.fn().mockImplementation((url: string) =>
+    Promise.resolve(geminiResponse(String(url).includes(FLASH) ? PROSE_TEXT : SCHEMA_INVALID_TEXT))
+  );
+}
+
 function useFetch(spy: ReturnType<typeof vi.fn>): void {
   global.fetch = spy as unknown as typeof fetch;
 }
@@ -184,6 +195,52 @@ describe('--execute', () => {
   });
 });
 
+describe('--execute with model output that fails validation', () => {
+  it('preserves the exact model text as an invalid result, never as an output, and never re-sends it', async () => {
+    process.env.GEMINI_QUALITY_EVAL_API_KEY = 'eval-key';
+    const fetchSpy = invalidOutputFetch();
+    useFetch(fetchSpy);
+
+    const { result, out } = await captured(() => run(['--eval-root', evalRoot, '--execute']));
+    expect(result).toBe(0);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(out).toMatch(/2 invalid \(output failed validation; preserved for review\)/);
+
+    for (const [model, text, error] of [
+      [LITE, SCHEMA_INVALID_TEXT, /why_it_matters/],
+      [FLASH, PROSE_TEXT, /Invalid JSON returned by Gemini API/],
+    ] as const) {
+      const preserved = readFileSync(join(roots.rejectedOutputsDir, `case-1.${model}.rejected.txt`));
+      expect(preserved.toString('utf8')).toBe(text);
+      const log = readRunLog(roots, 'case-1', model);
+      expect(log.status === 'valid' && log.record).toMatchObject({
+        outcome: 'invalid',
+        output_sha256: sha256Hex(preserved),
+        error_classification: { classification: 'invalid_output' },
+        mechanical_validation: { ran: true, valid: false },
+      });
+      expect(log.status === 'valid' && log.record.mechanical_validation.errors[0]).toMatch(error);
+      expect(getPairState(roots, 'case-1', model)).toBe('invalid');
+      expect(existsSync(join(roots.canonicalOutputsDir, `case-1.${model}.json`))).toBe(false);
+      expect(existsSync(join(roots.localOutputsDir, `case-1.${model}.json`))).toBe(false);
+    }
+
+    fetchSpy.mockClear();
+    await captured(() => run(['--eval-root', evalRoot, '--execute']));
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not preserve invalid output that contains the API key (recorded as failed instead)', async () => {
+    process.env.GEMINI_QUALITY_EVAL_API_KEY = 'eval-key-plain-format-xyz';
+    useFetch(vi.fn().mockImplementation(() => Promise.resolve(geminiResponse('echo eval-key-plain-format-xyz'))));
+    await captured(() => run(['--eval-root', evalRoot, '--execute']));
+    expect(readdirSync(roots.rejectedOutputsDir)).toEqual([]);
+    const log = readRunLog(roots, 'case-1', LITE);
+    expect(log.status === 'valid' && log.record).toMatchObject({ outcome: 'failed', output_sha256: null });
+    expect(log.status === 'valid' && log.record.error_message).toMatch(/contained the API key; not preserved/);
+  });
+});
+
 describe('switching worktree / eval root on the same machine', () => {
   it('never repeats a completed or failed pair, and gives worktree B the completed output without a request', async () => {
     process.env.GEMINI_QUALITY_EVAL_API_KEY = 'eval-key';
@@ -232,12 +289,15 @@ describe('switching worktree / eval root on the same machine', () => {
 describe('crash at each write boundary (real runner code; the next write fails)', () => {
   const asNonRoot = process.getuid?.() === 0 ? it.skip : it;
 
-  async function crashWhileWriting(dir: 'canonicalOutputsDir' | 'runLogsDir' | 'localOutputsDir'): Promise<void> {
+  async function crashWhileWriting(
+    dir: 'canonicalOutputsDir' | 'rejectedOutputsDir' | 'runLogsDir' | 'localOutputsDir',
+    fetchImpl: () => ReturnType<typeof vi.fn> = mixedFetch
+  ): Promise<void> {
     await ensureLedgerDirs(roots);
     chmodSync(roots[dir], 0o555);
     try {
       process.env.GEMINI_QUALITY_EVAL_API_KEY = 'eval-key';
-      useFetch(mixedFetch());
+      useFetch(fetchImpl());
       await expect(captured(() => run(['--eval-root', evalRoot, '--execute']))).rejects.toThrow(/EACCES/);
     } finally {
       chmodSync(roots[dir], 0o755);
@@ -274,6 +334,28 @@ describe('crash at each write boundary (real runner code; the next write fails)'
     const log = readRunLog(roots, 'case-1', LITE);
     expect(log.status === 'valid' && log.record.reconciled).toBe(true);
     expect(existsSync(join(roots.localOutputsDir, `case-1.${LITE}.json`))).toBe(true);
+  });
+
+  asNonRoot('invalid output: after the request, before the rejected output — ambiguous, never re-sent', async () => {
+    await crashWhileWriting('rejectedOutputsDir', invalidOutputFetch);
+    expect(getPairState(roots, 'case-1', LITE)).toBe('ambiguous');
+    const fetchSpy = invalidOutputFetch();
+    useFetch(fetchSpy);
+    await captured(() => run(['--eval-root', evalRoot, '--execute']));
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // only the never-attempted 3.6 pair
+  });
+
+  asNonRoot("invalid output: after the rejected output, before the run-log — reconciled to 'invalid' offline", async () => {
+    await crashWhileWriting('runLogsDir', invalidOutputFetch);
+    expect(getPairState(roots, 'case-1', LITE)).toBe('incomplete');
+    delete process.env.GEMINI_QUALITY_EVAL_API_KEY;
+    const fetchSpy = vi.fn();
+    useFetch(fetchSpy);
+    const rec = await captured(() => run(['--eval-root', evalRoot, '--reconcile']));
+    expect(rec.result).toBe(0);
+    expect(rec.out).toMatch(/Reconciled case-1 x gemini-3.5-flash-lite/);
+    expect(getPairState(roots, 'case-1', LITE)).toBe('invalid');
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   asNonRoot('after the run-log, before the local copy: completed; reconciliation only materializes', async () => {

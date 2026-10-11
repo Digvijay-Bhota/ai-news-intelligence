@@ -13,10 +13,20 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { validateSavedOutput, type EvalCase, type EvalModel, type UnavailableOutput } from './harness';
-import { buildRunLogRecord, classifyPairState, outputFileName, EXPERIMENT_ID, type PairState } from './runner';
+import { GeminiOutputValidationError } from '../../src/tasks/gemini-errors';
+import {
+  buildRunLogRecord,
+  classifyPairState,
+  outputFileName,
+  parseModelText,
+  rejectedOutputFileName,
+  EXPERIMENT_ID,
+  type PairState,
+} from './runner';
 import {
   hasReservation,
   readCanonicalOutputBytes,
+  readRejectedOutputBytes,
   readReservedAt,
   readRunLog,
   sha256Hex,
@@ -31,17 +41,27 @@ export interface PairStatus {
 }
 
 /**
- * Reads the pair's files in REVERSE write order (run-log, canonical output,
+ * Reads the pair's files in REVERSE write order (run-log, saved output,
  * reservation). Files are never deleted, so anything written before a file we
  * saw is guaranteed to be visible too: a concurrent writer can make us see an
  * earlier state, but never a falsely corrupt one.
  */
-function observe(roots: LedgerRoots, caseId: string, model: EvalModel): { bytes: Buffer | null } & PairStatus {
+function observe(
+  roots: LedgerRoots,
+  caseId: string,
+  model: EvalModel
+): { bytes: Buffer | null; rejected: Buffer | null } & PairStatus {
   const runLog = readRunLog(roots, caseId, model);
   const bytes = readCanonicalOutputBytes(roots, caseId, model);
+  const rejected = readRejectedOutputBytes(roots, caseId, model);
   const reserved = hasReservation(roots, caseId, model);
-  const status = classifyPairState({ reserved, runLog, canonicalOutputSha256: bytes ? sha256Hex(bytes) : null });
-  return { bytes, ...status };
+  const status = classifyPairState({
+    reserved,
+    runLog,
+    canonicalOutputSha256: bytes ? sha256Hex(bytes) : null,
+    rejectedOutputSha256: rejected ? sha256Hex(rejected) : null,
+  });
+  return { bytes, rejected, ...status };
 }
 
 export function getPairStatus(roots: LedgerRoots, caseId: string, model: EvalModel): PairStatus {
@@ -72,6 +92,23 @@ export function loadVerifiedOutput(roots: LedgerRoots, caseId: string, model: Ev
   }
 }
 
+/**
+ * Reads a preserved invalid output: the pair must be 'invalid' and the raw
+ * text must hash to the run-log's output_sha256. Returned for review only —
+ * it is never treated as a valid output.
+ */
+export function loadVerifiedRejectedOutput(
+  roots: LedgerRoots,
+  caseId: string,
+  model: EvalModel
+): { ok: true; text: string; sha256: string; errors: string[] } | { ok: false; state: PairState; problem: string | null } {
+  const { rejected, state, problem } = observe(roots, caseId, model);
+  if (state !== 'invalid' || !rejected) return { ok: false, state, problem };
+  const log = readRunLog(roots, caseId, model);
+  const errors = log.status === 'valid' ? log.record.mechanical_validation.errors : [];
+  return { ok: true, text: rejected.toString('utf8'), sha256: sha256Hex(rejected), errors };
+}
+
 /** Every planned pair whose ledger state is corrupt, with the precise reason. */
 export function findCorruptPairs(
   roots: LedgerRoots,
@@ -97,6 +134,15 @@ function describeUnavailable(roots: LedgerRoots, caseId: string, model: EvalMode
       const record = log.status === 'valid' ? log.record : null;
       const cls = record?.error_classification?.classification ?? 'unknown';
       return { status: 'failed', detail: `request failed (${cls})${record?.error_message ? `: ${record.error_message}` : ''}` };
+    }
+    case 'invalid': {
+      const rejected = loadVerifiedRejectedOutput(roots, caseId, model);
+      if (!rejected.ok) return { status: 'corrupt_output', detail: rejected.problem ?? 'rejected output unreadable' };
+      const path = join(roots.rejectedOutputsDir, rejectedOutputFileName(caseId, model));
+      return {
+        status: 'invalid',
+        detail: `model output failed validation (${rejected.errors.join('; ') || 'no detail recorded'}); preserved for review at ${path} (sha256 ${rejected.sha256.slice(0, 12)}…)`,
+      };
     }
     case 'ambiguous':
       return { status: 'ambiguous', detail: 'reserved but no outcome recorded (interrupted); never re-sent' };
@@ -168,10 +214,12 @@ export interface ReconcileReport {
 /**
  * Offline recovery after a crash, and local materialization for any
  * checkout. Never sends a request and never repeats a reserved one:
- *   - 'incomplete' (reservation + canonical output, no run-log): the output
- *     is re-validated against this checkout's case fixture and, only if
- *     valid, a completion record is written with its SHA-256 and
- *     reconciled: true. Otherwise it is reported and left untouched.
+ *   - 'incomplete' (reservation + one saved output, no run-log): a canonical
+ *     output is re-validated against this checkout's case fixture and, only
+ *     if valid, a 'completed' record is written; a rejected output is
+ *     re-checked and, only if it still fails validation, an 'invalid' record
+ *     is written. Both carry the output's SHA-256 and reconciled: true.
+ *     Anything else is reported and left untouched.
  *   - 'completed': the verified bytes are copied to the local outputs/.
  *   - every other state is left exactly as it is.
  */
@@ -185,7 +233,34 @@ export async function reconcileAndMaterialize(
   for (const { caseId, model } of pairs) {
     const label = `${caseId} x ${model}`;
     const evalCase = casesById.get(caseId);
-    let { bytes, state, problem } = observe(roots, caseId, model);
+    let { bytes, rejected, state, problem } = observe(roots, caseId, model);
+
+    if (state === 'incomplete' && rejected && evalCase) {
+      const parsed = parseModelText(rejected.toString('utf8'));
+      const validation = parsed.ok
+        ? validateSavedOutput(evalCase, parsed.value)
+        : { valid: false, errors: ['Invalid JSON returned by Gemini API'] };
+      if (validation.valid) {
+        report.problems.push(`${label}: interrupted run left a rejected output that now passes validation; left untouched`);
+        continue;
+      }
+      const record = buildRunLogRecord({
+        experimentId: EXPERIMENT_ID,
+        caseId,
+        task: evalCase.task,
+        model,
+        reservedAt: readReservedAt(roots, caseId, model) ?? 'unknown',
+        responseMeta: null,
+        outcome: 'invalid',
+        error: new GeminiOutputValidationError(validation.errors[0] ?? 'Mechanical validation failed'),
+        validation,
+        outputSha256: sha256Hex(rejected),
+        reconciled: true,
+      });
+      await writeRunLogOnce(roots, caseId, model, record); // 'already_exists' = a concurrent writer; re-checked below
+      ({ bytes, rejected, state, problem } = observe(roots, caseId, model));
+      if (state === 'invalid') report.reconciled.push(label);
+    }
 
     if (state === 'incomplete' && bytes && evalCase) {
       let output: unknown;
@@ -213,7 +288,7 @@ export async function reconcileAndMaterialize(
         reconciled: true,
       });
       await writeRunLogOnce(roots, caseId, model, record); // 'already_exists' = a concurrent writer; re-checked below
-      ({ bytes, state, problem } = observe(roots, caseId, model));
+      ({ bytes, rejected, state, problem } = observe(roots, caseId, model));
       if (state === 'completed') report.reconciled.push(label);
     }
 

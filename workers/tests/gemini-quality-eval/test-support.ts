@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultLedgerRoot } from './ledger';
 import type { EvalCase, EvalModel } from './harness';
-import type { RunLogRecord } from './runner';
+import type { RunLogRecord, RunOutcome } from './runner';
 
 export const WORKERS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const VITE_NODE_BIN = join(WORKERS_DIR, 'node_modules', '.bin', 'vite-node');
@@ -68,7 +68,8 @@ export function makeKnownIds(n: number): Set<string> {
   return new Set(Array.from({ length: n }, (_, i) => `case-${i}`));
 }
 
-export function makeRunLog(caseId: string, model: EvalModel, outcome: 'completed' | 'failed', outputSha256: string | null = null): RunLogRecord {
+export function makeRunLog(caseId: string, model: EvalModel, outcome: RunOutcome, outputSha256: string | null = null): RunLogRecord {
+  const ok = outcome === 'completed';
   return {
     experiment_id: 'test',
     case_id: caseId,
@@ -78,10 +79,14 @@ export function makeRunLog(caseId: string, model: EvalModel, outcome: 'completed
     recorded_at: new Date().toISOString(),
     outcome,
     response_meta: null,
-    error_classification:
-      outcome === 'failed' ? { classification: 'unknown', httpStatus: null, apiStatus: null, quotaIds: [], retryAfterSeconds: null } : null,
-    error_message: outcome === 'failed' ? 'simulated failure' : null,
-    mechanical_validation: { ran: outcome === 'completed', valid: outcome === 'completed' ? true : null, errors: [] },
+    error_classification: ok
+      ? null
+      : { classification: outcome === 'invalid' ? 'invalid_output' : 'unknown', httpStatus: null, apiStatus: null, quotaIds: [], retryAfterSeconds: null },
+    error_message: ok ? null : outcome === 'invalid' ? 'simulated validation failure' : 'simulated failure',
+    mechanical_validation:
+      outcome === 'failed'
+        ? { ran: false, valid: null, errors: [] }
+        : { ran: true, valid: ok, errors: ok ? [] : ['simulated validation failure'] },
     output_sha256: outputSha256,
     reconciled: false,
   };

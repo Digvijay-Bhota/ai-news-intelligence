@@ -2,7 +2,8 @@
 
 This directory holds human-reviewer scorecards recorded via
 `../../../scripts/gemini-quality-eval.ts score ...`. Each file corresponds to
-one `(case, model)` pair that has already been mechanically validated (see
+one `(case, model)` pair whose saved output in the shared request ledger is
+hash-verified and mechanically valid — `score` refuses anything else (see
 `../harness.ts`'s `HumanScore` type for the exact fields) and has had a
 human apply the rubric in `../rubric.md`.
 

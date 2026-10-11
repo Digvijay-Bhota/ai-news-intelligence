@@ -25,7 +25,8 @@
  * across different machines. Pairs are keyed globally by (case, model):
  * once reserved, a pair is never requested again from any checkout.
  *
- * Dry-run is the default: read-only, zero network calls, no API key.
+ * Dry-run is the default: read-only, zero network calls; it neither requires
+ * nor uses an API key.
  * --reconcile is offline: it completes interrupted-but-saved runs from their
  * verified canonical output and copies verified outputs into this
  * checkout's outputs/, without a key or any request. A live request requires
@@ -43,7 +44,7 @@ import {
   generateNarrativeDeltaFromGemini,
   generateClaimComparisonsFromGemini,
 } from '../src/tasks/gemini';
-import { GeminiOutputValidationError } from '../src/tasks/gemini-errors';
+import { GeminiOutputValidationError, classifyGeminiFailure } from '../src/tasks/gemini-errors';
 import { validateSavedOutput, type EvalCase, type EvalModel } from '../tests/gemini-quality-eval/harness';
 import {
   EXPERIMENT_ID,
@@ -64,6 +65,7 @@ import {
   inspectLedgerLayout,
   reserveNext,
   writeCanonicalOutputOnce,
+  writeRejectedOutputOnce,
   writeRunLogOnce,
   serializeOutput,
   UnknownPairError,
@@ -187,10 +189,12 @@ export async function runExperiment(
 
     const originalFetch = global.fetch;
     let captured: CapturedResponseMeta | null = null;
+    const modelText: { value: string | null } = { value: null };
     // One reservation permits exactly one request: a second fetch during
     // this attempt is rejected before it reaches the network.
-    global.fetch = wrapFetchForCapture(limitFetchToSingleRequest(originalFetch), (meta) => {
+    global.fetch = wrapFetchForCapture(limitFetchToSingleRequest(originalFetch), (meta, text) => {
       captured = meta;
+      modelText.value = text;
     });
 
     let rawOutput: unknown;
@@ -210,6 +214,18 @@ export async function runExperiment(
       thrown = err;
     } finally {
       global.fetch = originalFetch;
+    }
+
+    // Output the model DID return but that failed validation (schema,
+    // grounding, or unparseable JSON) is preserved as its raw text and
+    // recorded as 'invalid' — never discarded, never retried.
+    let rejectedText: string | null = null;
+    if (thrown !== undefined && classifyGeminiFailure(thrown).classification === 'invalid_output' && modelText.value !== null) {
+      if (modelText.value.includes(apiKey)) {
+        thrown = new Error('Model output failed validation and contained the API key; not preserved');
+      } else {
+        rejectedText = modelText.value;
+      }
     }
 
     if (thrown === undefined) {
@@ -252,6 +268,33 @@ export async function runExperiment(
         `  completed (validated output saved to the ledger, sha256 ${canonical.sha256.slice(0, 12)}…` +
           `${local === 'local_differs' ? '; existing local copy differs and was left unchanged' : ''}).`
       );
+    } else if (rejectedText !== null) {
+      // Order: rejected output (durable) -> 'invalid' run-log with its SHA-256.
+      const rejected = await writeRejectedOutputOnce(roots, pair.case_id, pair.model, rejectedText);
+      if (rejected.result === 'already_exists') {
+        console.error(`Inconsistent state: a rejected output already exists for ${pair.case_id} x ${pair.model}. Stopping.`);
+        return false;
+      }
+      const message = safeErrorMessage(thrown, secrets);
+      const record = buildRunLogRecord({
+        experimentId: EXPERIMENT_ID,
+        caseId: pair.case_id,
+        task: pair.task,
+        model: pair.model,
+        reservedAt,
+        responseMeta: captured,
+        outcome: 'invalid',
+        error: thrown,
+        validation: validation ?? { valid: false, errors: [message] },
+        secrets,
+        outputSha256: rejected.sha256,
+      });
+      const logWrite = await writeRunLogOnce(roots, pair.case_id, pair.model, record);
+      if (logWrite === 'already_exists' && getPairState(roots, pair.case_id, pair.model) !== 'invalid') {
+        console.error(`Inconsistent state: run-log already exists for ${pair.case_id} x ${pair.model}. Stopping.`);
+        return false;
+      }
+      console.log(`  invalid: ${message} (model output preserved for review, sha256 ${rejected.sha256.slice(0, 12)}…).`);
     } else {
       const record = buildRunLogRecord({
         experimentId: EXPERIMENT_ID,
@@ -277,14 +320,15 @@ export async function runExperiment(
 }
 
 function printSummary(roots: LedgerRoots, plan: PlannedPair[]): void {
-  const counts: Record<string, number> = { not_attempted: 0, ambiguous: 0, incomplete: 0, completed: 0, failed: 0, corrupt: 0 };
+  const counts: Record<string, number> = { not_attempted: 0, ambiguous: 0, incomplete: 0, completed: 0, invalid: 0, failed: 0, corrupt: 0 };
   for (const pair of plan) {
     const state = getPairState(roots, pair.case_id, pair.model);
     counts[state] = (counts[state] ?? 0) + 1;
   }
   console.log('');
   console.log(
-    `Summary: ${plan.length} planned — ${counts.completed} completed, ${counts.failed} failed, ` +
+    `Summary: ${plan.length} planned — ${counts.completed} completed, ` +
+      `${counts.invalid} invalid (output failed validation; preserved for review), ${counts.failed} failed, ` +
       `${counts.ambiguous} ambiguous (reserved, no outcome — a prior interrupted attempt; never re-sent), ` +
       `${counts.incomplete} incomplete (saved, completion not recorded — run --reconcile), ` +
       `${counts.corrupt} corrupt, ${counts.not_attempted} not attempted.`
@@ -350,7 +394,7 @@ export async function main(argv: string[], ledgerRoot: string): Promise<number> 
 
   if (!values.execute && !values.reconcile) {
     console.log('');
-    console.log('DRY RUN — read-only: no network calls were made, nothing was written, no API key was read.');
+    console.log('DRY RUN — read-only: no network calls were made, nothing was written, and no API key was used.');
     console.log('Pass --execute (with GEMINI_QUALITY_EVAL_API_KEY set) to run requests, or --reconcile for offline recovery.');
     return corrupt.length > 0 ? 1 : 0;
   }

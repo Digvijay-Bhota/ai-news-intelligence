@@ -15,6 +15,7 @@ import {
   resolveLedgerRoots,
   sha256Hex,
   writeCanonicalOutputOnce,
+  writeRejectedOutputOnce,
   writeRunLogOnce,
   type LedgerRoots,
 } from './gemini-quality-eval/ledger';
@@ -24,6 +25,7 @@ import {
   getPairStatus,
   ledgerOutputSource,
   loadVerifiedOutput,
+  loadVerifiedRejectedOutput,
   reconcileAndMaterialize,
 } from './gemini-quality-eval/ledger-state';
 import { buildComparisonReport, renderReport, type EvalCase, type EvalModel } from './gemini-quality-eval/harness';
@@ -55,6 +57,13 @@ async function completed(r: LedgerRoots, caseId: string, model: EvalModel): Prom
   const sha = await incomplete(r, caseId, model);
   await writeRunLogOnce(r, caseId, model, makeRunLog(caseId, model, 'completed', sha));
   return sha;
+}
+/** The runner's invalid-output order: reservation -> rejected raw text -> 'invalid' run-log. */
+async function invalid(r: LedgerRoots, caseId: string, model: EvalModel, text: string): Promise<string> {
+  await ambiguous(r, caseId, model);
+  const { sha256 } = await writeRejectedOutputOnce(r, caseId, model, text);
+  await writeRunLogOnce(r, caseId, model, makeRunLog(caseId, model, 'invalid', sha256));
+  return sha256;
 }
 async function failed(r: LedgerRoots, caseId: string, model: EvalModel): Promise<void> {
   await ambiguous(r, caseId, model);
@@ -242,5 +251,61 @@ describe('offline reconciliation and local materialization', () => {
     const report = await reconcileAndMaterialize(rootsA, cases, [{ caseId: 'case-1', model: LITE }]);
     expect(report.problems).toEqual([`case-1 x ${LITE}: run-log reports completed but the canonical output is missing`]);
     expect(existsSync(canonicalPath('case-1', LITE))).toBe(false);
+  });
+});
+
+describe('model output that failed validation is preserved, verified, and never treated as valid', () => {
+  const PROSE = 'Here is a summary of the council vote, in prose instead of JSON.';
+  const rejectedPath = (caseId: string, model: EvalModel) => join(rootsA.rejectedOutputsDir, `${caseId}.${model}.rejected.txt`);
+
+  it('is readable, byte-exact and hash-verified from another worktree, and reported as invalid (never scorable)', async () => {
+    const sha = await invalid(rootsA, 'case-1', LITE, PROSE);
+    expect(getPairStatus(rootsB, 'case-1', LITE)).toEqual({ state: 'invalid', problem: null });
+    expect(loadVerifiedRejectedOutput(rootsB, 'case-1', LITE)).toEqual({ ok: true, text: PROSE, sha256: sha, errors: ['simulated validation failure'] });
+    expect(loadVerifiedOutput(rootsB, 'case-1', LITE).ok).toBe(false);
+    expect(checkScorable(rootsB, cases[0], LITE)).toMatchObject({ ok: false, reason: expect.stringMatching(/ledger state: invalid/) });
+
+    const source = ledgerOutputSource(rootsB);
+    const [result] = buildComparisonReport(cases.slice(0, 1), source.readOutput, () => ({ status: 'none' }), source.explainUnavailable);
+    expect(result.status).toBe('invalid');
+    expect(result.output_detail).toContain('simulated validation failure');
+    expect(result.output_detail).toContain(rejectedPath('case-1', LITE));
+    expect(renderReport(cases.slice(0, 1), [result])).toMatch(/1 invalid,/);
+  });
+
+  it('rejects a tampered rejected output (SHA-256 mismatch) as corrupt', async () => {
+    await invalid(rootsA, 'case-1', LITE, PROSE);
+    writeFileSync(rejectedPath('case-1', LITE), PROSE + ' edited');
+    expect(getPairStatus(rootsB, 'case-1', LITE)).toMatchObject({ state: 'corrupt', problem: expect.stringMatching(/rejected output SHA-256 .* does not match/) });
+    expect(loadVerifiedRejectedOutput(rootsB, 'case-1', LITE).ok).toBe(false);
+    const source = ledgerOutputSource(rootsB);
+    const [result] = buildComparisonReport(cases.slice(0, 1), source.readOutput, () => ({ status: 'none' }), source.explainUnavailable);
+    expect(result.status).toBe('corrupt_output');
+  });
+
+  it("reconciles an interrupted invalid run (rejected text saved, no run-log) to 'invalid' without a request", async () => {
+    await ambiguous(rootsA, 'case-1', LITE);
+    const { sha256 } = await writeRejectedOutputOnce(rootsA, 'case-1', LITE, PROSE);
+    expect(getPairStatus(rootsA, 'case-1', LITE).state).toBe('incomplete');
+
+    const report = await reconcileAndMaterialize(rootsA, cases, [{ caseId: 'case-1', model: LITE }]);
+    expect(report).toMatchObject({ reconciled: [`case-1 x ${LITE}`], materialized: [], problems: [] });
+    const log = readRunLog(rootsA, 'case-1', LITE);
+    expect(log.status === 'valid' && log.record).toMatchObject({
+      outcome: 'invalid',
+      output_sha256: sha256,
+      reconciled: true,
+      error_classification: { classification: 'invalid_output' },
+      mechanical_validation: { ran: true, valid: false, errors: ['Invalid JSON returned by Gemini API'] },
+    });
+    expect(existsSync(join(rootsA.localOutputsDir, `case-1.${LITE}.json`))).toBe(false); // never materialized as an output
+  });
+
+  it('refuses to reconcile a rejected output that actually passes validation, leaving it untouched', async () => {
+    await ambiguous(rootsA, 'case-1', LITE);
+    await writeRejectedOutputOnce(rootsA, 'case-1', LITE, JSON.stringify(VALID_BRIEF));
+    const report = await reconcileAndMaterialize(rootsA, cases, [{ caseId: 'case-1', model: LITE }]);
+    expect(report.problems).toEqual([`case-1 x ${LITE}: interrupted run left a rejected output that now passes validation; left untouched`]);
+    expect(readRunLog(rootsA, 'case-1', LITE)).toEqual({ status: 'absent' });
   });
 });

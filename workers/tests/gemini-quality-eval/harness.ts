@@ -139,9 +139,11 @@ export type OutputStatus =
 /**
  * Why no usable output exists for a pair. 'missing' = not attempted (or no
  * ledger information). The others come from the Phase 2 request ledger and
- * must stay distinguishable from 'missing' and from each other.
+ * must stay distinguishable from 'missing' and from each other; 'invalid'
+ * here means the model's output failed validation and is preserved in the
+ * ledger for review (it is never returned as a usable output).
  */
-export type UnavailableOutputStatus = 'missing' | 'failed' | 'ambiguous' | 'incomplete' | 'corrupt_output';
+export type UnavailableOutputStatus = 'missing' | 'invalid' | 'failed' | 'ambiguous' | 'incomplete' | 'corrupt_output';
 
 export interface UnavailableOutput {
   status: UnavailableOutputStatus;

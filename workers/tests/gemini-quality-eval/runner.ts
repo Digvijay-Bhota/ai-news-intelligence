@@ -116,9 +116,25 @@ function extractFinishReason(json: unknown): string | null {
  * logs or reports the request URL/headers verbatim — only `redactSecrets`-
  * sanitized text ever leaves this function via `onCapture`'s caller.
  */
+/** The first candidate's text exactly as the model returned it, or null if absent. */
+function extractCandidateText(json: unknown): string | null {
+  if (!json || typeof json !== 'object') return null;
+  const candidates = (json as Record<string, unknown>).candidates;
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  const parts = (candidates[0] as { content?: { parts?: unknown } } | null)?.content?.parts;
+  if (!Array.isArray(parts) || parts.length === 0) return null;
+  const text = (parts[0] as { text?: unknown } | null)?.text;
+  return typeof text === 'string' ? text : null;
+}
+
+/**
+ * `onCapture` also receives the model's raw candidate text (never persisted
+ * as response metadata) so that output which fails validation can still be
+ * preserved for review.
+ */
 export function wrapFetchForCapture(
   realFetch: typeof fetch,
-  onCapture: (meta: CapturedResponseMeta) => void
+  onCapture: (meta: CapturedResponseMeta, candidateText: string | null) => void
 ): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await realFetch(input, init);
@@ -126,12 +142,14 @@ export function wrapFetchForCapture(
     let bodyParsed = false;
     let usageMetadata: UsageMetadata | null = null;
     let finishReason: string | null = null;
+    let candidateText: string | null = null;
     try {
       const text = await inspectable.text();
       const json = JSON.parse(text);
       bodyParsed = true;
       usageMetadata = extractUsageMetadata(json);
       finishReason = extractFinishReason(json);
+      candidateText = extractCandidateText(json);
     } catch {
       // Not JSON, or unreadable — reported honestly as body_parsed: false.
       // Never fabricate usage/finishReason when the body can't be inspected.
@@ -143,7 +161,7 @@ export function wrapFetchForCapture(
       usage_metadata: usageMetadata,
       body_parsed: bodyParsed,
       captured_at: new Date().toISOString(),
-    });
+    }, candidateText);
     return response;
   }) as typeof fetch;
 }
@@ -197,7 +215,12 @@ function redactStringsDeep<T>(value: T, secrets: readonly string[]): T {
   return value;
 }
 
-export type RunOutcome = 'completed' | 'failed';
+/**
+ * 'completed' = a mechanically valid output was saved; 'invalid' = the model
+ * returned output that failed mechanical validation, preserved separately for
+ * review; 'failed' = no model output to preserve (HTTP/network/other error).
+ */
+export type RunOutcome = 'completed' | 'invalid' | 'failed';
 
 export interface RunLogRecord {
   experiment_id: string;
@@ -249,8 +272,9 @@ export function buildRunLogRecord(params: {
 }): RunLogRecord {
   const { experimentId, caseId, task, model, reservedAt, responseMeta, outcome, error, validation, secrets } = params;
   const outputSha256 = params.outputSha256 ?? null;
-  if ((outcome === 'completed') !== (outputSha256 !== null && SHA256_HEX.test(outputSha256))) {
-    throw new Error(`A '${outcome}' run-log ${outcome === 'completed' ? 'requires' : 'must not carry'} an output SHA-256`);
+  const needsOutput = outcome !== 'failed';
+  if (needsOutput !== (outputSha256 !== null && SHA256_HEX.test(outputSha256))) {
+    throw new Error(`A '${outcome}' run-log ${needsOutput ? 'requires' : 'must not carry'} an output SHA-256`);
   }
   const errorMessage =
     error === undefined
@@ -265,8 +289,8 @@ export function buildRunLogRecord(params: {
     recorded_at: new Date().toISOString(),
     outcome,
     response_meta: responseMeta,
-    error_classification: outcome === 'failed' ? classifyGeminiFailure(error) : null,
-    error_message: outcome === 'failed' ? errorMessage : null,
+    error_classification: outcome === 'completed' ? null : classifyGeminiFailure(error),
+    error_message: outcome === 'completed' ? null : errorMessage,
     mechanical_validation: {
       ran: validation !== undefined && validation !== null,
       valid: validation ? validation.valid : null,
@@ -309,6 +333,26 @@ export function outputFileName(caseId: string, model: EvalModel): string {
   return `${caseId}.${model}.json`;
 }
 
+/** The model's raw text for an output that failed validation (may not be JSON at all). */
+export function rejectedOutputFileName(caseId: string, model: EvalModel): string {
+  return `${caseId}.${model}.rejected.txt`;
+}
+
+/**
+ * Parses model text the same way the production generators do
+ * (parseGeminiJson in src/tasks/gemini.ts: strip one surrounding markdown
+ * fence, then JSON.parse). Used only to re-check a preserved rejected output
+ * during offline reconciliation; drift could only make reconciliation report
+ * a problem, never mark an output valid.
+ */
+export function parseModelText(text: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()) };
+  } catch {
+    return { ok: false };
+  }
+}
+
 export function reservationFileName(caseId: string, model: EvalModel): string {
   return `${caseId}.${model}.reserved`;
 }
@@ -346,14 +390,14 @@ export function parseRunLogRecord(
   if (r.case_id !== caseId || r.model !== model) {
     return { ok: false, error: `run-log identifies ${String(r.case_id)}.${String(r.model)}, not ${caseId}.${model}` };
   }
-  if (r.outcome === 'completed') {
+  if (r.outcome === 'completed' || r.outcome === 'invalid') {
     if (typeof r.output_sha256 !== 'string' || !SHA256_HEX.test(r.output_sha256)) {
-      return { ok: false, error: 'completed run-log has no valid output_sha256' };
+      return { ok: false, error: `${r.outcome} run-log has no valid output_sha256` };
     }
   } else if (r.outcome === 'failed') {
     if (r.output_sha256 !== null) return { ok: false, error: 'failed run-log must not reference an output' };
   } else {
-    return { ok: false, error: `run-log outcome is ${JSON.stringify(r.outcome)}, expected 'completed' or 'failed'` };
+    return { ok: false, error: `run-log outcome is ${JSON.stringify(r.outcome)}, expected 'completed', 'invalid' or 'failed'` };
   }
   return { ok: true, record: raw as RunLogRecord };
 }
@@ -362,7 +406,8 @@ export function parseRunLogRecord(
  * Pair lifecycle in the shared ledger, in write order:
  *   1. reservation  (before any request — never removed)
  *   2. request       (network; at most one per reservation)
- *   3. canonical output, success only (write-once, fsync'd)
+ *   3. the model's output, write-once and fsync'd: a valid one as the
+ *      canonical output, one failing validation as a rejected output
  *   4. run-log       (write-once, fsync'd) — the commit point
  *   5. local outputs/ copy (convenience only, never authoritative)
  */
@@ -371,9 +416,11 @@ export type PairState =
   | 'not_attempted'
   /** Reserved, nothing else: the request may or may not have been sent. Never re-sent. */
   | 'ambiguous'
-  /** Reserved + canonical output, no run-log: crashed between steps 3 and 4. Offline reconciliation can complete it. */
+  /** Reserved + one saved output, no run-log: crashed between steps 3 and 4. Offline reconciliation can complete it. */
   | 'incomplete'
   | 'completed'
+  /** The model's output failed mechanical validation; it is preserved, hash-verified, as a rejected output. Never retried. */
+  | 'invalid'
   | 'failed'
   /** Any combination the write order cannot produce, or a hash mismatch. Never repaired automatically. */
   | 'corrupt';
@@ -388,6 +435,8 @@ export interface PairObservation {
   runLog: RunLogObservation;
   /** SHA-256 of the canonical output file's bytes, or null if there is no canonical output. */
   canonicalOutputSha256: string | null;
+  /** SHA-256 of the rejected (validation-failed) output file's bytes, or null if there is none. */
+  rejectedOutputSha256: string | null;
 }
 
 /** Pure classification of a pair's state from what the ledger observed on disk. */
@@ -395,21 +444,28 @@ export function classifyPairState(o: PairObservation): { state: PairState; probl
   const corrupt = (problem: string) => ({ state: 'corrupt' as const, problem });
   if (o.runLog.status === 'invalid') return corrupt(`run-log is unreadable: ${o.runLog.error}`);
   const hasOutput = o.canonicalOutputSha256 !== null;
+  const hasRejected = o.rejectedOutputSha256 !== null;
   if (!o.reserved) {
     if (o.runLog.status === 'valid') return corrupt('run-log exists without a reservation');
     if (hasOutput) return corrupt('canonical output exists without a reservation');
+    if (hasRejected) return corrupt('rejected output exists without a reservation');
     return { state: 'not_attempted', problem: null };
   }
-  if (o.runLog.status === 'absent') return { state: hasOutput ? 'incomplete' : 'ambiguous', problem: null };
+  if (hasOutput && hasRejected) return corrupt('both a canonical and a rejected output exist for one request');
+  if (o.runLog.status === 'absent') return { state: hasOutput || hasRejected ? 'incomplete' : 'ambiguous', problem: null };
   const record = o.runLog.record;
   if (record.outcome === 'failed') {
-    return hasOutput ? corrupt('canonical output exists for a failed run') : { state: 'failed', problem: null };
+    if (hasOutput) return corrupt('canonical output exists for a failed run');
+    return hasRejected ? corrupt('rejected output exists for a failed run') : { state: 'failed', problem: null };
   }
-  if (!hasOutput) return corrupt('run-log reports completed but the canonical output is missing');
-  if (o.canonicalOutputSha256 !== record.output_sha256) {
-    return corrupt(
-      `canonical output SHA-256 ${o.canonicalOutputSha256} does not match the run-log's ${record.output_sha256}`
-    );
+  const [kind, sha, other] =
+    record.outcome === 'completed'
+      ? (['canonical', o.canonicalOutputSha256, hasRejected] as const)
+      : (['rejected', o.rejectedOutputSha256, hasOutput] as const);
+  if (other) return corrupt(`run-log reports ${record.outcome} but a ${kind === 'canonical' ? 'rejected' : 'canonical'} output exists`);
+  if (sha === null) return corrupt(`run-log reports ${record.outcome} but the ${kind} output is missing`);
+  if (sha !== record.output_sha256) {
+    return corrupt(`${kind} output SHA-256 ${sha} does not match the run-log's ${record.output_sha256}`);
   }
-  return { state: 'completed', problem: null };
+  return { state: record.outcome, problem: null };
 }

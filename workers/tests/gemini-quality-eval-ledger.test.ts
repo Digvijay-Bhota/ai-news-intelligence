@@ -179,7 +179,7 @@ describe('the ledger is shared, and pair-keyed, across worktrees / eval roots on
 
 describe('ledger layout marker and legacy layouts', () => {
   it('a new ledger carries a format marker and has no experiment namespace', () => {
-    expect(readdirSync(ledgerRoot).sort()).toEqual([LEDGER_FORMAT_FILE, 'outputs', 'request-budget', 'reservations', 'run-logs']);
+    expect(readdirSync(ledgerRoot).sort()).toEqual([LEDGER_FORMAT_FILE, 'outputs', 'rejected-outputs', 'request-budget', 'reservations', 'run-logs']);
     expect(inspectLedgerLayout(roots)).toEqual([]);
   });
 

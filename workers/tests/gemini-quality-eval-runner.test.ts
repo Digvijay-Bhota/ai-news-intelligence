@@ -7,8 +7,10 @@ import {
   limitFetchToSingleRequest,
   MAX_EXPERIMENT_REQUESTS,
   outputFileName,
+  parseModelText,
   parseReservationFileName,
   parseRunLogRecord,
+  rejectedOutputFileName,
   redactKnownSecrets,
   redactUrlForLogging,
   reservationFileName,
@@ -64,6 +66,17 @@ describe('buildExperimentPlan', () => {
 });
 
 describe('wrapFetchForCapture', () => {
+  it("passes the model's raw candidate text to onCapture (and null when there is none)", async () => {
+    const body = JSON.stringify({ candidates: [{ content: { parts: [{ text: 'not json at all' }] } }] });
+    let text: string | null | undefined;
+    const wrapped = wrapFetchForCapture(vi.fn().mockResolvedValue(new Response(body, { status: 200 })) as any, (_m, t) => (text = t));
+    await wrapped('https://example.com/');
+    expect(text).toBe('not json at all');
+    const noText = wrapFetchForCapture(vi.fn().mockResolvedValue(new Response('{"error":{}}', { status: 500 })) as any, (_m, t) => (text = t));
+    await noText('https://example.com/');
+    expect(text).toBeNull();
+  });
+
   it('captures usageMetadata and finishReason without consuming the original response body', async () => {
     const body = JSON.stringify({
       candidates: [{ content: { parts: [{ text: '{"ok":true}' }] }, finishReason: 'STOP' }],
@@ -192,6 +205,24 @@ describe('buildRunLogRecord', () => {
     expect(() => buildRunLogRecord({ ...base, outcome: 'failed', error: new Error('x'), outputSha256: SHA })).toThrow(/must not carry/);
   });
 
+  it("builds an 'invalid' record: preserved output hash, invalid_output classification and the validation errors", () => {
+    expect(() => buildRunLogRecord({ ...base, outcome: 'invalid', error: new GeminiOutputValidationError('bad') })).toThrow(/requires an output SHA-256/);
+    const record = buildRunLogRecord({
+      ...base,
+      outcome: 'invalid',
+      error: new GeminiOutputValidationError('Invalid brief structure: summary too short'),
+      validation: { valid: false, errors: ['Invalid brief structure: summary too short'] },
+      outputSha256: SHA,
+    });
+    expect(record).toMatchObject({
+      outcome: 'invalid',
+      output_sha256: SHA,
+      error_classification: { classification: 'invalid_output' },
+      error_message: 'Invalid brief structure: summary too short',
+      mechanical_validation: { ran: true, valid: false, errors: ['Invalid brief structure: summary too short'] },
+    });
+  });
+
   it('classifies a GeminiOutputValidationError as invalid_output and redacts the message', () => {
     const record = buildRunLogRecord({
       ...base,
@@ -277,22 +308,27 @@ describe('filename conventions and pair-state classification', () => {
     output_sha256: SHA, reconciled: false,
   };
   const failedLog: RunLogRecord = { ...completed, outcome: 'failed', output_sha256: null };
+  const invalidLog: RunLogRecord = { ...completed, outcome: 'invalid', mechanical_validation: { ran: true, valid: false, errors: ['bad'] } };
   const valid = (record: RunLogRecord) => ({ status: 'valid' as const, record });
   const absent = { status: 'absent' as const };
+  type RunLog = Parameters<typeof classifyPairState>[0]['runLog'];
+  const classify = (reserved: boolean, runLog: RunLog, sha: string | null, rejected: string | null = null) =>
+    classifyPairState({ reserved, runLog, canonicalOutputSha256: sha, rejectedOutputSha256: rejected });
 
   it('classifies every state the write order can produce', () => {
-    const state = (reserved: boolean, runLog: Parameters<typeof classifyPairState>[0]['runLog'], sha: string | null) =>
-      classifyPairState({ reserved, runLog, canonicalOutputSha256: sha }).state;
+    const state = (...a: Parameters<typeof classify>) => classify(...a).state;
     expect(state(false, absent, null)).toBe('not_attempted');
     expect(state(true, absent, null)).toBe('ambiguous');
     expect(state(true, absent, SHA)).toBe('incomplete');
+    expect(state(true, absent, null, SHA)).toBe('incomplete');
     expect(state(true, valid(completed), SHA)).toBe('completed');
+    expect(state(true, valid(invalidLog), null, SHA)).toBe('invalid');
     expect(state(true, valid(failedLog), null)).toBe('failed');
   });
 
   it('classifies every impossible or mismatched combination as corrupt, with the reason', () => {
-    const problem = (reserved: boolean, runLog: Parameters<typeof classifyPairState>[0]['runLog'], sha: string | null) => {
-      const r = classifyPairState({ reserved, runLog, canonicalOutputSha256: sha });
+    const problem = (...a: Parameters<typeof classify>) => {
+      const r = classify(...a);
       expect(r.state).toBe('corrupt');
       return r.problem;
     };
@@ -302,11 +338,28 @@ describe('filename conventions and pair-state classification', () => {
     expect(problem(false, valid(failedLog), null)).toMatch(/run-log exists without a reservation/);
     expect(problem(false, absent, SHA)).toMatch(/canonical output exists without a reservation/);
     expect(problem(true, { status: 'invalid', error: 'boom' }, null)).toMatch(/unreadable: boom/);
+    // Rejected (validation-failed) outputs:
+    expect(problem(true, valid(invalidLog), null, 'ef'.repeat(32))).toMatch(/rejected output SHA-256 .* does not match/);
+    expect(problem(true, valid(invalidLog), null, null)).toMatch(/rejected output is missing/);
+    expect(problem(true, valid(invalidLog), SHA, SHA)).toMatch(/both a canonical and a rejected output/);
+    expect(problem(true, valid(completed), SHA, 'ef'.repeat(32))).toMatch(/both a canonical and a rejected output/);
+    expect(problem(true, valid(invalidLog), SHA, null)).toMatch(/reports invalid but a canonical output exists/);
+    expect(problem(true, valid(completed), null, SHA)).toMatch(/reports completed but a rejected output exists/);
+    expect(problem(true, valid(failedLog), null, SHA)).toMatch(/rejected output exists for a failed run/);
+    expect(problem(false, absent, null, SHA)).toMatch(/rejected output exists without a reservation/);
+  });
+
+  it('names rejected outputs distinctly and parses model text like the production generators', () => {
+    expect(rejectedOutputFileName('case-1', 'gemini-3.6-flash')).toBe('case-1.gemini-3.6-flash.rejected.txt');
+    expect(parseModelText('```json\n{"a":1}\n```')).toEqual({ ok: true, value: { a: 1 } });
+    expect(parseModelText('Sorry, I cannot help with that.')).toEqual({ ok: false });
   });
 
   it('parses run-logs strictly for the exact pair', () => {
     expect(parseRunLogRecord(completed, 'c', 'gemini-3.5-flash-lite')).toEqual({ ok: true, record: completed });
     expect(parseRunLogRecord(failedLog, 'c', 'gemini-3.5-flash-lite').ok).toBe(true);
+    expect(parseRunLogRecord(invalidLog, 'c', 'gemini-3.5-flash-lite').ok).toBe(true);
+    expect(parseRunLogRecord({ ...invalidLog, output_sha256: null }, 'c', 'gemini-3.5-flash-lite').ok).toBe(false);
     expect(parseRunLogRecord(completed, 'other', 'gemini-3.5-flash-lite').ok).toBe(false);
     expect(parseRunLogRecord(completed, 'c', 'gemini-3.6-flash').ok).toBe(false);
     expect(parseRunLogRecord({ ...completed, output_sha256: 'short' }, 'c', 'gemini-3.5-flash-lite').ok).toBe(false);
