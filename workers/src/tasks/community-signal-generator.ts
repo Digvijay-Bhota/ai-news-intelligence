@@ -1,4 +1,6 @@
 import type { Env } from '../types';
+import { requestGeminiText } from './gemini';
+import { runGeminiTask } from './model-router';
 import { 
     getGenerationCursor, 
     persistGenerationBatch,
@@ -15,22 +17,8 @@ export interface LlmProposal {
 
 export async function generateSemanticProposal(prompt: string, env: Env, mockAI?: (prompt: string) => Promise<string>): Promise<string> {
     if (mockAI) return await mockAI(prompt);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${env.GEMINI_API_KEY}`;
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: 'application/json' },
-        }),
-    });
-    if (!response.ok) {
-        throw new Error(`Gemini API error: ${response.status}`);
-    }
-    const data = await response.json() as any;
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (typeof text !== 'string') throw new Error('Invalid response structure from Gemini API');
-    return text;
+    const { value } = await runGeminiTask(env, 'community_signal', (model) => requestGeminiText(env, model, prompt));
+    return value;
 }
 
 export async function generateCommunitySignalsForEvent(

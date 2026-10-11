@@ -477,3 +477,13 @@ CREATE TABLE IF NOT EXISTS community_signal_generation_state (
 );
 CREATE INDEX IF NOT EXISTS idx_community_signal_evidence_post ON community_signal_evidence(post_id);
 CREATE INDEX IF NOT EXISTS idx_community_signal_reviews_signal ON community_signal_reviews(signal_id);
+
+-- Migration 0013: Gemini 3.6 Flash Escalation Budget
+
+CREATE TABLE IF NOT EXISTS gemini_escalation_budget (
+    bucket_date TEXT NOT NULL,
+    model TEXT NOT NULL,
+    reserved_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (bucket_date, model)
+);

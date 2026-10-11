@@ -8,7 +8,9 @@
 import type { Env, ArticleRaw, NarrativeDelta, EventNarrativeDeltaRow, EventBrief, EventBriefRow } from '../types';
 import { createDbClient } from '../db/client';
 import { generateNarrativeDeltaFromGemini } from './gemini';
-import { retryWithBackoff } from './processor';
+import { GeminiOutputValidationError } from './gemini-errors';
+import { attemptsMetadata, getModelRoute } from './model-router';
+import { runGeminiTaskWithEscalation } from './gemini-escalation';
 
 const VALID_CHANGE_TYPES = new Set(['refined', 'expanded', 'contradicted', 'retracted', 'uncertain']);
 
@@ -24,7 +26,7 @@ export function validateNarrativeDelta(
   expectedCurrentVersion: number
 ): asserts raw is NarrativeDelta {
   if (!raw || typeof raw !== 'object') {
-    throw new Error('Invalid narrative delta structure: expected a JSON object');
+    throw new GeminiOutputValidationError('Invalid narrative delta structure: expected a JSON object');
   }
 
   const data = raw as Record<string, unknown>;
@@ -35,7 +37,7 @@ export function validateNarrativeDelta(
 
   // 2. Summary
   if (typeof data.summary !== 'string' || data.summary.trim().length < 15 || data.summary.length > 2000) {
-    throw new Error('Invalid narrative delta structure: summary must be a string between 15 and 2000 characters');
+    throw new GeminiOutputValidationError('Invalid narrative delta structure: summary must be a string between 15 and 2000 characters');
   }
 
   // Helper for source references validation
@@ -47,10 +49,10 @@ export function validateNarrativeDelta(
     for (const ref of refs) {
       const articleId = typeof ref === 'number' ? ref : parseInt(String(ref), 10);
       if (isNaN(articleId)) {
-        throw new Error(`Invalid narrative delta structure: source reference in ${contextPath} must be a number`);
+        throw new GeminiOutputValidationError(`Invalid narrative delta structure: source reference in ${contextPath} must be a number`);
       }
       if (!validArticleIds.has(articleId)) {
-        throw new Error(
+        throw new GeminiOutputValidationError(
           `Grounding violation in narrative delta: source reference article_id ${articleId} in ${contextPath} is not in the event article set`
         );
       }
@@ -64,15 +66,15 @@ export function validateNarrativeDelta(
     data.newly_confirmed = [];
   } else {
     if (data.newly_confirmed.length > 20) {
-      throw new Error('Invalid narrative delta structure: newly_confirmed must have at most 20 items');
+      throw new GeminiOutputValidationError('Invalid narrative delta structure: newly_confirmed must have at most 20 items');
     }
     for (let i = 0; i < data.newly_confirmed.length; i++) {
       const item = data.newly_confirmed[i] as Record<string, unknown>;
       if (!item || typeof item !== 'object') {
-        throw new Error(`Invalid newly_confirmed item at index ${i}`);
+        throw new GeminiOutputValidationError(`Invalid newly_confirmed item at index ${i}`);
       }
       if (typeof item.statement !== 'string' || !item.statement.trim() || item.statement.length > 600) {
-        throw new Error(`Invalid newly_confirmed statement at index ${i}`);
+        throw new GeminiOutputValidationError(`Invalid newly_confirmed statement at index ${i}`);
       }
       item.source_references = validateSourceRefs(item.source_references, `newly_confirmed[${i}]`);
     }
@@ -83,25 +85,25 @@ export function validateNarrativeDelta(
     data.changed_claims = [];
   } else {
     if (data.changed_claims.length > 20) {
-      throw new Error('Invalid narrative delta structure: changed_claims must have at most 20 items');
+      throw new GeminiOutputValidationError('Invalid narrative delta structure: changed_claims must have at most 20 items');
     }
     for (let i = 0; i < data.changed_claims.length; i++) {
       const item = data.changed_claims[i] as Record<string, unknown>;
       if (!item || typeof item !== 'object') {
-        throw new Error(`Invalid changed_claims item at index ${i}`);
+        throw new GeminiOutputValidationError(`Invalid changed_claims item at index ${i}`);
       }
       if (typeof item.previous_statement !== 'string' || !item.previous_statement.trim() || item.previous_statement.length > 600) {
-        throw new Error(`Invalid changed_claims previous_statement at index ${i}`);
+        throw new GeminiOutputValidationError(`Invalid changed_claims previous_statement at index ${i}`);
       }
       if (typeof item.current_statement !== 'string' || !item.current_statement.trim() || item.current_statement.length > 600) {
-        throw new Error(`Invalid changed_claims current_statement at index ${i}`);
+        throw new GeminiOutputValidationError(`Invalid changed_claims current_statement at index ${i}`);
       }
       if (typeof item.change_type !== 'string' || !item.change_type.trim()) {
-        throw new Error(`Invalid changed_claims change_type at index ${i}: change_type must be a non-empty string`);
+        throw new GeminiOutputValidationError(`Invalid changed_claims change_type at index ${i}: change_type must be a non-empty string`);
       }
       const changeType = item.change_type.trim().toLowerCase();
       if (!VALID_CHANGE_TYPES.has(changeType)) {
-        throw new Error(
+        throw new GeminiOutputValidationError(
           `Invalid changed_claims change_type at index ${i}: "${item.change_type}". Allowed values are: refined, expanded, contradicted, retracted, uncertain`
         );
       }
@@ -115,15 +117,15 @@ export function validateNarrativeDelta(
     data.removed_or_no_longer_supported = [];
   } else {
     if (data.removed_or_no_longer_supported.length > 20) {
-      throw new Error('Invalid narrative delta structure: removed_or_no_longer_supported must have at most 20 items');
+      throw new GeminiOutputValidationError('Invalid narrative delta structure: removed_or_no_longer_supported must have at most 20 items');
     }
     for (let i = 0; i < data.removed_or_no_longer_supported.length; i++) {
       const item = data.removed_or_no_longer_supported[i] as Record<string, unknown>;
       if (!item || typeof item !== 'object') {
-        throw new Error(`Invalid removed_or_no_longer_supported item at index ${i}`);
+        throw new GeminiOutputValidationError(`Invalid removed_or_no_longer_supported item at index ${i}`);
       }
       if (typeof item.statement !== 'string' || !item.statement.trim() || item.statement.length > 600) {
-        throw new Error(`Invalid removed_or_no_longer_supported statement at index ${i}`);
+        throw new GeminiOutputValidationError(`Invalid removed_or_no_longer_supported statement at index ${i}`);
       }
       item.source_references = validateSourceRefs(item.source_references, `removed_or_no_longer_supported[${i}]`);
     }
@@ -134,11 +136,11 @@ export function validateNarrativeDelta(
     data.unchanged_core = [];
   } else {
     if (data.unchanged_core.length > 20) {
-      throw new Error('Invalid narrative delta structure: unchanged_core must have at most 20 items');
+      throw new GeminiOutputValidationError('Invalid narrative delta structure: unchanged_core must have at most 20 items');
     }
     for (const core of data.unchanged_core) {
       if (typeof core !== 'string' || !core.trim() || core.length > 600) {
-        throw new Error('Invalid narrative delta structure: unchanged_core item must be string');
+        throw new GeminiOutputValidationError('Invalid narrative delta structure: unchanged_core item must be string');
       }
     }
   }
@@ -148,11 +150,11 @@ export function validateNarrativeDelta(
     data.open_questions = [];
   } else {
     if (data.open_questions.length > 15) {
-      throw new Error('Invalid narrative delta structure: open_questions must have at most 15 items');
+      throw new GeminiOutputValidationError('Invalid narrative delta structure: open_questions must have at most 15 items');
     }
     for (const q of data.open_questions) {
       if (typeof q !== 'string' || !q.trim() || q.length > 600) {
-        throw new Error('Invalid narrative delta structure: open_questions item must be string');
+        throw new GeminiOutputValidationError('Invalid narrative delta structure: open_questions item must be string');
       }
     }
   }
@@ -185,13 +187,15 @@ export async function generateAndSaveNarrativeDelta(
     return existing;
   }
 
+  const plannedModel = getModelRoute(env, 'narrative_delta')[0];
+
   // Attempt atomic generation lease to prevent duplicate external Gemini calls across workers
   const lease = await db.acquireNarrativeDeltaLease({
     event_id: event.id,
     previous_version: previousBriefRow.version,
     current_version: currentBriefRow.version,
     article_fingerprint: currentBriefRow.article_fingerprint,
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
   });
 
   if (!lease) {
@@ -208,15 +212,15 @@ export async function generateAndSaveNarrativeDelta(
   const aiJob = await db.createAiJob({
     article_raw_id: null,
     job_type: 'event_narrative_delta',
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
     status: 'running',
   });
 
   const validArticleIds = new Set(articles.map(a => a.id));
 
   try {
-    const rawDelta = await retryWithBackoff(() =>
-      generateNarrativeDeltaFromGemini(
+    const { value: rawDelta, model: servedModel } = await runGeminiTaskWithEscalation(env, 'narrative_delta', async (model) => {
+      const raw = await generateNarrativeDeltaFromGemini(
         env,
         { title: event.title, description: event.description, severity: event.severity },
         previousBrief,
@@ -229,11 +233,12 @@ export async function generateAndSaveNarrativeDelta(
           raw_content: a.raw_content,
           source: a.source || `Source #${a.source_id}`,
           published_at: a.published_at,
-        }))
-      )
-    );
-
-    validateNarrativeDelta(rawDelta, validArticleIds, previousBriefRow.version, currentBriefRow.version);
+        })),
+        model
+      );
+      validateNarrativeDelta(raw, validArticleIds, previousBriefRow.version, currentBriefRow.version);
+      return raw;
+    });
 
     const savedDelta = await db.saveNarrativeDelta({
       event_id: event.id,
@@ -241,16 +246,19 @@ export async function generateAndSaveNarrativeDelta(
       current_version: currentBriefRow.version,
       content: JSON.stringify(rawDelta),
       article_fingerprint: currentBriefRow.article_fingerprint,
-      model: 'gemini-3.6-flash',
+      model: servedModel,
       status: 'completed',
       error_message: null,
     });
 
-    await db.updateAiJobStatus(aiJob.id, 'completed', JSON.stringify({ delta_id: savedDelta.id, versions: `${previousBriefRow.version}->${currentBriefRow.version}` }));
+    await db.updateAiJobStatus(
+      aiJob.id, 'completed', JSON.stringify({ delta_id: savedDelta.id, versions: `${previousBriefRow.version}->${currentBriefRow.version}` }),
+      undefined, servedModel === plannedModel ? undefined : servedModel
+    );
     return savedDelta;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error during narrative delta generation';
-    await db.createAiLog(aiJob.id, errorMsg, 'error');
+    await db.createAiLog(aiJob.id, errorMsg, 'error', attemptsMetadata('narrative_delta', error));
     await db.updateAiJobStatus(aiJob.id, 'failed', undefined, errorMsg);
 
     await db.saveNarrativeDelta({
@@ -259,7 +267,7 @@ export async function generateAndSaveNarrativeDelta(
       current_version: currentBriefRow.version,
       content: JSON.stringify({ error: errorMsg }),
       article_fingerprint: currentBriefRow.article_fingerprint,
-      model: 'gemini-3.6-flash',
+      model: plannedModel,
       status: 'failed',
       error_message: errorMsg,
     }).catch(() => {});

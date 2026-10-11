@@ -1,9 +1,58 @@
 /**
- * Gemini 3.6 Flash Client
+ * Gemini Client
  */
 
 import type { Env, EventBrief } from '../types';
-import { ApiError } from '../utils/errors';
+import { geminiErrorFromResponse, geminiNetworkError, GeminiOutputValidationError } from './gemini-errors';
+import { DEFAULT_ROUTES, type AllowedModel } from './model-router';
+import { formatSandboxedArticleCollection, PROMPT_SANDBOX_SECURITY_RULES } from './prompt-sandbox';
+
+/**
+ * Sends one generateContent request and returns the candidate text. Non-OK
+ * responses throw a GeminiApiError carrying the structured error details.
+ * Retries and model fallback are handled by runGeminiTask, not here.
+ */
+export async function requestGeminiText(env: Pick<Env, 'GEMINI_API_KEY'>, model: AllowedModel, prompt: string): Promise<string> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+        },
+      }),
+    });
+  } catch {
+    throw geminiNetworkError(model);
+  }
+
+  if (!response.ok) {
+    throw await geminiErrorFromResponse(response, model);
+  }
+
+  const data = (await response.json()) as any;
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (typeof text !== 'string') {
+    throw new GeminiOutputValidationError('Invalid response structure from Gemini API');
+  }
+  return text;
+}
+
+/** Parses model JSON output, tolerating a surrounding markdown code fence. */
+function parseGeminiJson(text: string): unknown {
+  const cleanedText = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  try {
+    return JSON.parse(cleanedText);
+  } catch (_e) {
+    throw new GeminiOutputValidationError('Invalid JSON returned by Gemini API');
+  }
+}
 
 export interface GeminiResponse {
   summary: string;
@@ -17,39 +66,10 @@ export interface GeminiResponse {
 
 export async function generateEnrichment(
   env: Env,
-  prompt: string
+  prompt: string,
+  model: AllowedModel = DEFAULT_ROUTES.enrichment[0]
 ): Promise<GeminiResponse> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${env.GEMINI_API_KEY}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new ApiError(response.status, `Gemini API error: ${response.status} ${response.statusText}`, 'GEMINI_ERROR');
-  }
-
-  const data = (await response.json()) as any;
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (typeof text !== 'string') {
-    throw new Error('Invalid response structure from Gemini API');
-  }
-
-  const cleanedText = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-
-  try {
-    return JSON.parse(cleanedText) as GeminiResponse;
-  } catch (e) {
-    throw new Error('Invalid JSON returned by Gemini API');
-  }
+  return parseGeminiJson(await requestGeminiText(env, model, prompt)) as GeminiResponse;
 }
 
 export interface EventMatchResponse {
@@ -60,7 +80,8 @@ export interface EventMatchResponse {
 export async function matchEventToCluster(
   env: Env,
   newEvent: { title: string; description: string },
-  candidates: { id: number; title: string; description: string | null; severity: string }[]
+  candidates: { id: number; title: string; description: string | null; severity: string }[],
+  model: AllowedModel = DEFAULT_ROUTES.event_match[0]
 ): Promise<EventMatchResponse> {
   if (candidates.length === 0) {
     return { match: false, event_id: null };
@@ -84,44 +105,13 @@ CRITICAL INSTRUCTIONS:
 - If there is no exact real-world incident match, return: {"match": false, "event_id": null}
 - Output JSON ONLY.`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${env.GEMINI_API_KEY}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new ApiError(response.status, `Gemini API error: ${response.status} ${response.statusText}`, 'GEMINI_ERROR');
-  }
-
-  const data = (await response.json()) as any;
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (typeof text !== 'string') {
-    throw new Error('Invalid response structure from Gemini API');
-  }
-
-  const cleanedText = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-
-  let result: any;
-  try {
-    result = JSON.parse(cleanedText);
-  } catch (e) {
-    throw new Error('Invalid JSON returned by Gemini API');
-  }
+  const result = parseGeminiJson(await requestGeminiText(env, model, prompt)) as any;
 
   if (typeof result.match !== 'boolean') {
-    throw new Error('Invalid structure: match must be boolean');
+    throw new GeminiOutputValidationError('Invalid structure: match must be boolean');
   }
   if (result.match && typeof result.event_id !== 'number') {
-    throw new Error('Invalid structure: event_id must be a number when match is true');
+    throw new GeminiOutputValidationError('Invalid structure: event_id must be a number when match is true');
   }
 
   return {
@@ -130,12 +120,11 @@ CRITICAL INSTRUCTIONS:
   };
 }
 
-import { formatSandboxedArticleCollection, PROMPT_SANDBOX_SECURITY_RULES } from './prompt-sandbox';
-
 export async function generateEventBriefFromGemini(
   env: Env,
   event: { title: string; description: string | null; severity: string },
-  articles: { id: number; title: string; summary?: string | null; raw_content?: string | null; source: string; published_at: number | null }[]
+  articles: { id: number; title: string; summary?: string | null; raw_content?: string | null; source: string; published_at: number | null }[],
+  model: AllowedModel = DEFAULT_ROUTES.event_brief[0]
 ): Promise<unknown> {
   const sandboxedEvidence = formatSandboxedArticleCollection(articles, 10);
 
@@ -186,37 +175,7 @@ REQUIRED JSON OUTPUT FORMAT:
   ]
 }`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${env.GEMINI_API_KEY}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new ApiError(response.status, `Gemini API error: ${response.status} ${response.statusText}`, 'GEMINI_ERROR');
-  }
-
-  const data = (await response.json()) as any;
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (typeof text !== 'string') {
-    throw new Error('Invalid response structure from Gemini API');
-  }
-
-  const cleanedText = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-
-  try {
-    return JSON.parse(cleanedText);
-  } catch (_e) {
-    throw new Error('Invalid JSON returned by Gemini API');
-  }
+  return parseGeminiJson(await requestGeminiText(env, model, prompt));
 }
 
 export async function generateNarrativeDeltaFromGemini(
@@ -225,7 +184,8 @@ export async function generateNarrativeDeltaFromGemini(
   previousBrief: EventBrief,
   previousVersion: number,
   currentVersion: number,
-  articles: { id: number; title: string; summary?: string | null; raw_content?: string | null; source: string; published_at: number | null }[]
+  articles: { id: number; title: string; summary?: string | null; raw_content?: string | null; source: string; published_at: number | null }[],
+  model: AllowedModel = DEFAULT_ROUTES.narrative_delta[0]
 ): Promise<unknown> {
   const sandboxedEvidence = formatSandboxedArticleCollection(articles, 10);
 
@@ -294,43 +254,14 @@ REQUIRED JSON OUTPUT FORMAT:
   ]
 }`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${env.GEMINI_API_KEY}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new ApiError(response.status, `Gemini API error: ${response.status} ${response.statusText}`, 'GEMINI_ERROR');
-  }
-
-  const data = (await response.json()) as any;
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (typeof text !== 'string') {
-    throw new Error('Invalid response structure from Gemini API');
-  }
-
-  const cleanedText = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-
-  try {
-    return JSON.parse(cleanedText);
-  } catch (_e) {
-    throw new Error('Invalid JSON returned by Gemini API');
-  }
+  return parseGeminiJson(await requestGeminiText(env, model, prompt));
 }
 
 export async function generateClaimComparisonsFromGemini(
   env: Env,
   event: { title: string; description: string | null; severity: string },
-  articles: { id: number; title: string; summary?: string | null; raw_content?: string | null; source: string; published_at: number | null; source_id: number }[]
+  articles: { id: number; title: string; summary?: string | null; raw_content?: string | null; source: string; published_at: number | null; source_id: number }[],
+  model: AllowedModel = DEFAULT_ROUTES.claim_comparison[0]
 ): Promise<unknown> {
   const sandboxedEvidence = formatSandboxedArticleCollection(articles, 10);
 
@@ -374,35 +305,5 @@ REQUIRED JSON OUTPUT FORMAT:
   }
 ]`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${env.GEMINI_API_KEY}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new ApiError(response.status, `Gemini API error: ${response.status} ${response.statusText}`, 'GEMINI_ERROR');
-  }
-
-  const data = (await response.json()) as any;
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (typeof text !== 'string') {
-    throw new Error('Invalid response structure from Gemini API');
-  }
-
-  const cleanedText = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-
-  try {
-    return JSON.parse(cleanedText);
-  } catch (_e) {
-    throw new Error('Invalid JSON returned by Gemini API');
-  }
+  return parseGeminiJson(await requestGeminiText(env, model, prompt));
 }

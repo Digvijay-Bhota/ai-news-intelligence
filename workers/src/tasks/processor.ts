@@ -5,15 +5,16 @@
 import type { Env, ArticleRaw } from '../types';
 import { createDbClient } from '../db/client';
 import { generateEnrichment, matchEventToCluster, type GeminiResponse } from './gemini';
-import { ApiError } from '../utils/errors';
+import { attemptsMetadata, GeminiDeferredError, getModelRoute, runGeminiTask } from './model-router';
 import { formatSandboxedArticleForEnrichment, PROMPT_SANDBOX_SECURITY_RULES } from './prompt-sandbox';
 
 export async function processArticle(env: Env, article: ArticleRaw): Promise<void> {
   const db = createDbClient(env);
+  const plannedModel = getModelRoute(env, 'enrichment')[0];
   const aiJob = await db.createAiJob({
     article_raw_id: article.id,
     job_type: 'enrichment',
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
     status: 'running',
   });
 
@@ -55,8 +56,12 @@ UNTRUSTED ARTICLE EVIDENCE:
 ${sandboxedArticle}
 </grounded_evidence>`;
 
-    const enrichment = await retryWithBackoff(() => generateEnrichment(env, prompt));
-    validateEnrichment(enrichment);
+    // Output is validated per model attempt, so an invalid response can fall back.
+    const { value: enrichment, model: servedModel } = await runGeminiTask(env, 'enrichment', async (model) => {
+      const result = await generateEnrichment(env, prompt, model);
+      validateEnrichment(result);
+      return result;
+    });
 
     // Save content
     await db.createArticleContent({
@@ -89,8 +94,8 @@ ${sandboxedArticle}
 
       if (candidateEvents.length > 0) {
         try {
-          const matchResult = await retryWithBackoff(() =>
-            matchEventToCluster(env, { title: eventData.title, description: eventData.description }, candidateEvents)
+          const { value: matchResult } = await runGeminiTask(env, 'event_match', (model) =>
+            matchEventToCluster(env, { title: eventData.title, description: eventData.description }, candidateEvents, model)
           );
 
           if (matchResult.match && matchResult.event_id) {
@@ -127,16 +132,28 @@ ${sandboxedArticle}
     }
 
     await db.updateArticleStatus(article.id, 'processed');
-    await db.updateAiJobStatus(aiJob.id, 'completed', JSON.stringify(enrichment));
+    if (servedModel === plannedModel) {
+      await db.updateAiJobStatus(aiJob.id, 'completed', JSON.stringify(enrichment));
+    } else {
+      await db.updateAiJobStatus(aiJob.id, 'completed', JSON.stringify(enrichment), undefined, servedModel);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    await db.createAiLog(aiJob.id, message, 'error');
-    await db.updateAiJobStatus(aiJob.id, 'failed', undefined, message);
+    // A deferred job made no judgement about the article: it does not count
+    // against the article's retry budget (see listRetryableFailedArticles).
+    const deferred = error instanceof GeminiDeferredError;
+    const metadata = attemptsMetadata('enrichment', error);
+    if (metadata) {
+      await db.createAiLog(aiJob.id, message, deferred ? 'warning' : 'error', metadata);
+    } else {
+      await db.createAiLog(aiJob.id, message, 'error');
+    }
+    await db.updateAiJobStatus(aiJob.id, deferred ? 'deferred' : 'failed', undefined, message);
     throw error;
   }
 }
 
-function validateEnrichment(data: any): asserts data is GeminiResponse {
+export function validateEnrichment(data: any): asserts data is GeminiResponse {
   if (!data || typeof data !== 'object') {
     throw new Error('Invalid structure: expected a JSON object');
   }
@@ -173,22 +190,4 @@ async function generateEventHash(title: string, description: string): Promise<st
   const data = encoder.encode(input);
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-export async function retryWithBackoff<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      if (i === retries - 1) throw e;
-      if (e instanceof ApiError) {
-        if (e.status === 429 || (e.status >= 500 && e.status <= 599)) {
-          await new Promise((resolve) => setTimeout(resolve, Math.pow(2, i) * 100)); // Using 100ms for testing performance
-          continue;
-        }
-      }
-      throw e;
-    }
-  }
-  throw new Error('Retry failed');
 }

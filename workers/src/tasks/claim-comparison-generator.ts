@@ -8,7 +8,9 @@
 import type { Env, ArticleRaw, ClaimComparison, EventClaimComparisonRow, EventBriefRow } from '../types';
 import { createDbClient } from '../db/client';
 import { generateClaimComparisonsFromGemini } from './gemini';
-import { retryWithBackoff } from './processor';
+import { GeminiOutputValidationError } from './gemini-errors';
+import { attemptsMetadata, getModelRoute } from './model-router';
+import { runGeminiTaskWithEscalation } from './gemini-escalation';
 
 const VALID_CLAIM_STATUSES = new Set(['consensus', 'disputed', 'unconfirmed', 'evolving']);
 
@@ -23,31 +25,31 @@ export function validateClaimComparisons(
   validSourceIds: Set<number>
 ): asserts raw is ClaimComparison[] {
   if (!Array.isArray(raw)) {
-    throw new Error('Invalid claim comparisons structure: expected an array');
+    throw new GeminiOutputValidationError('Invalid claim comparisons structure: expected an array');
   }
 
   if (raw.length > 15) {
-    throw new Error('Invalid claim comparisons structure: maximum 15 claims allowed');
+    throw new GeminiOutputValidationError('Invalid claim comparisons structure: maximum 15 claims allowed');
   }
 
   for (let i = 0; i < raw.length; i++) {
     const item = raw[i] as Record<string, unknown>;
     if (!item || typeof item !== 'object') {
-      throw new Error(`Invalid claim comparison at index ${i}: expected object`);
+      throw new GeminiOutputValidationError(`Invalid claim comparison at index ${i}: expected object`);
     }
 
     // 1. Claim text
     if (typeof item.claim !== 'string' || item.claim.trim().length < 5 || item.claim.length > 500) {
-      throw new Error(`Invalid claim at index ${i}: claim must be between 5 and 500 characters`);
+      throw new GeminiOutputValidationError(`Invalid claim at index ${i}: claim must be between 5 and 500 characters`);
     }
 
     // 2. Status
     if (typeof item.status !== 'string' || !item.status.trim()) {
-      throw new Error(`Invalid claim status at index ${i}: status must be a non-empty string`);
+      throw new GeminiOutputValidationError(`Invalid claim status at index ${i}: status must be a non-empty string`);
     }
     const status = item.status.trim().toLowerCase();
     if (!VALID_CLAIM_STATUSES.has(status)) {
-      throw new Error(
+      throw new GeminiOutputValidationError(
         `Invalid claim status at index ${i}: "${item.status}". Allowed values are: consensus, disputed, unconfirmed, evolving`
       );
     }
@@ -55,17 +57,17 @@ export function validateClaimComparisons(
 
     // 3. Sources
     if (!Array.isArray(item.sources) || item.sources.length === 0) {
-      throw new Error(`Invalid claim at index ${i}: sources must be a non-empty array`);
+      throw new GeminiOutputValidationError(`Invalid claim at index ${i}: sources must be a non-empty array`);
     }
 
     if (item.sources.length > 15) {
-      throw new Error(`Invalid claim at index ${i}: maximum 15 sources allowed per claim`);
+      throw new GeminiOutputValidationError(`Invalid claim at index ${i}: maximum 15 sources allowed per claim`);
     }
 
     for (let s = 0; s < item.sources.length; s++) {
       const src = item.sources[s] as Record<string, unknown>;
       if (!src || typeof src !== 'object') {
-        throw new Error(`Invalid source at claim[${i}].sources[${s}]`);
+        throw new GeminiOutputValidationError(`Invalid source at claim[${i}].sources[${s}]`);
       }
 
       // Validate source_id
@@ -73,19 +75,19 @@ export function validateClaimComparisons(
       if (isNaN(sourceId) || (validSourceIds.size > 0 && !validSourceIds.has(sourceId))) {
         // If sourceId is not in validSourceIds, fallback to first valid source or throw
         if (validSourceIds.size > 0 && !validSourceIds.has(sourceId)) {
-          throw new Error(`Referential violation: source_id ${sourceId} at claim[${i}] is not in the event source set`);
+          throw new GeminiOutputValidationError(`Referential violation: source_id ${sourceId} at claim[${i}] is not in the event source set`);
         }
       }
       src.source_id = sourceId;
 
       // Validate source_name
       if (typeof src.source_name !== 'string' || !src.source_name.trim() || src.source_name.length > 100) {
-        throw new Error(`Invalid source_name at claim[${i}].sources[${s}]`);
+        throw new GeminiOutputValidationError(`Invalid source_name at claim[${i}].sources[${s}]`);
       }
 
       // Validate position
       if (typeof src.position !== 'string' || !src.position.trim() || src.position.length > 500) {
-        throw new Error(`Invalid position statement at claim[${i}].sources[${s}]`);
+        throw new GeminiOutputValidationError(`Invalid position statement at claim[${i}].sources[${s}]`);
       }
 
       // Validate article_ids
@@ -96,10 +98,10 @@ export function validateClaimComparisons(
         for (const aId of src.article_ids) {
           const articleId = typeof aId === 'number' ? aId : parseInt(String(aId), 10);
           if (isNaN(articleId)) {
-            throw new Error(`Invalid article_id at claim[${i}].sources[${s}]`);
+            throw new GeminiOutputValidationError(`Invalid article_id at claim[${i}].sources[${s}]`);
           }
           if (!validArticleIds.has(articleId)) {
-            throw new Error(
+            throw new GeminiOutputValidationError(
               `Grounding violation: article_id ${articleId} at claim[${i}].sources[${s}] is not in the event article set`
             );
           }
@@ -136,12 +138,14 @@ export async function generateAndSaveClaimComparisons(
     return existing;
   }
 
+  const plannedModel = getModelRoute(env, 'claim_comparison')[0];
+
   // Attempt atomic generation lease to prevent duplicate external Gemini calls across workers
   const lease = await db.acquireClaimComparisonsLease({
     event_id: event.id,
     version: briefRow.version,
     article_fingerprint: briefRow.article_fingerprint,
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
   });
 
   if (!lease) {
@@ -151,7 +155,7 @@ export async function generateAndSaveClaimComparisons(
   const aiJob = await db.createAiJob({
     article_raw_id: null,
     job_type: 'event_claim_comparison',
-    model: 'gemini-3.6-flash',
+    model: plannedModel,
     status: 'running',
   });
 
@@ -159,8 +163,8 @@ export async function generateAndSaveClaimComparisons(
   const validSourceIds = new Set(articles.map(a => a.source_id));
 
   try {
-    const rawComparisons = await retryWithBackoff(() =>
-      generateClaimComparisonsFromGemini(
+    const { value: rawComparisons, model: servedModel } = await runGeminiTaskWithEscalation(env, 'claim_comparison', async (model) => {
+      const raw = await generateClaimComparisonsFromGemini(
         env,
         { title: event.title, description: event.description, severity: event.severity },
         articles.map(a => ({
@@ -171,27 +175,31 @@ export async function generateAndSaveClaimComparisons(
           raw_content: a.raw_content,
           source: a.source || `Source #${a.source_id}`,
           published_at: a.published_at,
-        }))
-      )
-    );
-
-    validateClaimComparisons(rawComparisons, validArticleIds, validSourceIds);
+        })),
+        model
+      );
+      validateClaimComparisons(raw, validArticleIds, validSourceIds);
+      return raw;
+    });
 
     const savedComp = await db.saveClaimComparisons({
       event_id: event.id,
       version: briefRow.version,
       content: JSON.stringify(rawComparisons),
       article_fingerprint: briefRow.article_fingerprint,
-      model: 'gemini-3.6-flash',
+      model: servedModel,
       status: 'completed',
       error_message: null,
     });
 
-    await db.updateAiJobStatus(aiJob.id, 'completed', JSON.stringify({ comp_id: savedComp.id, claims: rawComparisons.length }));
+    await db.updateAiJobStatus(
+      aiJob.id, 'completed', JSON.stringify({ comp_id: savedComp.id, claims: rawComparisons.length }),
+      undefined, servedModel === plannedModel ? undefined : servedModel
+    );
     return savedComp;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error during claim comparison generation';
-    await db.createAiLog(aiJob.id, errorMsg, 'error');
+    await db.createAiLog(aiJob.id, errorMsg, 'error', attemptsMetadata('claim_comparison', error));
     await db.updateAiJobStatus(aiJob.id, 'failed', undefined, errorMsg);
 
     await db.saveClaimComparisons({
@@ -199,7 +207,7 @@ export async function generateAndSaveClaimComparisons(
       version: briefRow.version,
       content: JSON.stringify([]),
       article_fingerprint: briefRow.article_fingerprint,
-      model: 'gemini-3.6-flash',
+      model: plannedModel,
       status: 'failed',
       error_message: errorMsg,
     }).catch(() => {});
