@@ -1,0 +1,19 @@
+{
+  "summary": "A fire broke out in the engine room of the MV Kestrel Bay, a Northbridge Logistics cargo ship, during a Pacific crossing. No injuries were reported, and the company suspended the route pending inspection.",
+  "why_it_matters": "The incident disrupts a trans-Pacific shipping route and raises safety questions for the vessel.",
+  "key_developments": [
+    "Engine room fire aboard the MV Kestrel Bay.",
+    "No injuries reported among the crew.",
+    "Pacific route suspended pending inspection."
+  ],
+  "key_entities": [
+    { "name": "Northbridge Logistics", "type": "organization", "relevance": "Operator of the MV Kestrel Bay" }
+  ],
+  "uncertainties": [
+    "The cause of the fire has not yet been determined."
+  ],
+  "source_references": [
+    { "article_id": 1, "claim_context": "Fire broke out in engine room, no injuries" },
+    { "article_id": 2, "claim_context": "Route suspended pending inspection" }
+  ]
+}

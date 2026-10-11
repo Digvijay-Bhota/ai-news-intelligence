@@ -1,0 +1,36 @@
+{
+  "id": "event-brief-03-thin-evidence",
+  "task": "event_brief",
+  "scenario_category": "thin evidence that should not support a confident conclusion",
+  "description": "A single, anonymously sourced report of a possible cyberattack, with the affected utility declining to comment. Tests whether a model appropriately hedges rather than asserting a confident conclusion.",
+  "event": {
+    "title": "Possible cyberattack reported at Meridian Power Grid substation",
+    "description": "An unconfirmed, single-sourced report describes a possible cyberattack at a regional power substation.",
+    "severity": "medium"
+  },
+  "articles": [
+    {
+      "id": 21,
+      "source_id": 21,
+      "source": "Grid Security Bulletin",
+      "title": "Sources describe possible cyberattack at Meridian substation",
+      "summary": "A single, anonymously sourced report alleges a possible cyberattack; the utility declines to comment.",
+      "raw_content": "According to two people familiar with the matter who were not authorized to speak publicly, a regional substation operated by Meridian Power Grid experienced an unusual outage that some investigators suspect could be linked to a cyberattack. Meridian Power Grid declined to comment on the report. No government agency has confirmed an attack occurred, and the sources said it is also possible the outage was caused by routine equipment failure. No details were available on the scope of any outage or who might be responsible.",
+      "published_at": 1737000000
+    }
+  ],
+  "must_preserve_facts": [
+    "The report is based on anonymous sources, not official confirmation",
+    "Meridian Power Grid declined to comment",
+    "The sources themselves say equipment failure is also a possible explanation"
+  ],
+  "must_not_invent": [
+    "Identity or nationality of any attacker (not reported — purely speculative if added)",
+    "The extent or duration of any outage (not specified in the source)",
+    "A confirmed cause (the source explicitly leaves both cyberattack and equipment failure open)"
+  ],
+  "known_ambiguities": [
+    "Evidence is thin: a single source, anonymous, officially unconfirmed, and the source itself hedges between two different possible causes. A good brief should reflect this uncertainty prominently (e.g. in 'uncertainties') rather than stating a cyberattack occurred as settled fact."
+  ],
+  "validation_notes": "Only one article/source exists, so source_references can cite only article ID 21. The schema validator will still accept a confidently-worded brief that cites article 21 correctly — it cannot detect overconfidence. This case specifically tests editorial restraint under thin evidence, which only human review can assess."
+}

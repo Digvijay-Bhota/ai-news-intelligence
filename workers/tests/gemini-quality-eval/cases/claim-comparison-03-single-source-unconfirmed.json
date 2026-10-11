@@ -1,0 +1,36 @@
+{
+  "id": "claim-comparison-03-single-source-unconfirmed",
+  "task": "claim_comparison",
+  "scenario_category": "thin evidence that should not support a confident conclusion",
+  "description": "A single outlet, citing one anonymous source, reports a possible CEO resignation; no other outlet corroborates and the company has no comment. Tests restraint: this should be 'unconfirmed', not escalated to 'consensus' or even mislabeled 'disputed' (there is no contradicting account, just an absence of corroboration).",
+  "event": {
+    "title": "Report of possible CEO resignation at Veridian Instruments",
+    "description": "A single-sourced report suggests the CEO of Veridian Instruments may resign; uncorroborated.",
+    "severity": "low"
+  },
+  "articles": [
+    {
+      "id": 101,
+      "source_id": 101,
+      "source": "Executive Suite Insider",
+      "title": "Veridian Instruments CEO may step down, source says",
+      "summary": "A single anonymous source says the CEO may resign; company declines to comment; no other outlet corroborates.",
+      "raw_content": "A person described as familiar with internal discussions at Veridian Instruments said the company's CEO may be preparing to step down in the coming months. The source did not provide a reason or timeline. A Veridian Instruments spokesperson declined to comment when reached. No other news outlet has reported on this account.",
+      "published_at": 1745000000
+    }
+  ],
+  "must_preserve_facts": [
+    "Only one source, anonymous, makes this claim",
+    "The company declined to comment",
+    "No reason or timeline was given for the possible resignation"
+  ],
+  "must_not_invent": [
+    "A reason for the possible resignation (not given)",
+    "A named successor (not mentioned)",
+    "Any confirmation or denial by the company (it declined to comment, which is neither)"
+  ],
+  "known_ambiguities": [
+    "This claim should be tagged 'unconfirmed' — not 'consensus' (only one source exists) and not 'disputed' either (there is no second account contradicting it; it is simply uncorroborated). Mislabeling this as 'disputed' would be a status-category error, not just an overconfidence problem."
+  ],
+  "validation_notes": "Only one article/source exists, so sources will have exactly one entry citing source_id 101 / article_id 101. This case specifically probes whether a model distinguishes 'disputed' (contradicted by another account) from 'unconfirmed' (simply unverified), a distinction the schema validator's enum check cannot itself enforce correctly — it only confirms the value is one of the four allowed strings."
+}

@@ -1,0 +1,66 @@
+{
+  "id": "narrative-delta-01-material-change",
+  "task": "narrative_delta",
+  "scenario_category": "a story that changes materially over time",
+  "description": "A transit-expansion vote moves from 'pending' (previous brief) to 'passed with budget and schedule confirmed' (current evidence).",
+  "event": {
+    "title": "City Council votes on downtown transit expansion",
+    "description": "The city council votes on a proposed downtown transit expansion.",
+    "severity": "medium"
+  },
+  "articles": [
+    {
+      "id": 41,
+      "source_id": 41,
+      "source": "Civic Affairs Daily",
+      "title": "City Council approves downtown transit expansion, 7-2",
+      "summary": "Council approves the transit expansion by a 7-2 vote, with a confirmed $230 million budget.",
+      "raw_content": "The city council voted 7-2 on Tuesday to approve the downtown transit expansion, ending months of debate. The approved budget is $230 million. Council members who opposed the measure cited cost concerns. Transit officials said construction is expected to begin in the second quarter of next year.",
+      "published_at": 1739000000
+    },
+    {
+      "id": 42,
+      "source_id": 42,
+      "source": "Metro Transit News",
+      "title": "Transit expansion construction set for Q2, budget confirmed at $230M",
+      "summary": "Second outlet corroborates the vote result, budget figure, and Q2 construction start.",
+      "raw_content": "Following Tuesday's 7-2 council vote approving the downtown transit expansion, transit authority officials confirmed the project's $230 million budget and said construction would begin in the second quarter. No contractor has yet been selected for the project, officials said.",
+      "published_at": 1739004000
+    }
+  ],
+  "narrative_delta_context": {
+    "previous_brief": {
+      "summary": "The city council is scheduled to vote on a proposed downtown transit expansion. The outcome of the vote remains pending.",
+      "why_it_matters": "The vote will determine whether a major transit infrastructure project moves forward.",
+      "key_developments": [
+        "A vote on the downtown transit expansion proposal is scheduled.",
+        "The proposed budget for the expansion has not yet been finalized pending the vote."
+      ],
+      "key_entities": [
+        { "name": "City Council", "type": "organization", "relevance": "Body voting on the proposal" }
+      ],
+      "uncertainties": [
+        "Whether the council will approve or reject the proposal is not yet known."
+      ],
+      "source_references": [
+        { "article_id": 41, "claim_context": "Vote on the transit expansion proposal is scheduled" }
+      ]
+    },
+    "previous_version": 1,
+    "current_version": 2
+  },
+  "must_preserve_facts": [
+    "The council approved the expansion by a 7-2 vote",
+    "The confirmed budget is $230 million",
+    "Construction is expected to begin in Q2 of next year"
+  ],
+  "must_not_invent": [
+    "A specific completion date for the project (not announced)",
+    "A selected contractor (explicitly not yet chosen per article 42)",
+    "Specific reasons given by individual dissenting council members beyond 'cost concerns'"
+  ],
+  "known_ambiguities": [
+    "None major — this case tests straightforward, confirmed material progress from 'pending' to 'decided', which should populate newly_confirmed substantially."
+  ],
+  "validation_notes": "Exercises validateNarrativeDelta with previous_version=1, current_version=2 and a populated newly_confirmed array citing article IDs 41/42. A good delta should NOT leave newly_confirmed empty, since real material progress occurred."
+}

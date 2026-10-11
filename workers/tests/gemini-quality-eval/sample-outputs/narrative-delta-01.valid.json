@@ -1,0 +1,17 @@
+{
+  "previous_version": 1,
+  "current_version": 2,
+  "summary": "The city council approved the downtown transit expansion by a 7-2 vote, confirming a $230 million budget and a Q2 construction start.",
+  "newly_confirmed": [
+    { "statement": "The council approved the expansion by a 7-2 vote.", "source_references": [41] },
+    { "statement": "The confirmed budget is $230 million, with construction expected in Q2.", "source_references": [42] }
+  ],
+  "changed_claims": [],
+  "removed_or_no_longer_supported": [],
+  "unchanged_core": [
+    "The project is a downtown transit expansion."
+  ],
+  "open_questions": [
+    "Which contractor will be selected has not yet been announced."
+  ]
+}

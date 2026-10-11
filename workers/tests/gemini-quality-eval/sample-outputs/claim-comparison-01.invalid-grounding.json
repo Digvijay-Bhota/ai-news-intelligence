@@ -1,0 +1,9 @@
+[
+  {
+    "claim": "The building collapse was caused by age-related structural failure.",
+    "status": "disputed",
+    "sources": [
+      { "source_id": 500, "source_name": "Unknown Source", "position": "This source_id does not exist in this case's evidence set.", "article_ids": [81] }
+    ]
+  }
+]

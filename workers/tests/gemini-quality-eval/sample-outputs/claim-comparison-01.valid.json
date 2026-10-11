@@ -1,0 +1,18 @@
+[
+  {
+    "claim": "The building collapse was caused by age-related structural failure.",
+    "status": "disputed",
+    "sources": [
+      { "source_id": 81, "source_name": "Structural Safety News", "position": "Independent engineers attribute the collapse to age-related structural failure.", "article_ids": [81] },
+      { "source_id": 82, "source_name": "City Engineering Desk", "position": "The city's chief engineer says recent renovation work is a more likely cause than age.", "article_ids": [82] }
+    ]
+  },
+  {
+    "claim": "Eight people were injured in the collapse.",
+    "status": "disputed",
+    "sources": [
+      { "source_id": 81, "source_name": "Structural Safety News", "position": "Reported five people injured, none critically.", "article_ids": [81] },
+      { "source_id": 83, "source_name": "Metro Emergency Report", "position": "The fire department's official count is eight injured.", "article_ids": [83] }
+    ]
+  }
+]

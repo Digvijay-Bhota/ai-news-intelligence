@@ -1,0 +1,12 @@
+{
+  "previous_version": 1,
+  "current_version": 2,
+  "summary": "The city council approved the downtown transit expansion by a 7-2 vote, confirming a $230 million budget.",
+  "newly_confirmed": [
+    { "statement": "The council approved the expansion by a 7-2 vote.", "source_references": [777] }
+  ],
+  "changed_claims": [],
+  "removed_or_no_longer_supported": [],
+  "unchanged_core": [],
+  "open_questions": []
+}
