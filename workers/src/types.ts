@@ -7,11 +7,40 @@ export interface Env {
   CACHE: KVNamespace;
   HMAC_SECRET: string;
   GEMINI_API_KEY: string;
-  /** Optional JSON per-task model route override; only allowlisted models are used. */
+  /**
+   * Optional JSON per-task model route override; only allowlisted models are used.
+   *
+   * IMPORTANT: if an override routes a task through "gemini-3.6-flash" directly
+   * (e.g. {"event_brief":["gemini-3.6-flash"]}), that is direct operator-selected
+   * routing. gemini-3.6-flash is then called under the model router's ordinary
+   * attempt/cooldown rules like any other model — it is NOT limited by
+   * GEMINI_ESCALATION_DAILY_LIMIT or ESCALATION_HARD_MAX_PER_DAY. Those only
+   * bound the separate, automatic quality-escalation path (see
+   * GEMINI_ESCALATION_ENABLED and gemini-escalation.ts), which only ever fires
+   * when a task's route does NOT already contain gemini-3.6-flash. Routing a
+   * task through gemini-3.6-flash here means every eligible run of that task
+   * can call the paid model, with no daily call cap of its own.
+   */
   GEMINI_MODEL_ROUTES?: string;
-  /** Opt-in switch for the Gemini 3.6 Flash escalation path; must be exactly "true" to enable. Disabled by default. */
+  /**
+   * Opt-in switch for the automatic Gemini 3.6 Flash quality-escalation path;
+   * must be exactly "true" to enable. Disabled by default. This path is
+   * distinct from routing gemini-3.6-flash directly via GEMINI_MODEL_ROUTES
+   * (see that field's comment) — it only ever triggers as a bounded fallback
+   * after every free-tier Lite model in a task's route has already failed
+   * with a genuine output-validation error, and only for event_brief,
+   * narrative_delta, and claim_comparison.
+   */
   GEMINI_ESCALATION_ENABLED?: string;
-  /** Daily escalation call budget; parsed and clamped to [0, 2] — see gemini-escalation.ts. Unset/non-numeric/negative/fractional values are treated as 0. */
+  /**
+   * Daily budget for the automatic quality-escalation path ONLY, parsed and
+   * clamped to [0, ESCALATION_HARD_MAX_PER_DAY] — see gemini-escalation.ts.
+   * Unset/non-numeric/negative/fractional values are treated as 0 (disabled).
+   *
+   * This is NOT a global cap on all gemini-3.6-flash usage: a task routed
+   * through gemini-3.6-flash directly via GEMINI_MODEL_ROUTES bypasses this
+   * limit entirely and is uncapped per day (see that field's comment).
+   */
   GEMINI_ESCALATION_DAILY_LIMIT?: string;
   PIPELINE_TOKEN_ID: string;
   ENVIRONMENT: string;
