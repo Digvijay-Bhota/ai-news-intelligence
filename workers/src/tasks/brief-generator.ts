@@ -5,7 +5,9 @@
 import type { Env, ArticleRaw, EventBrief, EventBriefRow } from '../types';
 import { createDbClient } from '../db/client';
 import { generateEventBriefFromGemini } from './gemini';
-import { attemptsMetadata, getModelRoute, runGeminiTask } from './model-router';
+import { GeminiOutputValidationError } from './gemini-errors';
+import { attemptsMetadata, getModelRoute } from './model-router';
+import { runGeminiTaskWithEscalation } from './gemini-escalation';
 
 /**
  * Computes a deterministic SHA-256 fingerprint representing the exact article set and state of an event.
@@ -58,64 +60,64 @@ export function validateEventBrief(
   validArticleIds: Set<number>
 ): asserts raw is EventBrief {
   if (!raw || typeof raw !== 'object') {
-    throw new Error('Invalid brief structure: expected a JSON object');
+    throw new GeminiOutputValidationError('Invalid brief structure: expected a JSON object');
   }
 
   const data = raw as Record<string, unknown>;
 
   // 1. Summary
   if (typeof data.summary !== 'string' || data.summary.trim().length < 20 || data.summary.length > 2500) {
-    throw new Error('Invalid brief structure: summary must be a string between 20 and 2500 characters');
+    throw new GeminiOutputValidationError('Invalid brief structure: summary must be a string between 20 and 2500 characters');
   }
 
   // 2. Why It Matters
   if (typeof data.why_it_matters !== 'string' || data.why_it_matters.trim().length < 10 || data.why_it_matters.length > 1500) {
-    throw new Error('Invalid brief structure: why_it_matters must be a string between 10 and 1500 characters');
+    throw new GeminiOutputValidationError('Invalid brief structure: why_it_matters must be a string between 10 and 1500 characters');
   }
 
   // 3. Key Developments
   if (!Array.isArray(data.key_developments) || data.key_developments.length === 0 || data.key_developments.length > 12) {
-    throw new Error('Invalid brief structure: key_developments must be an array of 1 to 12 items');
+    throw new GeminiOutputValidationError('Invalid brief structure: key_developments must be an array of 1 to 12 items');
   }
   for (const dev of data.key_developments) {
     if (typeof dev !== 'string' || dev.trim().length === 0 || dev.length > 600) {
-      throw new Error('Invalid brief structure: each key development must be a string between 1 and 600 characters');
+      throw new GeminiOutputValidationError('Invalid brief structure: each key development must be a string between 1 and 600 characters');
     }
   }
 
   // 4. Key Entities
   if (!Array.isArray(data.key_entities) || data.key_entities.length > 20) {
-    throw new Error('Invalid brief structure: key_entities must be an array of at most 20 items');
+    throw new GeminiOutputValidationError('Invalid brief structure: key_entities must be an array of at most 20 items');
   }
   for (const entity of data.key_entities) {
     if (!entity || typeof entity !== 'object') {
-      throw new Error('Invalid brief structure: entity must be an object');
+      throw new GeminiOutputValidationError('Invalid brief structure: entity must be an object');
     }
     const e = entity as Record<string, unknown>;
     if (typeof e.name !== 'string' || !e.name.trim() || e.name.length > 100) {
-      throw new Error('Invalid brief structure: entity name must be a string between 1 and 100 characters');
+      throw new GeminiOutputValidationError('Invalid brief structure: entity name must be a string between 1 and 100 characters');
     }
     if (typeof e.type !== 'string' || !e.type.trim() || e.type.length > 50) {
-      throw new Error('Invalid brief structure: entity type must be a string between 1 and 50 characters');
+      throw new GeminiOutputValidationError('Invalid brief structure: entity type must be a string between 1 and 50 characters');
     }
     if (typeof e.relevance !== 'string' || !e.relevance.trim() || e.relevance.length > 300) {
-      throw new Error('Invalid brief structure: entity relevance must be a string between 1 and 300 characters');
+      throw new GeminiOutputValidationError('Invalid brief structure: entity relevance must be a string between 1 and 300 characters');
     }
   }
 
   // 5. Uncertainties
   if (!Array.isArray(data.uncertainties) || data.uncertainties.length > 10) {
-    throw new Error('Invalid brief structure: uncertainties must be an array of at most 10 items');
+    throw new GeminiOutputValidationError('Invalid brief structure: uncertainties must be an array of at most 10 items');
   }
   for (const unc of data.uncertainties) {
     if (typeof unc !== 'string' || unc.trim().length === 0 || unc.length > 600) {
-      throw new Error('Invalid brief structure: each uncertainty must be a string between 1 and 600 characters');
+      throw new GeminiOutputValidationError('Invalid brief structure: each uncertainty must be a string between 1 and 600 characters');
     }
   }
 
   // 6. Source References & Grounding Validation
   if (!Array.isArray(data.source_references) || data.source_references.length === 0 || data.source_references.length > 30) {
-    throw new Error('Invalid brief structure: source_references must be an array of 1 to 30 items');
+    throw new GeminiOutputValidationError('Invalid brief structure: source_references must be an array of 1 to 30 items');
   }
 
   const seenRefs = new Set<string>();
@@ -123,24 +125,24 @@ export function validateEventBrief(
 
   for (const ref of data.source_references) {
     if (!ref || typeof ref !== 'object') {
-      throw new Error('Invalid brief structure: source reference must be an object');
+      throw new GeminiOutputValidationError('Invalid brief structure: source reference must be an object');
     }
     const r = ref as Record<string, unknown>;
     const articleId = typeof r.article_id === 'number' ? r.article_id : parseInt(String(r.article_id), 10);
 
     if (isNaN(articleId)) {
-      throw new Error('Invalid brief structure: source reference article_id must be a valid number');
+      throw new GeminiOutputValidationError('Invalid brief structure: source reference article_id must be a valid number');
     }
 
     // STRICT PROVENANCE GROUNDING: article_id MUST be one of the event's actual articles!
     if (!validArticleIds.has(articleId)) {
-      throw new Error(
+      throw new GeminiOutputValidationError(
         `Grounding violation: source reference article_id ${articleId} is not in the event article set`
       );
     }
 
     if (typeof r.claim_context !== 'string' || r.claim_context.trim().length === 0 || r.claim_context.length > 500) {
-      throw new Error('Invalid brief structure: claim_context must be a string between 1 and 500 characters');
+      throw new GeminiOutputValidationError('Invalid brief structure: claim_context must be a string between 1 and 500 characters');
     }
 
     const key = `${articleId}:${r.claim_context.trim()}`;
@@ -222,7 +224,7 @@ export async function generateAndSaveEventBrief(
     })).id;
 
     // 4. Synthesize with Gemini; 5. strictly validate output & verify grounding per model attempt
-    const { value: rawBrief, model: servedModel } = await runGeminiTask(env, 'event_brief', async (model) => {
+    const { value: rawBrief, model: servedModel } = await runGeminiTaskWithEscalation(env, 'event_brief', async (model) => {
       const raw = await generateEventBriefFromGemini(
         env,
         { title: event.title, description: event.description, severity: event.severity },

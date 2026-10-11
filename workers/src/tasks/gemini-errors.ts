@@ -17,7 +17,8 @@ export type GeminiFailureClass =
   | 'access_denied' // auth, permission, billing or account precondition
   | 'model_not_found'
   | 'invalid_request'
-  | 'invalid_output'; // unparseable or schema-invalid generated output
+  | 'invalid_output' // unparseable or schema-invalid generated output — ONLY ever GeminiOutputValidationError
+  | 'unknown'; // any other, unclassified failure (bug, DB error, etc.) — never escalation-eligible
 
 export interface GeminiErrorDetails {
   httpStatus: number;
@@ -36,6 +37,25 @@ export class GeminiApiError extends ApiError {
   constructor(message: string, public readonly details: GeminiErrorDetails) {
     super(details.httpStatus, message, 'GEMINI_ERROR');
     this.name = 'GeminiApiError';
+  }
+}
+
+/**
+ * Thrown only for a Gemini response that was received but could not be
+ * parsed as JSON, or that failed a task's structural/schema validation.
+ * This is the sole, explicit signal classifyGeminiFailure treats as
+ * 'invalid_output' — the classification that makes a Lite failure
+ * potentially eligible for the bounded 3.6 escalation path (see
+ * gemini-escalation.ts). It must never be thrown for request/transport
+ * problems (those are GeminiApiError) or for unrelated bugs, database
+ * errors, or other unexpected failures — those classify as 'unknown' and
+ * are never escalation-eligible, even though the router still falls back
+ * to the next model for them exactly as it does for invalid_output.
+ */
+export class GeminiOutputValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GeminiOutputValidationError';
   }
 }
 
@@ -186,8 +206,15 @@ export function classifyGeminiFailure(error: unknown): ClassifiedFailure {
       retryAfterSeconds: d.retryAfterSeconds,
     };
   }
+  if (error instanceof GeminiOutputValidationError) {
+    return { classification: 'invalid_output', httpStatus: null, apiStatus: null, quotaIds: [], retryAfterSeconds: null };
+  }
   if (error instanceof ApiError) {
     return { classification: classifyHttp(error.status, null, null, []), httpStatus: error.status, apiStatus: null, quotaIds: [], retryAfterSeconds: null };
   }
-  return { classification: 'invalid_output', httpStatus: null, apiStatus: null, quotaIds: [], retryAfterSeconds: null };
+  // Anything else (TypeError, a database error, a programming bug, ...) is
+  // NOT a deterministic output-validation failure and must never be mistaken
+  // for one, even though the router still falls back to the next model for
+  // it exactly as it does for invalid_output (see model-router.ts).
+  return { classification: 'unknown', httpStatus: null, apiStatus: null, quotaIds: [], retryAfterSeconds: null };
 }

@@ -8,7 +8,9 @@
 import type { Env, ArticleRaw, ClaimComparison, EventClaimComparisonRow, EventBriefRow } from '../types';
 import { createDbClient } from '../db/client';
 import { generateClaimComparisonsFromGemini } from './gemini';
-import { attemptsMetadata, getModelRoute, runGeminiTask } from './model-router';
+import { GeminiOutputValidationError } from './gemini-errors';
+import { attemptsMetadata, getModelRoute } from './model-router';
+import { runGeminiTaskWithEscalation } from './gemini-escalation';
 
 const VALID_CLAIM_STATUSES = new Set(['consensus', 'disputed', 'unconfirmed', 'evolving']);
 
@@ -23,31 +25,31 @@ export function validateClaimComparisons(
   validSourceIds: Set<number>
 ): asserts raw is ClaimComparison[] {
   if (!Array.isArray(raw)) {
-    throw new Error('Invalid claim comparisons structure: expected an array');
+    throw new GeminiOutputValidationError('Invalid claim comparisons structure: expected an array');
   }
 
   if (raw.length > 15) {
-    throw new Error('Invalid claim comparisons structure: maximum 15 claims allowed');
+    throw new GeminiOutputValidationError('Invalid claim comparisons structure: maximum 15 claims allowed');
   }
 
   for (let i = 0; i < raw.length; i++) {
     const item = raw[i] as Record<string, unknown>;
     if (!item || typeof item !== 'object') {
-      throw new Error(`Invalid claim comparison at index ${i}: expected object`);
+      throw new GeminiOutputValidationError(`Invalid claim comparison at index ${i}: expected object`);
     }
 
     // 1. Claim text
     if (typeof item.claim !== 'string' || item.claim.trim().length < 5 || item.claim.length > 500) {
-      throw new Error(`Invalid claim at index ${i}: claim must be between 5 and 500 characters`);
+      throw new GeminiOutputValidationError(`Invalid claim at index ${i}: claim must be between 5 and 500 characters`);
     }
 
     // 2. Status
     if (typeof item.status !== 'string' || !item.status.trim()) {
-      throw new Error(`Invalid claim status at index ${i}: status must be a non-empty string`);
+      throw new GeminiOutputValidationError(`Invalid claim status at index ${i}: status must be a non-empty string`);
     }
     const status = item.status.trim().toLowerCase();
     if (!VALID_CLAIM_STATUSES.has(status)) {
-      throw new Error(
+      throw new GeminiOutputValidationError(
         `Invalid claim status at index ${i}: "${item.status}". Allowed values are: consensus, disputed, unconfirmed, evolving`
       );
     }
@@ -55,17 +57,17 @@ export function validateClaimComparisons(
 
     // 3. Sources
     if (!Array.isArray(item.sources) || item.sources.length === 0) {
-      throw new Error(`Invalid claim at index ${i}: sources must be a non-empty array`);
+      throw new GeminiOutputValidationError(`Invalid claim at index ${i}: sources must be a non-empty array`);
     }
 
     if (item.sources.length > 15) {
-      throw new Error(`Invalid claim at index ${i}: maximum 15 sources allowed per claim`);
+      throw new GeminiOutputValidationError(`Invalid claim at index ${i}: maximum 15 sources allowed per claim`);
     }
 
     for (let s = 0; s < item.sources.length; s++) {
       const src = item.sources[s] as Record<string, unknown>;
       if (!src || typeof src !== 'object') {
-        throw new Error(`Invalid source at claim[${i}].sources[${s}]`);
+        throw new GeminiOutputValidationError(`Invalid source at claim[${i}].sources[${s}]`);
       }
 
       // Validate source_id
@@ -73,19 +75,19 @@ export function validateClaimComparisons(
       if (isNaN(sourceId) || (validSourceIds.size > 0 && !validSourceIds.has(sourceId))) {
         // If sourceId is not in validSourceIds, fallback to first valid source or throw
         if (validSourceIds.size > 0 && !validSourceIds.has(sourceId)) {
-          throw new Error(`Referential violation: source_id ${sourceId} at claim[${i}] is not in the event source set`);
+          throw new GeminiOutputValidationError(`Referential violation: source_id ${sourceId} at claim[${i}] is not in the event source set`);
         }
       }
       src.source_id = sourceId;
 
       // Validate source_name
       if (typeof src.source_name !== 'string' || !src.source_name.trim() || src.source_name.length > 100) {
-        throw new Error(`Invalid source_name at claim[${i}].sources[${s}]`);
+        throw new GeminiOutputValidationError(`Invalid source_name at claim[${i}].sources[${s}]`);
       }
 
       // Validate position
       if (typeof src.position !== 'string' || !src.position.trim() || src.position.length > 500) {
-        throw new Error(`Invalid position statement at claim[${i}].sources[${s}]`);
+        throw new GeminiOutputValidationError(`Invalid position statement at claim[${i}].sources[${s}]`);
       }
 
       // Validate article_ids
@@ -96,10 +98,10 @@ export function validateClaimComparisons(
         for (const aId of src.article_ids) {
           const articleId = typeof aId === 'number' ? aId : parseInt(String(aId), 10);
           if (isNaN(articleId)) {
-            throw new Error(`Invalid article_id at claim[${i}].sources[${s}]`);
+            throw new GeminiOutputValidationError(`Invalid article_id at claim[${i}].sources[${s}]`);
           }
           if (!validArticleIds.has(articleId)) {
-            throw new Error(
+            throw new GeminiOutputValidationError(
               `Grounding violation: article_id ${articleId} at claim[${i}].sources[${s}] is not in the event article set`
             );
           }
@@ -161,7 +163,7 @@ export async function generateAndSaveClaimComparisons(
   const validSourceIds = new Set(articles.map(a => a.source_id));
 
   try {
-    const { value: rawComparisons, model: servedModel } = await runGeminiTask(env, 'claim_comparison', async (model) => {
+    const { value: rawComparisons, model: servedModel } = await runGeminiTaskWithEscalation(env, 'claim_comparison', async (model) => {
       const raw = await generateClaimComparisonsFromGemini(
         env,
         { title: event.title, description: event.description, severity: event.severity },

@@ -6,6 +6,7 @@ import {
   parseRetryAfter,
   redactSecrets,
   GeminiApiError,
+  GeminiOutputValidationError,
 } from '../src/tasks/gemini-errors';
 import { ApiError } from '../src/utils/errors';
 
@@ -183,9 +184,14 @@ describe('gemini-errors: geminiErrorFromResponse parsing', () => {
     expect(classifyGeminiFailure(new ApiError(500, 'boom')).classification).toBe('server');
   });
 
-  it('classifies a non-API error (e.g. JSON/schema validation failure) as invalid_output', () => {
-    expect(classifyGeminiFailure(new Error('Invalid JSON returned by Gemini API')).classification).toBe('invalid_output');
-    expect(classifyGeminiFailure('not even an Error object').classification).toBe('invalid_output');
+  it('classifies the explicit GeminiOutputValidationError (JSON/schema validation failure) as invalid_output', () => {
+    expect(classifyGeminiFailure(new GeminiOutputValidationError('Invalid JSON returned by Gemini API')).classification).toBe('invalid_output');
+  });
+
+  it('classifies a generic Error, TypeError, or non-Error value as "unknown", never invalid_output', () => {
+    expect(classifyGeminiFailure(new Error('some unrelated bug')).classification).toBe('unknown');
+    expect(classifyGeminiFailure(new TypeError('boom')).classification).toBe('unknown');
+    expect(classifyGeminiFailure('not even an Error object').classification).toBe('unknown');
   });
 
   it('redacts an API key embedded in the upstream error message', async () => {

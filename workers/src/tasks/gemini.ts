@@ -3,7 +3,7 @@
  */
 
 import type { Env, EventBrief } from '../types';
-import { geminiErrorFromResponse, geminiNetworkError } from './gemini-errors';
+import { geminiErrorFromResponse, geminiNetworkError, GeminiOutputValidationError } from './gemini-errors';
 import { DEFAULT_ROUTES, type AllowedModel } from './model-router';
 import { formatSandboxedArticleCollection, PROMPT_SANDBOX_SECURITY_RULES } from './prompt-sandbox';
 
@@ -39,7 +39,7 @@ export async function requestGeminiText(env: Pick<Env, 'GEMINI_API_KEY'>, model:
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
   if (typeof text !== 'string') {
-    throw new Error('Invalid response structure from Gemini API');
+    throw new GeminiOutputValidationError('Invalid response structure from Gemini API');
   }
   return text;
 }
@@ -50,7 +50,7 @@ function parseGeminiJson(text: string): unknown {
   try {
     return JSON.parse(cleanedText);
   } catch (_e) {
-    throw new Error('Invalid JSON returned by Gemini API');
+    throw new GeminiOutputValidationError('Invalid JSON returned by Gemini API');
   }
 }
 
@@ -108,10 +108,10 @@ CRITICAL INSTRUCTIONS:
   const result = parseGeminiJson(await requestGeminiText(env, model, prompt)) as any;
 
   if (typeof result.match !== 'boolean') {
-    throw new Error('Invalid structure: match must be boolean');
+    throw new GeminiOutputValidationError('Invalid structure: match must be boolean');
   }
   if (result.match && typeof result.event_id !== 'number') {
-    throw new Error('Invalid structure: event_id must be a number when match is true');
+    throw new GeminiOutputValidationError('Invalid structure: event_id must be a number when match is true');
   }
 
   return {

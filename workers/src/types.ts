@@ -9,6 +9,10 @@ export interface Env {
   GEMINI_API_KEY: string;
   /** Optional JSON per-task model route override; only allowlisted models are used. */
   GEMINI_MODEL_ROUTES?: string;
+  /** Opt-in switch for the Gemini 3.6 Flash escalation path; must be exactly "true" to enable. Disabled by default. */
+  GEMINI_ESCALATION_ENABLED?: string;
+  /** Daily escalation call budget; parsed and clamped to [0, 2] — see gemini-escalation.ts. Unset/non-numeric/negative/fractional values are treated as 0. */
+  GEMINI_ESCALATION_DAILY_LIMIT?: string;
   PIPELINE_TOKEN_ID: string;
   ENVIRONMENT: string;
   CORS_ORIGIN: string;

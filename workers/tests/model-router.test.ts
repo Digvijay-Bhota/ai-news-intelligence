@@ -14,7 +14,7 @@ import {
   setCooldown,
   type RouterDeps,
 } from '../src/tasks/model-router';
-import { GeminiApiError } from '../src/tasks/gemini-errors';
+import { GeminiApiError, GeminiOutputValidationError } from '../src/tasks/gemini-errors';
 import { createMockEnv, createMockKVNamespace } from './setup';
 import type { Env } from '../src/types';
 
@@ -56,7 +56,8 @@ const serverError = (model = 'm') => apiError(500, {}, model);
 const accessDeniedError = (model = 'm') => apiError(403, {}, model);
 const modelNotFoundError = (model = 'm') => apiError(404, {}, model);
 const invalidRequestError = (model = 'm') => apiError(400, {}, model);
-const invalidOutputError = () => new Error('Invalid structure: summary must be a string');
+const invalidOutputError = () => new GeminiOutputValidationError('Invalid structure: summary must be a string');
+const unknownError = () => new Error('Some unexpected, unrelated failure');
 
 beforeEach(() => {
   resetModelRouterMemory();
@@ -402,6 +403,23 @@ describe('model-router: deferral vs rethrow for non-quota failures', () => {
     const error = await runGeminiTask(env, 'enrichment', attempt, deps).catch((e) => e);
     expect(error).toBe(failure);
     expect(attemptsMetadata('enrichment', error)).toBeDefined();
+  });
+
+  it('an unclassified ("unknown") error — e.g. a plain Error or a DB/programming bug, not a GeminiOutputValidationError — falls back and rethrows identically to invalid_output', async () => {
+    const env = makeEnv();
+    const deps = makeDeps();
+    const attempt = vi.fn()
+      .mockRejectedValueOnce(unknownError())
+      .mockResolvedValueOnce('ok');
+
+    const result = await runGeminiTask(env, 'enrichment', attempt, deps);
+    expect(result.model).toBe('gemini-3.1-flash-lite');
+
+    const deps2 = makeDeps();
+    const failure = unknownError();
+    const alwaysFailAttempt = vi.fn().mockRejectedValue(failure);
+    const error = await runGeminiTask(env, 'enrichment', alwaysFailAttempt, deps2).catch((e) => e);
+    expect(error).toBe(failure);
   });
 });
 

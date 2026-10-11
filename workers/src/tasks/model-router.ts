@@ -292,6 +292,9 @@ export async function runGeminiTask<T>(
             }
             break;
           case 'invalid_output':
+          case 'unknown':
+            // Both fall back to the next model identically; only 'invalid_output'
+            // (a GeminiOutputValidationError) is ever escalation-eligible.
             nonQuotaFailure = true;
             break;
         }
