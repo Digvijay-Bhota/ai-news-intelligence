@@ -19,9 +19,14 @@ Example: `event-brief-01-multi-source-confirming.gemini-3.5-flash-lite.json`
 
 Each file's content should be exactly the raw, parsed JSON the model
 produced for that case's task (an `EventBrief` object, a `NarrativeDelta`
-object, or a `ClaimComparison[]` array) — nothing else. The CLI
-(`../../../scripts/gemini-quality-eval.ts`) reads files from here to build
-the comparison report.
+object, or a `ClaimComparison[]` array) — nothing else.
+
+Files here are only **convenience copies**, written by the comparison runner
+(`../../../scripts/run-gemini-quality-comparison.ts`, `--execute` or
+`--reconcile`) from the authoritative, SHA-256-verified outputs in the shared
+request ledger (`~/.local/state/ai-news-intelligence/gemini-quality-eval/outputs/`).
+The report and `score` commands (`../../../scripts/gemini-quality-eval.ts`)
+read the ledger, never this directory, so editing a file here changes nothing.
 
 Do not place any response containing production data, credentials, or
 anything sensitive in this directory. It is intended only for the 12

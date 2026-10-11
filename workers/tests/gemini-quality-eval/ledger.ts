@@ -35,10 +35,16 @@
  *     --eval-root of this project on the same machine and OS account
  *     therefore shares one budget AND one view of which pairs were already
  *     attempted: switching checkout cannot hand out another 24 requests or
- *     re-send a failed/ambiguous pair. There is deliberately no CLI flag or
- *     environment variable that relocates it. The slot files sit in one
- *     request-budget/ directory shared by every --experiment-id, so renaming
- *     the experiment cannot obtain a fresh budget either.
+ *     re-send a pair. There is deliberately no CLI flag or environment
+ *     variable that relocates it. Reservations, run-logs and canonical
+ *     outputs are keyed globally by (case, model) — there is no experiment
+ *     namespace — so nothing can re-open an already reserved pair.
+ *   - A LEDGER_FORMAT marker identifies this layout. A ledger without it
+ *     (e.g. the per-experiment layout written by the first version of this
+ *     runner) is refused, never migrated, reset or deleted automatically.
+ *   - Successful outputs are stored canonically IN the ledger (write-once,
+ *     fsync'd) before the completing run-log, which records their SHA-256.
+ *     A checkout's local outputs/ directory only holds convenience copies.
  *     Limitation: this is a local file ledger. It cannot coordinate across
  *     different physical machines (or different OS user accounts); each of
  *     those has its own ledger and its own 24-request budget.
@@ -58,10 +64,14 @@
  *   - Output files and run-log files use the identical atomic-create
  *     pattern, so a second attempt to write either for an already-completed
  *     pair fails loudly instead of silently overwriting.
+ *
+ * Pair state classification, reconciliation and verified reads live in
+ * ledger-state.ts.
  */
 
 import { mkdirSync, existsSync, readFileSync, readdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { link, open, unlink } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import { userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
@@ -75,21 +85,32 @@ import {
   reservationFileName,
   runLogFileName,
   parseReservationFileName,
-  classifyPairState,
+  parseRunLogRecord,
+  type RunLogObservation,
   type RunLogRecord,
-  type PairState,
 } from './runner';
 
 export interface LedgerRoots {
-  /** <ledger-root>/request-budget — shared by ALL experiment IDs and checkouts. */
+  ledgerRoot: string;
+  /** <ledger-root>/request-budget — the 24 slot files, shared by every checkout. */
   budgetDir: string;
-  /** <ledger-root>/experiments/<experiment-id>/reservations */
+  /** <ledger-root>/reservations/<case>.<model>.reserved */
   reservationsDir: string;
-  /** <ledger-root>/experiments/<experiment-id>/run-logs */
+  /** <ledger-root>/run-logs/<case>.<model>.run.json */
   runLogsDir: string;
-  /** <eval-root>/outputs — the existing, flat Phase 1 outputs/ directory, reused as-is. */
-  outputsDir: string;
+  /** <ledger-root>/outputs/<case>.<model>.json — the authoritative saved outputs. */
+  canonicalOutputsDir: string;
+  /** <eval-root>/outputs — this checkout's convenience copies; never authoritative. */
+  localOutputsDir: string;
 }
+
+export const LEDGER_FORMAT_FILE = 'LEDGER_FORMAT';
+const LEDGER_FORMAT = { format: 'gemini-quality-eval-request-ledger', version: 2 };
+const LEDGER_FORMAT_TEXT = JSON.stringify(LEDGER_FORMAT, null, 2) + '\n';
+/** Prefix of createFileDurably's private temp files; never read as ledger content. */
+const TEMP_PREFIX = '.tmp-';
+/** Top-level entries a format-2 ledger may contain. */
+const LEDGER_ENTRIES = new Set([LEDGER_FORMAT_FILE, 'request-budget', 'reservations', 'run-logs', 'outputs']);
 
 /**
  * The single user-level ledger location for this machine and OS account:
@@ -102,15 +123,61 @@ export function defaultLedgerRoot(): string {
   return join(userInfo().homedir, '.local', 'state', 'ai-news-intelligence', 'gemini-quality-eval');
 }
 
-export function resolveLedgerRoots(evalRoot: string, experimentId: string, ledgerRoot: string): LedgerRoots {
+/** Thrown when code running under Vitest tries to address the real user-level ledger. */
+export class RealLedgerInTestError extends Error {}
+
+/**
+ * Every ledger access goes through here. Under Vitest (which sets VITEST in
+ * every test worker) the real user-level ledger is refused outright, so a
+ * test can never claim real budget slots — even by mistake.
+ */
+export function resolveLedgerRoots(evalRoot: string, ledgerRoot: string): LedgerRoots {
+  if (typeof ledgerRoot !== 'string' || ledgerRoot.trim() === '') {
+    throw new TypeError('An explicit ledger root is required');
+  }
   const ledger = resolve(ledgerRoot);
-  const experimentRoot = join(ledger, 'experiments', experimentId);
+  if (process.env.VITEST !== undefined && ledger === resolve(defaultLedgerRoot())) {
+    throw new RealLedgerInTestError(`Refusing to use the real user-level ledger (${ledger}) from a test run`);
+  }
   return {
+    ledgerRoot: ledger,
     budgetDir: join(ledger, 'request-budget'),
-    reservationsDir: join(experimentRoot, 'reservations'),
-    runLogsDir: join(experimentRoot, 'run-logs'),
-    outputsDir: join(resolve(evalRoot), 'outputs'),
+    reservationsDir: join(ledger, 'reservations'),
+    runLogsDir: join(ledger, 'run-logs'),
+    canonicalOutputsDir: join(ledger, 'outputs'),
+    localOutputsDir: join(resolve(evalRoot), 'outputs'),
   };
+}
+
+/**
+ * Read-only check that the ledger directory is either absent/empty or a
+ * format-2 ledger. Returns precise problems; never changes anything.
+ */
+export function inspectLedgerLayout(roots: LedgerRoots): string[] {
+  if (!existsSync(roots.ledgerRoot)) return [];
+  // In-flight or crash-leftover temp files from createFileDurably are inert.
+  const entries = readdirSync(roots.ledgerRoot).filter((e) => !e.startsWith(TEMP_PREFIX));
+  if (entries.length === 0) return [];
+  const problems: string[] = [];
+  if (entries.includes('experiments')) {
+    problems.push(
+      `${join(roots.ledgerRoot, 'experiments')} is the legacy per-experiment ledger layout (first runner version). ` +
+        'It is incompatible because it allowed a pair to be re-requested under a new experiment ID. ' +
+        'Nothing was changed; move the ledger directory aside manually after reviewing it.'
+    );
+  }
+  const markerPath = join(roots.ledgerRoot, LEDGER_FORMAT_FILE);
+  if (!existsSync(markerPath)) {
+    problems.push(`${roots.ledgerRoot} has content but no ${LEDGER_FORMAT_FILE} marker; refusing to guess its layout.`);
+  } else if (readFileSync(markerPath, 'utf8') !== LEDGER_FORMAT_TEXT) {
+    problems.push(`${markerPath} does not identify a format-${LEDGER_FORMAT.version} ledger.`);
+  }
+  for (const entry of entries) {
+    if (!LEDGER_ENTRIES.has(entry) && entry !== 'experiments') {
+      problems.push(`Unexpected entry in ledger root: ${join(roots.ledgerRoot, entry)}`);
+    }
+  }
+  return problems;
 }
 
 /** fsyncs a directory so entries just created in it survive a power loss. */
@@ -125,34 +192,65 @@ function syncDirectorySync(dir: string): void {
   }
 }
 
-export function ensureLedgerDirs(roots: LedgerRoots): void {
-  for (const dir of [roots.budgetDir, roots.reservationsDir, roots.runLogsDir, roots.outputsDir]) {
-    const firstCreated = mkdirSync(dir, { recursive: true });
-    // Persist `dir` and every directory entry this call created (up to and
-    // including the pre-existing parent of the first new directory), so a
-    // freshly created ledger tree cannot vanish on power loss.
-    const stopAt = firstCreated ? dirname(firstCreated) : dir;
-    for (let d = dir; ; d = dirname(d)) {
-      syncDirectorySync(d);
-      if (d === stopAt || dirname(d) === d) break;
-    }
+/**
+ * Creates the ledger (format marker first, then its directories) and this
+ * checkout's local outputs/ directory. Refuses — before writing anything — if
+ * the existing ledger directory is not an empty or format-2 ledger, so a
+ * marker is never stamped into a legacy or unknown layout.
+ */
+export async function ensureLedgerDirs(roots: LedgerRoots): Promise<void> {
+  const before = inspectLedgerLayout(roots);
+  if (before.length > 0) throw new Error(before.join(' '));
+  ensureDirDurably(roots.ledgerRoot);
+  try {
+    await createFileDurably(join(roots.ledgerRoot, LEDGER_FORMAT_FILE), LEDGER_FORMAT_TEXT);
+  } catch (err) {
+    if (!isEexist(err)) throw err; // a concurrent process wrote it; re-checked below
+  }
+  const after = inspectLedgerLayout(roots);
+  if (after.length > 0) throw new Error(after.join(' '));
+  for (const dir of [roots.budgetDir, roots.reservationsDir, roots.runLogsDir, roots.canonicalOutputsDir, roots.localOutputsDir]) {
+    ensureDirDurably(dir);
+  }
+}
+
+function ensureDirDurably(dir: string): void {
+  const firstCreated = mkdirSync(dir, { recursive: true });
+  // Persist `dir` and every directory entry this call created (up to and
+  // including the pre-existing parent of the first new directory), so a
+  // freshly created ledger tree cannot vanish on power loss.
+  const stopAt = firstCreated ? dirname(firstCreated) : dir;
+  for (let d = dir; ; d = dirname(d)) {
+    syncDirectorySync(d);
+    if (d === stopAt || dirname(d) === d) break;
   }
 }
 
 /**
- * Exclusively creates `path` (`wx`, so it fails with EEXIST if the file
- * already exists), writes `contents`, and fsyncs the file and its parent
- * directory before returning.
+ * Exclusively creates `path` with `contents` (fails with EEXIST if it already
+ * exists) and fsyncs it and its directory before returning. The content is
+ * written and fsync'd to a private temp file first and then published with
+ * link(), which is atomic and exclusive: another process can never observe a
+ * partially written ledger file, and two writers can never both succeed.
  */
 async function createFileDurably(path: string, contents: string): Promise<void> {
-  const handle = await open(path, 'wx');
+  const dir = dirname(path);
+  const tmp = join(dir, `${TEMP_PREFIX}${process.pid}-${randomUUID()}`);
+  const handle = await open(tmp, 'wx');
   try {
     await handle.writeFile(contents, 'utf8');
     await handle.sync();
   } finally {
     await handle.close();
   }
-  syncDirectorySync(dirname(path));
+  try {
+    await link(tmp, path);
+  } finally {
+    // A leftover temp file (e.g. after a crash right here) is inert: no
+    // ledger reader ever looks at .tmp-* names.
+    await unlink(tmp).catch(() => undefined);
+  }
+  syncDirectorySync(dir);
 }
 
 /** Thrown when the caller passes an unvalidated/unknown case ID or model. Never caught silently. */
@@ -164,33 +262,42 @@ function assertKnownPair(caseId: string, model: string, knownCaseIds: ReadonlySe
   if (!isSupportedModel(model)) throw new UnknownPairError(`Unsupported model: ${model}`);
 }
 
-/** True if a file exists at `path` — used only for read-side state checks, never for a write decision. */
-function fileExists(path: string): boolean {
-  return existsSync(path);
+export function sha256Hex(bytes: string | Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 export function hasReservation(roots: LedgerRoots, caseId: string, model: EvalModel): boolean {
-  return fileExists(join(roots.reservationsDir, reservationFileName(caseId, model)));
+  return existsSync(join(roots.reservationsDir, reservationFileName(caseId, model)));
 }
 
-export function readRunLog(roots: LedgerRoots, caseId: string, model: EvalModel): RunLogRecord | null {
-  const path = join(roots.runLogsDir, runLogFileName(caseId, model));
-  if (!fileExists(path)) return null;
+/** The reserved_at recorded in a pair's reservation file, or null if absent/unreadable. */
+export function readReservedAt(roots: LedgerRoots, caseId: string, model: EvalModel): string | null {
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as RunLogRecord;
+    const raw = JSON.parse(readFileSync(join(roots.reservationsDir, reservationFileName(caseId, model)), 'utf8'));
+    return typeof raw?.reserved_at === 'string' ? raw.reserved_at : null;
   } catch {
-    // A corrupt run-log must never be mistaken for "no run-log" (ambiguous)
-    // or silently treated as completed. Surface it distinctly to the caller.
-    throw new Error(`Run-log for ${caseId}.${model} exists but is not valid JSON — refusing to proceed.`);
+    return null;
   }
 }
 
-export function hasOutput(roots: LedgerRoots, caseId: string, model: EvalModel): boolean {
-  return fileExists(join(roots.outputsDir, outputFileName(caseId, model)));
+/** Never throws for a damaged run-log: it is reported as 'invalid', never as absent or completed. */
+export function readRunLog(roots: LedgerRoots, caseId: string, model: EvalModel): RunLogObservation {
+  const path = join(roots.runLogsDir, runLogFileName(caseId, model));
+  if (!existsSync(path)) return { status: 'absent' };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return { status: 'invalid', error: 'not valid JSON' };
+  }
+  const parsed = parseRunLogRecord(raw, caseId, model);
+  return parsed.ok ? { status: 'valid', record: parsed.record } : { status: 'invalid', error: parsed.error };
 }
 
-export function getPairState(roots: LedgerRoots, caseId: string, model: EvalModel): PairState {
-  return classifyPairState(hasReservation(roots, caseId, model), readRunLog(roots, caseId, model));
+/** Raw bytes of the canonical output, or null if none exists. Hash checks are the caller's job. */
+export function readCanonicalOutputBytes(roots: LedgerRoots, caseId: string, model: EvalModel): Buffer | null {
+  const path = join(roots.canonicalOutputsDir, outputFileName(caseId, model));
+  return existsSync(path) ? readFileSync(path) : null;
 }
 
 /** Every reservation filename currently on disk that parses as a valid (case, model) pair. */
@@ -317,48 +424,28 @@ export async function writeRunLogOnce(roots: LedgerRoots, caseId: string, model:
   return writeOnce(path, JSON.stringify(record, null, 2) + '\n');
 }
 
-/** Refuses to overwrite an existing output for this pair (shared outputs/ convention from Phase 1). */
-export async function writeOutputOnce(roots: LedgerRoots, caseId: string, model: EvalModel, output: unknown): Promise<WriteOnceResult> {
-  const path = join(roots.outputsDir, outputFileName(caseId, model));
-  return writeOnce(path, JSON.stringify(output, null, 2) + '\n');
-}
-
-export interface ConsistencyProblem {
-  caseId: string;
-  model: EvalModel;
-  problem: string;
+/** Serializes an output exactly as it is stored, so its SHA-256 is reproducible. */
+export function serializeOutput(output: unknown): string {
+  return JSON.stringify(output, null, 2) + '\n';
 }
 
 /**
- * Scans the ledger for states that should be structurally impossible given
- * this module's write order (reservation, then run-log, then — only on
- * success — output). Never attempts to fix anything it finds; the caller
- * must fail safely and stop rather than reset or guess.
+ * Writes the authoritative output into the shared ledger (write-once,
+ * fsync'd) and returns the SHA-256 of the exact bytes stored. Must happen
+ * BEFORE the completing run-log is written.
  */
-export function checkLedgerConsistency(
+export async function writeCanonicalOutputOnce(
   roots: LedgerRoots,
-  allPairs: Array<{ caseId: string; model: EvalModel }>
-): ConsistencyProblem[] {
-  const problems: ConsistencyProblem[] = [];
-  for (const { caseId, model } of allPairs) {
-    const reserved = hasReservation(roots, caseId, model);
-    let runLog: RunLogRecord | null = null;
-    try {
-      runLog = readRunLog(roots, caseId, model);
-    } catch (e) {
-      problems.push({ caseId, model, problem: e instanceof Error ? e.message : 'Corrupt run-log' });
-      continue;
-    }
-    const output = hasOutput(roots, caseId, model);
-    if (runLog && !reserved) {
-      problems.push({ caseId, model, problem: 'Run-log exists without a corresponding reservation' });
-    }
-    if (output && (!runLog || runLog.outcome !== 'completed')) {
-      problems.push({ caseId, model, problem: 'Output exists without a matching completed run-log' });
-    }
-    if (runLog && runLog.outcome === 'completed' && !output) {
-      problems.push({ caseId, model, problem: 'Run-log reports completed but no output file exists' });
-    }
-  }
-  return problems;
+  caseId: string,
+  model: EvalModel,
+  output: unknown
+): Promise<{ result: WriteOnceResult; sha256: string }> {
+  const bytes = serializeOutput(output);
+  const result = await writeOnce(join(roots.canonicalOutputsDir, outputFileName(caseId, model)), bytes);
+  return { result, sha256: sha256Hex(bytes) };
+}
+
+/** Writes this checkout's convenience copy of already-verified canonical bytes. Never overwrites. */
+export async function writeLocalCopyOnce(roots: LedgerRoots, caseId: string, model: EvalModel, bytes: Buffer): Promise<WriteOnceResult> {
+  return writeOnce(join(roots.localOutputsDir, outputFileName(caseId, model)), bytes.toString('utf8'));
 }

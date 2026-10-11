@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { EvalCase } from './gemini-quality-eval/harness';
+import { buildComparisonReport, renderReport, type EvalCase } from './gemini-quality-eval/harness';
 import {
   buildExperimentPlan,
   buildRunLogRecord,
@@ -8,6 +8,7 @@ import {
   MAX_EXPERIMENT_REQUESTS,
   outputFileName,
   parseReservationFileName,
+  parseRunLogRecord,
   redactKnownSecrets,
   redactUrlForLogging,
   reservationFileName,
@@ -173,12 +174,22 @@ describe('buildRunLogRecord', () => {
     responseMeta: null,
   };
 
-  it('builds a completed record with no error fields', () => {
-    const record = buildRunLogRecord({ ...base, outcome: 'completed', validation: { valid: true, errors: [] } });
+  const SHA = 'ab'.repeat(32);
+
+  it('builds a completed record with no error fields and the output SHA-256', () => {
+    const record = buildRunLogRecord({ ...base, outcome: 'completed', validation: { valid: true, errors: [] }, outputSha256: SHA });
     expect(record.outcome).toBe('completed');
     expect(record.error_classification).toBeNull();
     expect(record.error_message).toBeNull();
     expect(record.mechanical_validation).toEqual({ ran: true, valid: true, errors: [] });
+    expect(record.output_sha256).toBe(SHA);
+    expect(record.reconciled).toBe(false);
+  });
+
+  it('refuses a completed record without a valid SHA-256, and a failed record with one', () => {
+    expect(() => buildRunLogRecord({ ...base, outcome: 'completed' })).toThrow(/requires an output SHA-256/);
+    expect(() => buildRunLogRecord({ ...base, outcome: 'completed', outputSha256: 'xyz' })).toThrow(/requires an output SHA-256/);
+    expect(() => buildRunLogRecord({ ...base, outcome: 'failed', error: new Error('x'), outputSha256: SHA })).toThrow(/must not carry/);
   });
 
   it('classifies a GeminiOutputValidationError as invalid_output and redacts the message', () => {
@@ -257,16 +268,80 @@ describe('filename conventions and pair-state classification', () => {
     expect(parseReservationFileName('case-1.unknown-model.reserved')).toBeNull();
   });
 
-  it('classifies pair state from reservation/run-log presence', () => {
-    expect(classifyPairState(false, null)).toBe('not_attempted');
-    expect(classifyPairState(true, null)).toBe('ambiguous');
-    const completed: RunLogRecord = {
-      experiment_id: 'e', case_id: 'c', task: 'event_brief', model: 'gemini-3.5-flash-lite',
-      reserved_at: '', recorded_at: '', outcome: 'completed', response_meta: null,
-      error_classification: null, error_message: null,
-      mechanical_validation: { ran: true, valid: true, errors: [] },
+  const SHA = 'cd'.repeat(32);
+  const completed: RunLogRecord = {
+    experiment_id: 'e', case_id: 'c', task: 'event_brief', model: 'gemini-3.5-flash-lite',
+    reserved_at: '', recorded_at: '', outcome: 'completed', response_meta: null,
+    error_classification: null, error_message: null,
+    mechanical_validation: { ran: true, valid: true, errors: [] },
+    output_sha256: SHA, reconciled: false,
+  };
+  const failedLog: RunLogRecord = { ...completed, outcome: 'failed', output_sha256: null };
+  const valid = (record: RunLogRecord) => ({ status: 'valid' as const, record });
+  const absent = { status: 'absent' as const };
+
+  it('classifies every state the write order can produce', () => {
+    const state = (reserved: boolean, runLog: Parameters<typeof classifyPairState>[0]['runLog'], sha: string | null) =>
+      classifyPairState({ reserved, runLog, canonicalOutputSha256: sha }).state;
+    expect(state(false, absent, null)).toBe('not_attempted');
+    expect(state(true, absent, null)).toBe('ambiguous');
+    expect(state(true, absent, SHA)).toBe('incomplete');
+    expect(state(true, valid(completed), SHA)).toBe('completed');
+    expect(state(true, valid(failedLog), null)).toBe('failed');
+  });
+
+  it('classifies every impossible or mismatched combination as corrupt, with the reason', () => {
+    const problem = (reserved: boolean, runLog: Parameters<typeof classifyPairState>[0]['runLog'], sha: string | null) => {
+      const r = classifyPairState({ reserved, runLog, canonicalOutputSha256: sha });
+      expect(r.state).toBe('corrupt');
+      return r.problem;
     };
-    expect(classifyPairState(true, completed)).toBe('completed');
-    expect(classifyPairState(true, { ...completed, outcome: 'failed' })).toBe('failed');
+    expect(problem(true, valid(completed), 'ef'.repeat(32))).toMatch(/does not match/);
+    expect(problem(true, valid(completed), null)).toMatch(/canonical output is missing/);
+    expect(problem(true, valid(failedLog), SHA)).toMatch(/output exists for a failed run/);
+    expect(problem(false, valid(failedLog), null)).toMatch(/run-log exists without a reservation/);
+    expect(problem(false, absent, SHA)).toMatch(/canonical output exists without a reservation/);
+    expect(problem(true, { status: 'invalid', error: 'boom' }, null)).toMatch(/unreadable: boom/);
+  });
+
+  it('parses run-logs strictly for the exact pair', () => {
+    expect(parseRunLogRecord(completed, 'c', 'gemini-3.5-flash-lite')).toEqual({ ok: true, record: completed });
+    expect(parseRunLogRecord(failedLog, 'c', 'gemini-3.5-flash-lite').ok).toBe(true);
+    expect(parseRunLogRecord(completed, 'other', 'gemini-3.5-flash-lite').ok).toBe(false);
+    expect(parseRunLogRecord(completed, 'c', 'gemini-3.6-flash').ok).toBe(false);
+    expect(parseRunLogRecord({ ...completed, output_sha256: 'short' }, 'c', 'gemini-3.5-flash-lite').ok).toBe(false);
+    expect(parseRunLogRecord({ ...failedLog, output_sha256: SHA }, 'c', 'gemini-3.5-flash-lite').ok).toBe(false);
+    expect(parseRunLogRecord({ ...completed, outcome: 'pending' }, 'c', 'gemini-3.5-flash-lite').ok).toBe(false);
+    expect(parseRunLogRecord([], 'c', 'gemini-3.5-flash-lite').ok).toBe(false);
+  });
+});
+
+describe('buildComparisonReport with ledger-explained unavailable outputs', () => {
+  it('keeps failed/ambiguous/incomplete/corrupt distinct from missing, and never as valid', () => {
+    const cases = [minimalCase('a'), minimalCase('b'), minimalCase('c')];
+    const why = {
+      'a:gemini-3.5-flash-lite': { status: 'failed' as const, detail: 'request failed (server)' },
+      'a:gemini-3.6-flash': { status: 'ambiguous' as const, detail: null },
+      'b:gemini-3.5-flash-lite': { status: 'incomplete' as const, detail: null },
+      'b:gemini-3.6-flash': { status: 'corrupt_output' as const, detail: 'hash mismatch' },
+    } as Record<string, { status: 'failed' | 'ambiguous' | 'incomplete' | 'corrupt_output'; detail: string | null }>;
+    const results = buildComparisonReport(
+      cases,
+      () => null,
+      () => ({ status: 'none' }),
+      (caseId, model) => why[`${caseId}:${model}`] ?? { status: 'missing', detail: null }
+    );
+    expect(results.map((r) => r.status)).toEqual(['failed', 'ambiguous', 'incomplete', 'corrupt_output', 'missing', 'missing']);
+    expect(results[0].output_detail).toBe('request failed (server)');
+    expect(results[4]).not.toHaveProperty('output_detail');
+    const text = renderReport(cases, results);
+    expect(text).toContain('ledger: hash mismatch');
+    expect(text).toMatch(/2 missing, .*1 failed, 1 ambiguous, 1 incomplete, 1 corrupt_output\.$/);
+  });
+
+  it('without the optional callback behaves exactly as before (all missing)', () => {
+    const results = buildComparisonReport([minimalCase('a')], () => null, () => ({ status: 'none' }));
+    expect(results.map((r) => r.status)).toEqual(['missing', 'missing']);
+    expect(renderReport([minimalCase('a')], results)).toMatch(/0 corrupt_score\.$/);
   });
 });

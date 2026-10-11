@@ -24,6 +24,14 @@ import { EVAL_MODELS, type EvalCase, type EvalModel, type EvalTask, type Validat
 /** Hard, auditable experiment-wide cap — independent of the production escalation budget. */
 export const MAX_EXPERIMENT_REQUESTS = 24;
 
+/**
+ * Label recorded in every run-log. Not a ledger namespace: pair state is keyed
+ * globally by (case, model), so there is exactly one experiment per ledger.
+ */
+export const EXPERIMENT_ID = 'lite-vs-36-flash-12case-comparison';
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 export interface PlannedPair {
   case_id: string;
   task: EvalTask;
@@ -205,6 +213,14 @@ export interface RunLogRecord {
   /** Present only when outcome is 'failed'. Never includes a raw URL or API key. */
   error_message: string | null;
   mechanical_validation: { ran: boolean; valid: boolean | null; errors: string[] };
+  /** SHA-256 (hex) of the canonical ledger output bytes. Required for 'completed', null for 'failed'. */
+  output_sha256: string | null;
+  /**
+   * True when this completion record was written by offline reconciliation
+   * (canonical output found durable but the original process died before
+   * recording completion). response_meta is then null: it was never persisted.
+   */
+  reconciled: boolean;
 }
 
 /**
@@ -227,8 +243,15 @@ export function buildRunLogRecord(params: {
   validation?: ValidationResult | null;
   /** Exact secret values (e.g. the API key) to strip from the persisted error message. */
   secrets?: readonly string[];
+  /** Required (and only allowed) for outcome 'completed'. */
+  outputSha256?: string | null;
+  reconciled?: boolean;
 }): RunLogRecord {
   const { experimentId, caseId, task, model, reservedAt, responseMeta, outcome, error, validation, secrets } = params;
+  const outputSha256 = params.outputSha256 ?? null;
+  if ((outcome === 'completed') !== (outputSha256 !== null && SHA256_HEX.test(outputSha256))) {
+    throw new Error(`A '${outcome}' run-log ${outcome === 'completed' ? 'requires' : 'must not carry'} an output SHA-256`);
+  }
   const errorMessage =
     error === undefined
       ? null
@@ -249,6 +272,8 @@ export function buildRunLogRecord(params: {
       valid: validation ? validation.valid : null,
       errors: validation ? validation.errors : [],
     },
+    output_sha256: outputSha256,
+    reconciled: params.reconciled ?? false,
   };
   return redactStringsDeep(record, secrets ?? []);
 }
@@ -306,11 +331,85 @@ export function parseReservationFileName(fileName: string): { caseId: string; mo
   return null;
 }
 
-export type PairState = 'not_attempted' | 'ambiguous' | 'completed' | 'failed';
+/**
+ * Strictly parses a run-log read from disk. Anything that is not exactly a
+ * well-formed record for THIS (case, model) pair is rejected, so a damaged or
+ * misplaced run-log can never be mistaken for a completed or failed attempt.
+ */
+export function parseRunLogRecord(
+  raw: unknown,
+  caseId: string,
+  model: EvalModel
+): { ok: true; record: RunLogRecord } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'run-log is not a JSON object' };
+  const r = raw as Record<string, unknown>;
+  if (r.case_id !== caseId || r.model !== model) {
+    return { ok: false, error: `run-log identifies ${String(r.case_id)}.${String(r.model)}, not ${caseId}.${model}` };
+  }
+  if (r.outcome === 'completed') {
+    if (typeof r.output_sha256 !== 'string' || !SHA256_HEX.test(r.output_sha256)) {
+      return { ok: false, error: 'completed run-log has no valid output_sha256' };
+    }
+  } else if (r.outcome === 'failed') {
+    if (r.output_sha256 !== null) return { ok: false, error: 'failed run-log must not reference an output' };
+  } else {
+    return { ok: false, error: `run-log outcome is ${JSON.stringify(r.outcome)}, expected 'completed' or 'failed'` };
+  }
+  return { ok: true, record: raw as RunLogRecord };
+}
 
-/** Pure classification of a pair's state given what the ledger observed on disk. */
-export function classifyPairState(hasReservation: boolean, runLog: RunLogRecord | null): PairState {
-  if (!hasReservation) return 'not_attempted';
-  if (!runLog) return 'ambiguous';
-  return runLog.outcome === 'completed' ? 'completed' : 'failed';
+/**
+ * Pair lifecycle in the shared ledger, in write order:
+ *   1. reservation  (before any request — never removed)
+ *   2. request       (network; at most one per reservation)
+ *   3. canonical output, success only (write-once, fsync'd)
+ *   4. run-log       (write-once, fsync'd) — the commit point
+ *   5. local outputs/ copy (convenience only, never authoritative)
+ */
+export type PairState =
+  /** No reservation. Safe to reserve. */
+  | 'not_attempted'
+  /** Reserved, nothing else: the request may or may not have been sent. Never re-sent. */
+  | 'ambiguous'
+  /** Reserved + canonical output, no run-log: crashed between steps 3 and 4. Offline reconciliation can complete it. */
+  | 'incomplete'
+  | 'completed'
+  | 'failed'
+  /** Any combination the write order cannot produce, or a hash mismatch. Never repaired automatically. */
+  | 'corrupt';
+
+export type RunLogObservation =
+  | { status: 'absent' }
+  | { status: 'invalid'; error: string }
+  | { status: 'valid'; record: RunLogRecord };
+
+export interface PairObservation {
+  reserved: boolean;
+  runLog: RunLogObservation;
+  /** SHA-256 of the canonical output file's bytes, or null if there is no canonical output. */
+  canonicalOutputSha256: string | null;
+}
+
+/** Pure classification of a pair's state from what the ledger observed on disk. */
+export function classifyPairState(o: PairObservation): { state: PairState; problem: string | null } {
+  const corrupt = (problem: string) => ({ state: 'corrupt' as const, problem });
+  if (o.runLog.status === 'invalid') return corrupt(`run-log is unreadable: ${o.runLog.error}`);
+  const hasOutput = o.canonicalOutputSha256 !== null;
+  if (!o.reserved) {
+    if (o.runLog.status === 'valid') return corrupt('run-log exists without a reservation');
+    if (hasOutput) return corrupt('canonical output exists without a reservation');
+    return { state: 'not_attempted', problem: null };
+  }
+  if (o.runLog.status === 'absent') return { state: hasOutput ? 'incomplete' : 'ambiguous', problem: null };
+  const record = o.runLog.record;
+  if (record.outcome === 'failed') {
+    return hasOutput ? corrupt('canonical output exists for a failed run') : { state: 'failed', problem: null };
+  }
+  if (!hasOutput) return corrupt('run-log reports completed but the canonical output is missing');
+  if (o.canonicalOutputSha256 !== record.output_sha256) {
+    return corrupt(
+      `canonical output SHA-256 ${o.canonicalOutputSha256} does not match the run-log's ${record.output_sha256}`
+    );
+  }
+  return { state: 'completed', problem: null };
 }

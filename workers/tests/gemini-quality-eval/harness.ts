@@ -129,7 +129,24 @@ export function checkCaseDocumentation(evalCase: EvalCase): string[] {
 export const EVAL_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.6-flash'] as const;
 export type EvalModel = (typeof EVAL_MODELS)[number];
 
-export type OutputStatus = 'missing' | 'invalid' | 'valid_unscored' | 'scored' | 'corrupt_score';
+export type OutputStatus =
+  | UnavailableOutputStatus
+  | 'invalid'
+  | 'valid_unscored'
+  | 'scored'
+  | 'corrupt_score';
+
+/**
+ * Why no usable output exists for a pair. 'missing' = not attempted (or no
+ * ledger information). The others come from the Phase 2 request ledger and
+ * must stay distinguishable from 'missing' and from each other.
+ */
+export type UnavailableOutputStatus = 'missing' | 'failed' | 'ambiguous' | 'incomplete' | 'corrupt_output';
+
+export interface UnavailableOutput {
+  status: UnavailableOutputStatus;
+  detail: string | null;
+}
 
 export interface HumanScore {
   reviewer: string;
@@ -212,6 +229,8 @@ export interface CaseModelResult {
   human_score: HumanScore | null;
   /** Set only when status is 'corrupt_score': why the saved scorecard was rejected. */
   score_error: string | null;
+  /** Set only for ledger-reported unavailable statuses: what the ledger recorded. */
+  output_detail?: string;
 }
 
 /**
@@ -237,14 +256,25 @@ export type ScoreLoadResult =
 export function buildComparisonReport(
   cases: EvalCase[],
   readOutput: (caseId: string, model: EvalModel) => unknown | null,
-  readScore: (caseId: string, model: EvalModel) => ScoreLoadResult
+  readScore: (caseId: string, model: EvalModel) => ScoreLoadResult,
+  /** Optional: explains a null readOutput (e.g. failed/ambiguous per the request ledger). Defaults to 'missing'. */
+  explainUnavailable?: (caseId: string, model: EvalModel) => UnavailableOutput
 ): CaseModelResult[] {
   const results: CaseModelResult[] = [];
   for (const evalCase of cases) {
     for (const model of EVAL_MODELS) {
       const rawOutput = readOutput(evalCase.id, model);
       if (rawOutput === null || rawOutput === undefined) {
-        results.push({ case_id: evalCase.id, model, status: 'missing', validation: null, human_score: null, score_error: null });
+        const why = explainUnavailable?.(evalCase.id, model) ?? { status: 'missing' as const, detail: null };
+        results.push({
+          case_id: evalCase.id,
+          model,
+          status: why.status,
+          validation: null,
+          human_score: null,
+          score_error: null,
+          ...(why.detail ? { output_detail: why.detail } : {}),
+        });
         continue;
       }
       const validation = validateSavedOutput(evalCase, rawOutput);
@@ -293,6 +323,7 @@ export function renderReport(cases: EvalCase[], results: CaseModelResult[]): str
       lines.push(`  ${r.model}: ${r.status}`);
       if (r.validation && !r.validation.valid) lines.push(`    validation error: ${r.validation.errors[0]}`);
       if (r.status === 'corrupt_score' && r.score_error) lines.push(`    scorecard error: ${r.score_error}`);
+      if (r.output_detail) lines.push(`    ledger: ${r.output_detail}`);
       if (r.human_score) {
         lines.push(`    overall: ${r.human_score.overall_verdict} (reviewer: ${r.human_score.reviewer})`);
         lines.push(
@@ -309,9 +340,14 @@ export function renderReport(cases: EvalCase[], results: CaseModelResult[]): str
   const scored = results.filter((r) => r.status === 'scored').length;
   const unscored = results.filter((r) => r.status === 'valid_unscored').length;
   const corruptScore = results.filter((r) => r.status === 'corrupt_score').length;
+  const ledgerCounts = (['failed', 'ambiguous', 'incomplete', 'corrupt_output'] as const)
+    .map((status) => [status, results.filter((r) => r.status === status).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([status, n]) => `, ${n} ${status}`)
+    .join('');
   lines.push(
     `Summary: ${results.length} (case, model) pairs — ${missing} missing, ${invalid} invalid, ${unscored} valid/unscored, ` +
-      `${scored} scored, ${corruptScore} corrupt_score.`
+      `${scored} scored, ${corruptScore} corrupt_score${ledgerCounts}.`
   );
   return lines.join('\n');
 }

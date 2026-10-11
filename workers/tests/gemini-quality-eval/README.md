@@ -83,12 +83,12 @@ cd workers
 # Confirm every case fixture carries the required documentation.
 npx vite-node scripts/gemini-quality-eval.ts -- check-cases
 
-# Build and print the comparison report (honest "missing" for every
-# (case, model) pair until real outputs exist in outputs/).
+# Build and print the comparison report from the verified outputs in the
+# shared request ledger (honest "missing" for every unattempted pair).
 npx vite-node scripts/gemini-quality-eval.ts -- report
 
-# Record a human score for a (case, model) pair that already has a saved,
-# mechanically-valid output in outputs/.
+# Record a human score for a (case, model) pair that has a verified,
+# mechanically-valid saved output in the request ledger.
 npx vite-node scripts/gemini-quality-eval.ts -- score <case-id> <model> \
   --reviewer "<name>" --factual <1-5> --preservation <1-5> --unsupported <1-5> \
   --uncertainty <1-5> --usefulness <1-5> --verdict <pass|fail|needs_review> \
@@ -116,30 +116,54 @@ rather than fabricating a result.
 
 `scripts/gemini-quality-comparison-runner.ts` implements the controlled
 comparison proposed below. It calls the real production generators once per
-(case, model) pair, for at most 24 requests in total.
+(case, model) pair, for at most 24 requests in total. Its executable entry
+point is the wrapper `scripts/run-gemini-quality-comparison.ts`; importing the
+implementation module never runs anything.
 
 ```bash
-# Dry-run (default): read-only, no network, no API key, no ledger writes.
-npx vite-node scripts/gemini-quality-comparison-runner.ts
+# Dry-run (default): read-only, no network, no API key, writes nothing.
+npx vite-node scripts/run-gemini-quality-comparison.ts
+# Offline recovery / local copies: no key, no requests (see below).
+npx vite-node scripts/run-gemini-quality-comparison.ts -- --reconcile
 # Live run — requires separate approval and GEMINI_QUALITY_EVAL_API_KEY
 # (GEMINI_API_KEY is never used as a fallback). Note the `--`.
-npx vite-node scripts/gemini-quality-comparison-runner.ts -- --execute
+npx vite-node scripts/run-gemini-quality-comparison.ts -- --execute
 ```
 
-- **Request ledger location:** `~/.local/state/ai-news-intelligence/gemini-quality-eval/`
-  (resolved from the OS user database, not `$HOME`). It holds the 24 budget
-  slots, per-pair reservations, and run-logs, and is shared by every
-  worktree, clone, `--eval-root`, and `--experiment-id` on this machine. No
-  flag or environment variable relocates it. Outputs still go to this
-  directory's `outputs/`.
-- A reservation is written and fsync'd before its request is sent, and is
-  never refunded. A failed pair is never retried, and an interrupted
-  ("ambiguous") pair is never re-sent.
+- **Request ledger:** `~/.local/state/ai-news-intelligence/gemini-quality-eval/`
+  (resolved from the OS user database, not `$HOME`; no flag or environment
+  variable relocates it). Shared by every worktree, clone and `--eval-root` on
+  this machine, and keyed only by (case, model) — there is no experiment ID,
+  so no checkout can request a pair that was ever reserved. Layout:
+  `LEDGER_FORMAT`, `request-budget/` (24 slot files), `reservations/`,
+  `run-logs/`, `outputs/`. A ledger in any other layout (including the
+  per-experiment layout of the first runner version) is refused, never
+  migrated or deleted.
+- **Write order per pair:** reservation (before the request, never refunded)
+  → request (at most one) → canonical output in the ledger's `outputs/` →
+  run-log recording the output's SHA-256 (the commit point) → a convenience
+  copy in this checkout's `outputs/`. Every ledger file is published
+  atomically, write-once, and fsync'd.
+- **States:** `not_attempted`, `ambiguous` (reserved, no outcome — never
+  re-sent), `incomplete` (output saved, completion not recorded),
+  `completed`, `failed` (never retried), and `corrupt` (impossible
+  combination or SHA-256 mismatch — reported precisely; `--execute` and
+  `--reconcile` refuse to proceed, nothing is reset or repeated).
+- **`--reconcile`** (also run automatically at the start of `--execute`)
+  completes `incomplete` pairs whose saved output re-validates, and copies
+  every verified completed output into this checkout's `outputs/`. It never
+  overwrites a local file; a differing one is reported and left alone.
+- **Report and scoring** (`scripts/gemini-quality-eval.ts`) read only
+  verified canonical outputs from the ledger, so any checkout — even one
+  with an empty `outputs/` — reports the same results, and a local file is
+  never reported or scored as valid. `--outputs-dir` was removed for this
+  reason.
 - **Limitation:** this is a local file ledger. It cannot coordinate usage
   across different physical machines or OS user accounts; each of those
   would have its own 24-request budget.
-- Tests (mocked network, temporary ledger; never the real one):
-  `npm run test:ledger` and `npx vitest run tests/gemini-quality-eval-runner.test.ts`.
+- Tests (mocked network, temporary ledgers; the real one is refused under
+  Vitest): `npm run test:ledger` and
+  `npx vitest run tests/gemini-quality-eval-runner.test.ts`.
 
 ---
 

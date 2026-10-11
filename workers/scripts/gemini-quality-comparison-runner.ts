@@ -1,6 +1,11 @@
-#!/usr/bin/env -S npx vite-node
 /**
- * Phase 2 — Gemini quality-comparison runner.
+ * Phase 2 — Gemini quality-comparison runner (implementation).
+ *
+ * Importing this module has NO side effects: it never parses process.argv
+ * and never runs anything. The executable entry point is the small wrapper
+ * scripts/run-gemini-quality-comparison.ts, which is also the only place
+ * that selects the real user-level ledger; main()/runCli() require an
+ * explicit ledger root.
  *
  * Runs via `vite-node` (same reason as scripts/gemini-quality-eval.ts: real
  * fs access outside the Workers test runtime, no new dependency).
@@ -17,14 +22,15 @@
  * path (defaultLedgerRoot(), ~/.local/state/ai-news-intelligence/
  * gemini-quality-eval) shared by every worktree/clone on this machine; no
  * CLI flag or environment variable relocates it. It cannot coordinate
- * across different machines.
+ * across different machines. Pairs are keyed globally by (case, model):
+ * once reserved, a pair is never requested again from any checkout.
  *
- * Dry-run is the default and makes zero network calls and requires no API
- * key. A live request requires --execute AND a non-empty
- * GEMINI_QUALITY_EVAL_API_KEY — the production GEMINI_API_KEY is never read
- * as a fallback.
- *
- * Run with: npx vite-node scripts/gemini-quality-comparison-runner.ts -- [--execute] [--experiment-id <id>]
+ * Dry-run is the default: read-only, zero network calls, no API key.
+ * --reconcile is offline: it completes interrupted-but-saved runs from their
+ * verified canonical output and copies verified outputs into this
+ * checkout's outputs/, without a key or any request. A live request requires
+ * --execute AND a non-empty GEMINI_QUALITY_EVAL_API_KEY — the production
+ * GEMINI_API_KEY is never read as a fallback.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -40,6 +46,7 @@ import {
 import { GeminiOutputValidationError } from '../src/tasks/gemini-errors';
 import { validateSavedOutput, type EvalCase, type EvalModel } from '../tests/gemini-quality-eval/harness';
 import {
+  EXPERIMENT_ID,
   MAX_EXPERIMENT_REQUESTS,
   buildExperimentPlan,
   buildRunLogRecord,
@@ -54,35 +61,43 @@ import {
   defaultLedgerRoot,
   resolveLedgerRoots,
   ensureLedgerDirs,
-  getPairState,
+  inspectLedgerLayout,
   reserveNext,
-  writeOutputOnce,
+  writeCanonicalOutputOnce,
   writeRunLogOnce,
-  checkLedgerConsistency,
+  serializeOutput,
   UnknownPairError,
   type LedgerRoots,
 } from '../tests/gemini-quality-eval/ledger';
+import {
+  findCorruptPairs,
+  getPairState,
+  loadVerifiedOutput,
+  materializeLocalCopy,
+  reconcileAndMaterialize,
+} from '../tests/gemini-quality-eval/ledger-state';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EVAL_ROOT = join(HERE, '..', 'tests', 'gemini-quality-eval');
-const DEFAULT_EXPERIMENT_ID = 'lite-vs-36-flash-12case-comparison';
 
 export class UsageError extends Error {}
 
-const USAGE = `Phase 2 Gemini quality-comparison runner.
+function usage(): string {
+  return `Phase 2 Gemini quality-comparison runner.
 
-Dry-run (default) makes zero network calls and requires no API key. It only
-shows the full planned (case, model) pairs and their current ledger state.
+Dry-run (default) is read-only, makes zero network calls and requires no API
+key. It shows the planned (case, model) pairs and their ledger state.
 
 Usage:
-  npx vite-node scripts/gemini-quality-comparison-runner.ts -- [options]
+  npx vite-node scripts/run-gemini-quality-comparison.ts -- [options]
 
 Options:
   --execute                 Perform real requests (requires GEMINI_QUALITY_EVAL_API_KEY).
-  --experiment-id <id>      Ledger namespace (default: ${DEFAULT_EXPERIMENT_ID}).
-                             Must match /^[A-Za-z0-9_-]+$/.
+                             Reconciles interrupted runs first; never re-sends a reserved pair.
+  --reconcile               Offline only (no key, no requests): complete interrupted runs whose
+                             verified output was saved, and copy verified outputs into outputs/.
   --eval-root <dir>         Override the eval root directory (for testing only).
-                             Changes where cases are read and outputs written;
+                             Changes where cases are read and local copies written;
                              never the request ledger or its 24-request budget.
   --help                    Show this message.
 
@@ -90,17 +105,12 @@ Request ledger (shared by all worktrees/clones on this machine; not configurable
   ${defaultLedgerRoot()}
 
 Exit codes: 0 success, 1 runtime/consistency error, 2 usage error.`;
+}
 
 export function loadCases(evalRoot: string): EvalCase[] {
   const casesDir = join(evalRoot, 'cases');
   const files = readdirSync(casesDir).filter((f) => f.endsWith('.json'));
   return files.map((f) => JSON.parse(readFileSync(join(casesDir, f), 'utf8')) as EvalCase);
-}
-
-function validateExperimentId(id: string): void {
-  if (!/^[A-Za-z0-9_-]+$/.test(id)) {
-    throw new UsageError(`Invalid --experiment-id: ${JSON.stringify(id)} (must match /^[A-Za-z0-9_-]+$/)`);
-  }
 }
 
 function printPlan(roots: LedgerRoots, plan: PlannedPair[]): void {
@@ -138,13 +148,16 @@ function safeErrorMessage(err: unknown, secrets: readonly string[] = []): string
   return redactKnownSecrets(err instanceof Error ? err.message : String(err), secrets);
 }
 
+/**
+ * Attempts every not-yet-reserved planned pair once. Returns false if it had
+ * to stop on an inconsistent ledger state (the caller exits non-zero).
+ */
 export async function runExperiment(
   roots: LedgerRoots,
-  experimentId: string,
   cases: EvalCase[],
   plan: PlannedPair[],
   apiKey: string
-): Promise<void> {
+): Promise<boolean> {
   const casesById = new Map(cases.map((c) => [c.id, c]));
   const knownCaseIds = new Set(casesById.keys());
   const secrets = [apiKey];
@@ -160,7 +173,7 @@ export async function runExperiment(
     if (!reservation.ok) {
       if (reservation.reason === 'cap_reached') {
         console.error(`Hard cap reached (${reservation.count} reservations already made). Stopping.`);
-        return;
+        return true;
       }
       console.log(`Skipping ${pair.case_id} x ${pair.model}: reserved by another process just now.`);
       continue;
@@ -188,6 +201,10 @@ export async function runExperiment(
       validation = validateSavedOutput(evalCase, rawOutput);
       if (!validation.valid) {
         thrown = new GeminiOutputValidationError(validation.errors[0] ?? 'Mechanical validation failed');
+      } else if (serializeOutput(rawOutput).includes(apiKey)) {
+        // Cannot happen with a sane model (the key is never in the prompt),
+        // but an artifact containing the key must never be persisted.
+        thrown = new Error('Model output contained the API key; output discarded');
       }
     } catch (err) {
       thrown = err;
@@ -196,16 +213,18 @@ export async function runExperiment(
     }
 
     if (thrown === undefined) {
-      const outWrite = await writeOutputOnce(roots, pair.case_id, pair.model, rawOutput);
-      if (outWrite === 'already_exists') {
+      // Order: canonical output (durable) -> completing run-log with its
+      // SHA-256 (durable, the commit point) -> local convenience copy.
+      const canonical = await writeCanonicalOutputOnce(roots, pair.case_id, pair.model, rawOutput);
+      if (canonical.result === 'already_exists') {
         console.error(
-          `Inconsistent state: output already exists for ${pair.case_id} x ${pair.model} after a fresh ` +
+          `Inconsistent state: a canonical output already exists for ${pair.case_id} x ${pair.model} after a fresh ` +
             `reservation. Refusing to continue — investigate manually before re-running.`
         );
-        return;
+        return false;
       }
       const record = buildRunLogRecord({
-        experimentId,
+        experimentId: EXPERIMENT_ID,
         caseId: pair.case_id,
         task: pair.task,
         model: pair.model,
@@ -213,16 +232,29 @@ export async function runExperiment(
         responseMeta: captured,
         outcome: 'completed',
         validation,
+        secrets,
+        outputSha256: canonical.sha256,
       });
       const logWrite = await writeRunLogOnce(roots, pair.case_id, pair.model, record);
-      if (logWrite === 'already_exists') {
+      // 'already_exists' is only acceptable if a concurrent --reconcile
+      // completed this same pair from the canonical output just written.
+      if (logWrite === 'already_exists' && getPairState(roots, pair.case_id, pair.model) !== 'completed') {
         console.error(`Inconsistent state: run-log already exists for ${pair.case_id} x ${pair.model}. Stopping.`);
-        return;
+        return false;
       }
-      console.log(`  completed (mechanically valid output saved).`);
+      const verified = loadVerifiedOutput(roots, pair.case_id, pair.model);
+      if (!verified.ok) {
+        console.error(`Saved output for ${pair.case_id} x ${pair.model} failed verification: ${verified.problem}. Stopping.`);
+        return false;
+      }
+      const local = await materializeLocalCopy(roots, pair.case_id, pair.model, verified.bytes);
+      console.log(
+        `  completed (validated output saved to the ledger, sha256 ${canonical.sha256.slice(0, 12)}…` +
+          `${local === 'local_differs' ? '; existing local copy differs and was left unchanged' : ''}).`
+      );
     } else {
       const record = buildRunLogRecord({
-        experimentId,
+        experimentId: EXPERIMENT_ID,
         caseId: pair.case_id,
         task: pair.task,
         model: pair.model,
@@ -236,15 +268,16 @@ export async function runExperiment(
       const logWrite = await writeRunLogOnce(roots, pair.case_id, pair.model, record);
       if (logWrite === 'already_exists') {
         console.error(`Inconsistent state: run-log already exists for ${pair.case_id} x ${pair.model}. Stopping.`);
-        return;
+        return false;
       }
       console.log(`  failed: ${safeErrorMessage(thrown, secrets)}`);
     }
   }
+  return true;
 }
 
 function printSummary(roots: LedgerRoots, plan: PlannedPair[]): void {
-  const counts: Record<string, number> = { not_attempted: 0, ambiguous: 0, completed: 0, failed: 0 };
+  const counts: Record<string, number> = { not_attempted: 0, ambiguous: 0, incomplete: 0, completed: 0, failed: 0, corrupt: 0 };
   for (const pair of plan) {
     const state = getPairState(roots, pair.case_id, pair.model);
     counts[state] = (counts[state] ?? 0) + 1;
@@ -252,97 +285,118 @@ function printSummary(roots: LedgerRoots, plan: PlannedPair[]): void {
   console.log('');
   console.log(
     `Summary: ${plan.length} planned — ${counts.completed} completed, ${counts.failed} failed, ` +
-      `${counts.ambiguous} ambiguous (reserved, no run-log — a prior interrupted attempt), ` +
-      `${counts.not_attempted} not attempted.`
+      `${counts.ambiguous} ambiguous (reserved, no outcome — a prior interrupted attempt; never re-sent), ` +
+      `${counts.incomplete} incomplete (saved, completion not recorded — run --reconcile), ` +
+      `${counts.corrupt} corrupt, ${counts.not_attempted} not attempted.`
   );
 }
 
-/**
- * `ledgerRoot` exists only so tests can point at a temporary ledger. The CLI
- * entry point below never passes it, and no flag or environment variable
- * maps to it, so a real run always uses the shared user-level ledger.
- */
-export async function main(argv: string[], ledgerRoot: string = defaultLedgerRoot()): Promise<number> {
-  const { values } = parseArgs({
-    args: argv,
-    allowPositionals: false,
-    options: {
-      execute: { type: 'boolean', default: false },
-      'experiment-id': { type: 'string', default: DEFAULT_EXPERIMENT_ID },
-      'eval-root': { type: 'string' },
-      help: { type: 'boolean', short: 'h', default: false },
-    },
-  });
+function dedicatedKeySecrets(): string[] {
+  const key = process.env.GEMINI_QUALITY_EVAL_API_KEY;
+  return key ? [key] : [];
+}
 
-  if (values.help) {
-    console.log(USAGE);
-    return 0;
+/**
+ * Testable entry point. `ledgerRoot` is REQUIRED: only the CLI wrapper passes
+ * defaultLedgerRoot(); tests pass a temporary directory, and
+ * resolveLedgerRoots refuses the real ledger under Vitest.
+ */
+export async function main(argv: string[], ledgerRoot: string): Promise<number> {
+  let values: { execute?: boolean; reconcile?: boolean; 'eval-root'?: string; help?: boolean };
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      allowPositionals: false,
+      options: {
+        execute: { type: 'boolean', default: false },
+        reconcile: { type: 'boolean', default: false },
+        'eval-root': { type: 'string' },
+        help: { type: 'boolean', short: 'h', default: false },
+      },
+    }));
+  } catch (err) {
+    throw new UsageError(err instanceof Error ? err.message : String(err));
   }
 
-  const experimentId = values['experiment-id'] as string;
-  validateExperimentId(experimentId);
-  const evalRoot = (values['eval-root'] as string) || DEFAULT_EVAL_ROOT;
+  if (values.help) {
+    console.log(usage());
+    return 0;
+  }
+  if (values.execute && values.reconcile) throw new UsageError('--execute and --reconcile are mutually exclusive');
+
+  const secrets = dedicatedKeySecrets();
+  const report = (text: string) => console.error(redactKnownSecrets(text, secrets));
+  const evalRoot = values['eval-root'] || DEFAULT_EVAL_ROOT;
+  const roots = resolveLedgerRoots(evalRoot, ledgerRoot);
 
   const cases = loadCases(evalRoot);
   const plan = buildExperimentPlan(cases); // throws if > 24 pairs — validated before any ledger access.
+  const planPairs = plan.map((p) => ({ caseId: p.case_id, model: p.model }));
 
-  // Dry-run is read-only: state checks below tolerate missing ledger
-  // directories, which are only created once --execute is confirmed.
-  const roots = resolveLedgerRoots(evalRoot, experimentId, ledgerRoot);
+  const layoutProblems = inspectLedgerLayout(roots);
+  if (layoutProblems.length > 0) {
+    report('Request ledger cannot be used (nothing was changed):');
+    for (const p of layoutProblems) report(`  ${p}`);
+    return 1;
+  }
 
-  const consistencyProblems = checkLedgerConsistency(
-    roots,
-    plan.map((p) => ({ caseId: p.case_id, model: p.model }))
-  );
-  if (consistencyProblems.length > 0) {
-    console.error('Ledger consistency problems detected:');
-    for (const p of consistencyProblems) {
-      console.error(`  ${p.caseId} x ${p.model}: ${p.problem}`);
-    }
-    if (values.execute as boolean) {
-      console.error('Refusing to execute with inconsistent ledger state. Investigate manually — nothing was reset.');
-      return 1;
-    }
-    console.error('(dry-run: showing the plan below anyway; fix this before running --execute)');
+  const corrupt = findCorruptPairs(roots, planPairs);
+  if (corrupt.length > 0) {
+    report('Ledger consistency problems detected:');
+    for (const p of corrupt) report(`  ${p.caseId} x ${p.model}: ${p.problem}`);
   }
 
   printPlan(roots, plan);
 
-  if (!(values.execute as boolean)) {
+  if (!values.execute && !values.reconcile) {
     console.log('');
-    console.log('DRY RUN — no network calls were made, no reservations were consumed, no API key was read.');
-    console.log('Pass --execute (with GEMINI_QUALITY_EVAL_API_KEY set) to actually run requests.');
-    return consistencyProblems.length > 0 ? 1 : 0;
+    console.log('DRY RUN — read-only: no network calls were made, nothing was written, no API key was read.');
+    console.log('Pass --execute (with GEMINI_QUALITY_EVAL_API_KEY set) to run requests, or --reconcile for offline recovery.');
+    return corrupt.length > 0 ? 1 : 0;
+  }
+  if (corrupt.length > 0) {
+    report('Refusing to write with inconsistent ledger state. Investigate manually — nothing was reset or repeated.');
+    return 1;
   }
 
-  const keyResolution = resolveExecutionApiKey(process.env);
-  if (!keyResolution.ok) {
-    throw new UsageError(keyResolution.error);
+  let apiKey: string | null = null;
+  if (values.execute) {
+    const keyResolution = resolveExecutionApiKey(process.env);
+    if (!keyResolution.ok) throw new UsageError(keyResolution.error);
+    apiKey = keyResolution.key;
   }
 
-  ensureLedgerDirs(roots);
-  await runExperiment(roots, experimentId, cases, plan, keyResolution.key);
+  await ensureLedgerDirs(roots);
+  const reconciled = await reconcileAndMaterialize(roots, cases, planPairs);
+  for (const label of reconciled.reconciled) console.log(`Reconciled ${label}: completion recorded from its verified saved output.`);
+  for (const label of reconciled.materialized) console.log(`Copied verified output for ${label} into ${roots.localOutputsDir}.`);
+  for (const w of reconciled.warnings) report(`Warning: ${w}`);
+  if (reconciled.problems.length > 0) {
+    report('Reconciliation problems (nothing was repaired or repeated):');
+    for (const p of reconciled.problems) report(`  ${p}`);
+    return 1;
+  }
+
+  const ok = apiKey === null ? true : await runExperiment(roots, cases, plan, apiKey);
   printSummary(roots, plan);
-  return 0;
+  return ok ? 0 : 1;
 }
 
-// Only auto-run when executed directly (via vite-node), never when imported
-// by a test — this lets the orchestration above be exercised with mocked
-// fetch and temporary ledger directories. An argv-based entry-point check
-// cannot work here: vite-node rewrites process.argv so argv[1] is the
-// vite-node binary, not this file. Vitest sets VITEST in every test worker.
-const isDirectRun = process.env.VITEST === undefined;
-
-if (isDirectRun) {
+/**
+ * main() plus exit-code mapping and error printing for the CLI wrapper. Every
+ * printed error has the exact dedicated API key removed (not only key-shaped
+ * patterns). Never reads GEMINI_API_KEY.
+ */
+export async function runCli(argv: string[], ledgerRoot: string): Promise<number> {
   try {
-    process.exitCode = await main(process.argv.slice(2));
+    return await main(argv, ledgerRoot);
   } catch (err) {
+    const secrets = dedicatedKeySecrets();
     if (err instanceof UsageError || err instanceof UnknownPairError) {
-      console.error(`Error: ${safeErrorMessage(err)}\n\n${USAGE}`);
-      process.exitCode = 2;
-    } else {
-      console.error('Unexpected error:', safeErrorMessage(err));
-      process.exitCode = 1;
+      console.error(`Error: ${safeErrorMessage(err, secrets)}\n\n${usage()}`);
+      return 2;
     }
+    console.error(`Unexpected error: ${safeErrorMessage(err, secrets)}`);
+    return 1;
   }
 }

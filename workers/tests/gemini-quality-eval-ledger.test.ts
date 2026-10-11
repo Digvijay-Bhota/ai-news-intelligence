@@ -1,58 +1,50 @@
 /**
- * Real-filesystem tests for the durable Phase 2 request ledger. Runs under
+ * Real-filesystem tests for the durable Phase 2 request ledger primitives
+ * (reservations, budget, layout, write-once files). Runs under
  * vitest.ledger.config.ts (plain Node environment), NOT the main
  * @cloudflare/vitest-pool-workers config — that pool does not implement
  * fs.promises, which this module genuinely needs to prove real atomicity.
- * See ledger.ts's module doc for why.
+ * Pair-state/canonical-output tests: gemini-quality-eval-ledger-state.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import {
   defaultLedgerRoot,
   resolveLedgerRoots,
   ensureLedgerDirs,
+  inspectLedgerLayout,
   reserveNext,
   hasReservation,
   readRunLog,
-  hasOutput,
-  getPairState,
   listReservedPairs,
-  writeOutputOnce,
+  writeCanonicalOutputOnce,
   writeRunLogOnce,
-  checkLedgerConsistency,
+  sha256Hex,
+  serializeOutput,
+  RealLedgerInTestError,
   UnknownPairError,
+  LEDGER_FORMAT_FILE,
   type LedgerRoots,
 } from './gemini-quality-eval/ledger';
-import { MAX_EXPERIMENT_REQUESTS, type RunLogRecord } from './gemini-quality-eval/runner';
+import { getPairState } from './gemini-quality-eval/ledger-state';
+import { MAX_EXPERIMENT_REQUESTS } from './gemini-quality-eval/runner';
+import {
+  MODELS,
+  VITE_NODE_BIN,
+  WORKERS_DIR,
+  childEnv,
+  guardRealLedgerUnchanged,
+  makeKnownIds,
+  makeRunLog,
+  snapshotTree,
+} from './gemini-quality-eval/test-support';
 
-const EXPERIMENT_ID = 'test-experiment';
-const WORKERS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const LEDGER_MODULE = join(WORKERS_DIR, 'tests', 'gemini-quality-eval', 'ledger.ts');
-const VITE_NODE_BIN = join(WORKERS_DIR, 'node_modules', '.bin', 'vite-node');
 
-function makeKnownIds(n: number): Set<string> {
-  return new Set(Array.from({ length: n }, (_, i) => `case-${i}`));
-}
-
-function makeRunLog(caseId: string, model: 'gemini-3.5-flash-lite' | 'gemini-3.6-flash', outcome: 'completed' | 'failed'): RunLogRecord {
-  return {
-    experiment_id: EXPERIMENT_ID,
-    case_id: caseId,
-    task: 'event_brief',
-    model,
-    reserved_at: new Date().toISOString(),
-    recorded_at: new Date().toISOString(),
-    outcome,
-    response_meta: null,
-    error_classification: outcome === 'failed' ? { classification: 'unknown', httpStatus: null, apiStatus: null, quotaIds: [], retryAfterSeconds: null } : null,
-    error_message: outcome === 'failed' ? 'simulated failure' : null,
-    mechanical_validation: { ran: outcome === 'completed', valid: outcome === 'completed' ? true : null, errors: [] },
-  };
-}
+guardRealLedgerUnchanged();
 
 let tmpDir: string;
 /** Stand-in for the user-level ledger directory (the real one is never touched by tests). */
@@ -61,12 +53,18 @@ let ledgerRoot: string;
 let evalRootA: string;
 let roots: LedgerRoots;
 
-beforeEach(() => {
+function allPairs(n: number): Array<[string, (typeof MODELS)[number]]> {
+  const pairs: Array<[string, (typeof MODELS)[number]]> = [];
+  for (let i = 0; i < n; i++) for (const m of MODELS) pairs.push([`case-${i}`, m]);
+  return pairs;
+}
+
+beforeEach(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), 'gemini-ledger-test-'));
   ledgerRoot = join(tmpDir, 'user-ledger');
   evalRootA = join(tmpDir, 'worktree-a', 'workers', 'tests', 'gemini-quality-eval');
-  roots = resolveLedgerRoots(evalRootA, EXPERIMENT_ID, ledgerRoot);
-  ensureLedgerDirs(roots);
+  roots = resolveLedgerRoots(evalRootA, ledgerRoot);
+  await ensureLedgerDirs(roots);
 });
 
 afterEach(() => {
@@ -100,116 +98,66 @@ describe('reserveNext — single pair', () => {
 });
 
 describe('cross-process / restart persistence', () => {
-  it('a freshly-resolved ledger instance sees a previous instance\'s reservation', async () => {
-    // "Instance 1" reserves a pair.
+  it("a freshly-resolved ledger instance sees a previous instance's reservation", async () => {
     await reserveNext(roots, 'case-0', 'gemini-3.5-flash-lite', makeKnownIds(5));
-
-    // "Instance 2" is a completely separate object, pointed at the same
-    // directory, with no shared in-memory state — this is what a second
+    // A separate object with no shared in-memory state — what a second
     // process (or the same process after a restart) would see.
-    const instance2Roots = resolveLedgerRoots(evalRootA, EXPERIMENT_ID, ledgerRoot);
+    const instance2Roots = resolveLedgerRoots(evalRootA, ledgerRoot);
     expect(hasReservation(instance2Roots, 'case-0', 'gemini-3.5-flash-lite')).toBe(true);
-
-    const secondAttempt = await reserveNext(instance2Roots, 'case-0', 'gemini-3.5-flash-lite', makeKnownIds(5));
-    expect(secondAttempt).toEqual({ ok: false, reason: 'already_reserved' });
+    expect(await reserveNext(instance2Roots, 'case-0', 'gemini-3.5-flash-lite', makeKnownIds(5))).toEqual({
+      ok: false,
+      reason: 'already_reserved',
+    });
   });
 
   it('treats a reservation with no run-log as ambiguous after a simulated restart, and never auto-repeats it', async () => {
-    // Simulates a crash: a reservation was persisted, but the process died
-    // before writing a run-log.
     await reserveNext(roots, 'case-0', 'gemini-3.5-flash-lite', makeKnownIds(5));
-
-    const restarted = resolveLedgerRoots(evalRootA, EXPERIMENT_ID, ledgerRoot);
+    const restarted = resolveLedgerRoots(evalRootA, ledgerRoot);
     expect(getPairState(restarted, 'case-0', 'gemini-3.5-flash-lite')).toBe('ambiguous');
-
-    // A new run must not silently repeat the "ambiguous" pair: attempting to
-    // reserve it again is refused, exactly like any other already-reserved pair.
-    const retry = await reserveNext(restarted, 'case-0', 'gemini-3.5-flash-lite', makeKnownIds(5));
-    expect(retry).toEqual({ ok: false, reason: 'already_reserved' });
+    expect(await reserveNext(restarted, 'case-0', 'gemini-3.5-flash-lite', makeKnownIds(5))).toEqual({
+      ok: false,
+      reason: 'already_reserved',
+    });
   });
 });
 
 describe('the 24-request hard cap', () => {
   it('allows exactly 24 reservations and refuses the 25th', async () => {
-    // 13 known cases x 2 models = 26 possible distinct pairs, so the 25th
-    // and 26th attempts are refused by the CAP itself, not because they are
-    // unknown or duplicate pairs.
+    // 13 known cases x 2 models = 26 distinct pairs, so the 25th and 26th
+    // attempts are refused by the CAP itself, not as unknown or duplicate pairs.
     const known = makeKnownIds(13);
-    const models: Array<'gemini-3.5-flash-lite' | 'gemini-3.6-flash'> = ['gemini-3.5-flash-lite', 'gemini-3.6-flash'];
-    const pairs: Array<[string, typeof models[number]]> = [];
-    for (let i = 0; i < 13; i++) for (const m of models) pairs.push([`case-${i}`, m]);
-    expect(pairs).toHaveLength(26);
-
     const results = [];
-    for (const [caseId, model] of pairs) {
-      results.push(await reserveNext(roots, caseId, model, known));
-    }
-
-    const succeeded = results.filter((r) => r.ok);
-    const capRefused = results.filter((r) => !r.ok && r.reason === 'cap_reached');
-    expect(succeeded).toHaveLength(MAX_EXPERIMENT_REQUESTS);
-    expect(capRefused).toHaveLength(2);
+    for (const [caseId, model] of allPairs(13)) results.push(await reserveNext(roots, caseId, model, known));
+    expect(results.filter((r) => r.ok)).toHaveLength(MAX_EXPERIMENT_REQUESTS);
+    expect(results.filter((r) => !r.ok && r.reason === 'cap_reached')).toHaveLength(2);
     expect(listReservedPairs(roots)).toHaveLength(MAX_EXPERIMENT_REQUESTS);
   });
 });
 
-describe('the cap is experiment-wide, not per experiment ID', () => {
-  it('a restarted process using a NEW experiment ID cannot obtain a fresh 24-request budget', async () => {
+describe('the ledger is shared, and pair-keyed, across worktrees / eval roots on the same machine', () => {
+  it('a different worktree sees the same reservations, the same outcomes and the same exhausted budget', async () => {
     const known = makeKnownIds(13);
-    for (let i = 0; i < 12; i++) {
-      for (const m of ['gemini-3.5-flash-lite', 'gemini-3.6-flash'] as const) {
-        expect((await reserveNext(roots, `case-${i}`, m, known)).ok).toBe(true);
-      }
-    }
-
-    // Fresh roots object, different experiment ID, no shared in-memory state.
-    const otherRoots = resolveLedgerRoots(evalRootA, 'renamed-experiment', ledgerRoot);
-    ensureLedgerDirs(otherRoots);
-    const result = await reserveNext(otherRoots, 'case-12', 'gemini-3.5-flash-lite', known);
-    expect(result).toEqual({ ok: false, reason: 'cap_reached', count: MAX_EXPERIMENT_REQUESTS });
-    expect(listReservedPairs(otherRoots)).toHaveLength(0);
-    expect(readdirSync(roots.budgetDir)).toHaveLength(MAX_EXPERIMENT_REQUESTS);
-  });
-});
-
-describe('the ledger is shared across worktrees / eval roots on the same machine', () => {
-  it('a different worktree (different eval root) sees the same reservations and the same exhausted budget', async () => {
-    const known = makeKnownIds(13);
-    // Worktree A attempts one pair and it fails; then uses the rest of the budget.
     expect((await reserveNext(roots, 'case-0', 'gemini-3.5-flash-lite', known)).ok).toBe(true);
     await writeRunLogOnce(roots, 'case-0', 'gemini-3.5-flash-lite', makeRunLog('case-0', 'gemini-3.5-flash-lite', 'failed'));
     expect((await reserveNext(roots, 'case-0', 'gemini-3.6-flash', known)).ok).toBe(true); // left ambiguous
 
-    // Worktree B: a different checkout path, same experiment ID, same user ledger.
     const evalRootB = join(tmpDir, 'worktree-b', 'workers', 'tests', 'gemini-quality-eval');
-    const rootsB = resolveLedgerRoots(evalRootB, EXPERIMENT_ID, ledgerRoot);
-    ensureLedgerDirs(rootsB);
-    expect(rootsB.outputsDir).not.toBe(roots.outputsDir); // outputs stay per-checkout
-    expect(rootsB.budgetDir).toBe(roots.budgetDir);
+    const rootsB = resolveLedgerRoots(evalRootB, ledgerRoot);
+    await ensureLedgerDirs(rootsB);
+    expect(rootsB.localOutputsDir).not.toBe(roots.localOutputsDir); // only convenience copies are per-checkout
+    for (const key of ['budgetDir', 'reservationsDir', 'runLogsDir', 'canonicalOutputsDir'] as const) {
+      expect(rootsB[key]).toBe(roots[key]);
+    }
 
-    // The failed and the ambiguous pair are NOT fresh again in worktree B — no refund, no re-send.
     expect(getPairState(rootsB, 'case-0', 'gemini-3.5-flash-lite')).toBe('failed');
     expect(getPairState(rootsB, 'case-0', 'gemini-3.6-flash')).toBe('ambiguous');
     expect(await reserveNext(rootsB, 'case-0', 'gemini-3.5-flash-lite', known)).toEqual({ ok: false, reason: 'already_reserved' });
     expect(await reserveNext(rootsB, 'case-0', 'gemini-3.6-flash', known)).toEqual({ ok: false, reason: 'already_reserved' });
 
-    // Worktree B spends the remaining 22 slots; then neither checkout can reserve more.
     let wonInB = 0;
-    for (let i = 1; i < 13; i++) {
-      for (const m of ['gemini-3.5-flash-lite', 'gemini-3.6-flash'] as const) {
-        if ((await reserveNext(rootsB, `case-${i}`, m, known)).ok) wonInB++;
-      }
-    }
+    for (const [caseId, m] of allPairs(13).slice(2)) if ((await reserveNext(rootsB, caseId, m, known)).ok) wonInB++;
     expect(wonInB).toBe(MAX_EXPERIMENT_REQUESTS - 2);
     expect(listReservedPairs(roots)).toHaveLength(MAX_EXPERIMENT_REQUESTS);
-    const evalRootC = join(tmpDir, 'clone-c', 'workers', 'tests', 'gemini-quality-eval');
-    const rootsC = resolveLedgerRoots(evalRootC, 'yet-another-experiment', ledgerRoot);
-    ensureLedgerDirs(rootsC);
-    expect(await reserveNext(rootsC, 'case-12', 'gemini-3.6-flash', known)).toEqual({
-      ok: false,
-      reason: 'cap_reached',
-      count: MAX_EXPERIMENT_REQUESTS,
-    });
   });
 
   it('the default ledger location is fixed per OS user and ignores $HOME and the current directory', () => {
@@ -229,40 +177,67 @@ describe('the ledger is shared across worktrees / eval roots on the same machine
   });
 });
 
-describe('concurrency safety', () => {
+describe('ledger layout marker and legacy layouts', () => {
+  it('a new ledger carries a format marker and has no experiment namespace', () => {
+    expect(readdirSync(ledgerRoot).sort()).toEqual([LEDGER_FORMAT_FILE, 'outputs', 'request-budget', 'reservations', 'run-logs']);
+    expect(inspectLedgerLayout(roots)).toEqual([]);
+  });
+
+  it('refuses the legacy per-experiment layout without changing a single file', async () => {
+    const legacyRoot = join(tmpDir, 'legacy-ledger');
+    mkdirSync(join(legacyRoot, 'experiments', 'old-exp', 'reservations'), { recursive: true });
+    mkdirSync(join(legacyRoot, 'request-budget'), { recursive: true });
+    writeFileSync(join(legacyRoot, 'experiments', 'old-exp', 'reservations', 'case-0.gemini-3.6-flash.reserved'), '{}');
+    writeFileSync(join(legacyRoot, 'request-budget', '_slot-00.claim'), '{}');
+    const before = snapshotTree(legacyRoot);
+    const legacy = resolveLedgerRoots(evalRootA, legacyRoot);
+
+    const problems = inspectLedgerLayout(legacy);
+    expect(problems.some((p) => /legacy per-experiment ledger layout/.test(p))).toBe(true);
+    expect(problems.some((p) => /no LEDGER_FORMAT marker/.test(p))).toBe(true);
+    await expect(ensureLedgerDirs(legacy)).rejects.toThrow(/legacy per-experiment/);
+    expect(snapshotTree(legacyRoot)).toEqual(before); // no marker stamped, nothing reset or deleted
+  });
+
+  it('refuses an unrecognized marker or unexpected entries', () => {
+    writeFileSync(join(ledgerRoot, 'stray-file'), 'x');
+    expect(inspectLedgerLayout(roots).some((p) => /Unexpected entry/.test(p))).toBe(true);
+    const other = join(tmpDir, 'other-ledger');
+    mkdirSync(other);
+    writeFileSync(join(other, LEDGER_FORMAT_FILE), '{"format":"something-else","version":9}\n');
+    expect(inspectLedgerLayout(resolveLedgerRoots(evalRootA, other)).some((p) => /does not identify a format-2 ledger/.test(p))).toBe(true);
+  });
+});
+
+describe('test functions cannot claim the real user-level ledger', () => {
+  it('resolveLedgerRoots refuses the real ledger under Vitest and requires an explicit root', () => {
+    expect(() => resolveLedgerRoots(evalRootA, defaultLedgerRoot())).toThrow(RealLedgerInTestError);
+    expect(() => resolveLedgerRoots(evalRootA, join(defaultLedgerRoot(), '.'))).toThrow(RealLedgerInTestError);
+    expect(() => resolveLedgerRoots(evalRootA, '')).toThrow(/explicit ledger root/);
+    // @ts-expect-error — deliberately omitting the required ledger root
+    expect(() => resolveLedgerRoots(evalRootA)).toThrow(/explicit ledger root/);
+  });
+});
+
+describe('concurrency safety (in-process)', () => {
   it('when two callers race for the SAME pair, exactly one wins', async () => {
     const known = makeKnownIds(5);
-    const [a, b] = await Promise.all([
+    const outcomes = await Promise.all([
       reserveNext(roots, 'case-0', 'gemini-3.5-flash-lite', known),
       reserveNext(roots, 'case-0', 'gemini-3.5-flash-lite', known),
     ]);
-    const outcomes = [a, b];
     expect(outcomes.filter((r) => r.ok)).toHaveLength(1);
     expect(outcomes.filter((r) => !r.ok && r.reason === 'already_reserved')).toHaveLength(1);
     expect(listReservedPairs(roots)).toHaveLength(1);
   });
 
   it('concurrent reservations across many distinct pairs never exceed the hard cap', async () => {
-    // 13 known cases x 2 models = 26 distinct pairs, all reserved CONCURRENTLY
-    // (not sequentially) — this is the scenario a naive read-count-then-write
-    // check would get wrong, since many callers can observe "room left"
-    // before any of their writes land.
     const known = makeKnownIds(13);
-    const models: Array<'gemini-3.5-flash-lite' | 'gemini-3.6-flash'> = ['gemini-3.5-flash-lite', 'gemini-3.6-flash'];
-    const pairs: Array<[string, typeof models[number]]> = [];
-    for (let i = 0; i < 13; i++) for (const m of models) pairs.push([`case-${i}`, m]);
-
-    const results = await Promise.all(pairs.map(([caseId, model]) => reserveNext(roots, caseId, model, known)));
+    const results = await Promise.all(allPairs(13).map(([caseId, model]) => reserveNext(roots, caseId, model, known)));
     const succeeded = results.filter((r) => r.ok);
     expect(succeeded.length).toBeLessThanOrEqual(MAX_EXPERIMENT_REQUESTS);
-    // Every distinct pair is independent (no duplicate-pair races here), so
-    // nothing should be refused for 'already_reserved' — only the cap, if hit.
-    const refused = results.filter((r) => !r.ok);
-    for (const r of refused) {
-      expect((r as { reason: string }).reason).toBe('cap_reached');
-    }
+    for (const r of results.filter((x) => !x.ok)) expect((r as { reason: string }).reason).toBe('cap_reached');
     expect(listReservedPairs(roots).length).toBe(succeeded.length);
-    expect(listReservedPairs(roots).length).toBeLessThanOrEqual(MAX_EXPERIMENT_REQUESTS);
   });
 });
 
@@ -270,22 +245,20 @@ describe('multi-process concurrency (real child processes, shared ledger directo
   it('separate OS processes in separate worktrees racing over 26 pairs never exceed 24 reservations or double-reserve a pair', async () => {
     const PROCESSES = 4;
     const helperPath = join(tmpDir, 'reserve-worker.ts');
-    // Each worker reserves all 26 pairs (13 cases x 2 models) in a different
-    // rotated order, so the processes race both for the same pairs and for
-    // budget slots on different pairs.
+    // Each worker reserves all 26 pairs in a different rotated order, so the
+    // processes race both for the same pairs and for budget slots.
     writeFileSync(
       helperPath,
       `import { resolveLedgerRoots, ensureLedgerDirs, reserveNext } from ${JSON.stringify(LEDGER_MODULE)};
-const [evalRoot, experimentId, workerIndex, ledgerRoot] = process.argv.slice(2);
-const roots = resolveLedgerRoots(evalRoot, experimentId, ledgerRoot);
-ensureLedgerDirs(roots);
+const [evalRoot, workerIndex, ledgerRoot] = process.argv.slice(2);
+const roots = resolveLedgerRoots(evalRoot, ledgerRoot);
+await ensureLedgerDirs(roots);
 const known = new Set(Array.from({ length: 13 }, (_, i) => 'case-' + i));
 const pairs = [];
 for (let i = 0; i < 13; i++) for (const m of ['gemini-3.5-flash-lite', 'gemini-3.6-flash']) pairs.push(['case-' + i, m]);
 const offset = Number(workerIndex) * 7;
-const ordered = pairs.map((_, i) => pairs[(i + offset) % pairs.length]);
 const results = [];
-for (const [caseId, model] of ordered) {
+for (const [caseId, model] of pairs.map((_, i) => pairs[(i + offset) % pairs.length])) {
   const r = await reserveNext(roots, caseId, model, known);
   results.push({ pair: caseId + '.' + model, ok: r.ok, reason: r.ok ? null : r.reason });
 }
@@ -293,18 +266,12 @@ console.log('RESULT ' + JSON.stringify(results));
 `
     );
 
-    const env = { ...process.env };
-    delete env.VITEST;
-    delete env.GEMINI_API_KEY;
-    delete env.GEMINI_QUALITY_EVAL_API_KEY;
-
     const runWorker = (index: number) =>
       new Promise<Array<{ pair: string; ok: boolean; reason: string | null }>>((resolvePromise, reject) => {
-        // A distinct eval root per process simulates separate worktrees/clones.
-        const workerEvalRoot = join(tmpDir, `worktree-${index}`, 'eval');
-        const child = spawn(VITE_NODE_BIN, [helperPath, '--', workerEvalRoot, EXPERIMENT_ID, String(index), ledgerRoot], {
+        const workerEvalRoot = join(tmpDir, `worktree-${index}`, 'eval'); // distinct checkout per process
+        const child = spawn(VITE_NODE_BIN, [helperPath, '--', workerEvalRoot, String(index), ledgerRoot], {
           cwd: WORKERS_DIR,
-          env,
+          env: childEnv(),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         let stdout = '';
@@ -319,80 +286,43 @@ console.log('RESULT ' + JSON.stringify(results));
         });
       });
 
-    const perWorker = await Promise.all(Array.from({ length: PROCESSES }, (_, i) => runWorker(i)));
-    const all = perWorker.flat();
+    const all = (await Promise.all(Array.from({ length: PROCESSES }, (_, i) => runWorker(i)))).flat();
     const wins = all.filter((r) => r.ok);
-
     expect(all).toHaveLength(PROCESSES * 26);
-    // Never more than the cap, across all processes combined.
     expect(wins.length).toBeLessThanOrEqual(MAX_EXPERIMENT_REQUESTS);
-    // No pair was won by two processes.
-    expect(new Set(wins.map((w) => w.pair)).size).toBe(wins.length);
-    // Every refusal is one of the two expected, safe reasons.
+    expect(new Set(wins.map((w) => w.pair)).size).toBe(wins.length); // no pair won twice
     for (const r of all.filter((x) => !x.ok)) expect(['already_reserved', 'cap_reached']).toContain(r.reason);
-    // What is on disk agrees with what the processes reported.
     expect(listReservedPairs(roots)).toHaveLength(wins.length);
-    // 26 pairs > 24 slots, so every slot ends up claimed — and never more.
-    const slots = readdirSync(roots.budgetDir).filter((f) => f.endsWith('.claim'));
-    expect(slots).toHaveLength(MAX_EXPERIMENT_REQUESTS);
+    expect(readdirSync(roots.budgetDir).filter((f) => f.endsWith('.claim'))).toHaveLength(MAX_EXPERIMENT_REQUESTS);
   }, 60_000);
 });
 
-describe('output and run-log write-once safety', () => {
-  it('writes an output once and refuses to overwrite it', async () => {
-    const first = await writeOutputOnce(roots, 'case-0', 'gemini-3.5-flash-lite', { summary: 'first' });
-    expect(first).toBe('written');
-    const second = await writeOutputOnce(roots, 'case-0', 'gemini-3.5-flash-lite', { summary: 'second' });
-    expect(second).toBe('already_exists');
-    const onDisk = JSON.parse(readFileSync(join(roots.outputsDir, 'case-0.gemini-3.5-flash-lite.json'), 'utf8'));
-    expect(onDisk.summary).toBe('first');
+describe('canonical output and run-log write-once safety', () => {
+  it('writes a canonical output once, returns the SHA-256 of the stored bytes, and refuses to overwrite it', async () => {
+    const first = await writeCanonicalOutputOnce(roots, 'case-0', 'gemini-3.5-flash-lite', { summary: 'first' });
+    expect(first.result).toBe('written');
+    const path = join(roots.canonicalOutputsDir, 'case-0.gemini-3.5-flash-lite.json');
+    expect(first.sha256).toBe(sha256Hex(readFileSync(path)));
+    expect(readFileSync(path, 'utf8')).toBe(serializeOutput({ summary: 'first' }));
+    const second = await writeCanonicalOutputOnce(roots, 'case-0', 'gemini-3.5-flash-lite', { summary: 'second' });
+    expect(second.result).toBe('already_exists');
+    expect(JSON.parse(readFileSync(path, 'utf8')).summary).toBe('first');
   });
 
   it('writes a run-log once and refuses to overwrite it', async () => {
-    const record = makeRunLog('case-0', 'gemini-3.5-flash-lite', 'failed');
-    const first = await writeRunLogOnce(roots, 'case-0', 'gemini-3.5-flash-lite', record);
-    expect(first).toBe('written');
-    const second = await writeRunLogOnce(roots, 'case-0', 'gemini-3.5-flash-lite', makeRunLog('case-0', 'gemini-3.5-flash-lite', 'completed'));
-    expect(second).toBe('already_exists');
+    expect(await writeRunLogOnce(roots, 'case-0', 'gemini-3.5-flash-lite', makeRunLog('case-0', 'gemini-3.5-flash-lite', 'failed'))).toBe('written');
+    const again = makeRunLog('case-0', 'gemini-3.5-flash-lite', 'completed', 'a'.repeat(64));
+    expect(await writeRunLogOnce(roots, 'case-0', 'gemini-3.5-flash-lite', again)).toBe('already_exists');
     const stored = readRunLog(roots, 'case-0', 'gemini-3.5-flash-lite');
-    expect(stored?.outcome).toBe('failed'); // the original, not the attempted overwrite
+    expect(stored.status === 'valid' && stored.record.outcome).toBe('failed'); // the original, not the overwrite
   });
 
-  it('a failed request consumes its reservation and is reported distinctly from completed/ambiguous/not-attempted', async () => {
+  it('a failed request consumes its reservation and is reported distinctly from not-attempted', async () => {
     const known = makeKnownIds(5);
     await reserveNext(roots, 'case-0', 'gemini-3.5-flash-lite', known);
     await writeRunLogOnce(roots, 'case-0', 'gemini-3.5-flash-lite', makeRunLog('case-0', 'gemini-3.5-flash-lite', 'failed'));
-
     expect(getPairState(roots, 'case-0', 'gemini-3.5-flash-lite')).toBe('failed');
-    // Retrying the same pair after a failure is refused — no automatic retry.
-    const retry = await reserveNext(roots, 'case-0', 'gemini-3.5-flash-lite', known);
-    expect(retry).toEqual({ ok: false, reason: 'already_reserved' });
-
-    // Distinguishable from a pair that was never touched at all.
+    expect(await reserveNext(roots, 'case-0', 'gemini-3.5-flash-lite', known)).toEqual({ ok: false, reason: 'already_reserved' });
     expect(getPairState(roots, 'case-1', 'gemini-3.5-flash-lite')).toBe('not_attempted');
-  });
-});
-
-describe('checkLedgerConsistency', () => {
-  it('reports no problems for a clean ledger', () => {
-    const problems = checkLedgerConsistency(roots, [{ caseId: 'case-0', model: 'gemini-3.5-flash-lite' }]);
-    expect(problems).toHaveLength(0);
-  });
-
-  it('flags an output that exists without a matching completed run-log, and never deletes or fixes it', async () => {
-    await writeOutputOnce(roots, 'case-0', 'gemini-3.5-flash-lite', { summary: 'orphaned' });
-    const problems = checkLedgerConsistency(roots, [{ caseId: 'case-0', model: 'gemini-3.5-flash-lite' }]);
-    expect(problems).toHaveLength(1);
-    expect(problems[0].problem).toMatch(/without a matching completed run-log/);
-    // The orphaned output must still be there — nothing was reset.
-    expect(hasOutput(roots, 'case-0', 'gemini-3.5-flash-lite')).toBe(true);
-  });
-
-  it('flags a run-log that claims completed but has no output file', async () => {
-    const known = makeKnownIds(5);
-    await reserveNext(roots, 'case-0', 'gemini-3.5-flash-lite', known);
-    await writeRunLogOnce(roots, 'case-0', 'gemini-3.5-flash-lite', makeRunLog('case-0', 'gemini-3.5-flash-lite', 'completed'));
-    const problems = checkLedgerConsistency(roots, [{ caseId: 'case-0', model: 'gemini-3.5-flash-lite' }]);
-    expect(problems.some((p) => p.problem.includes('no output file exists'))).toBe(true);
   });
 });
