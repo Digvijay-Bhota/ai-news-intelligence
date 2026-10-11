@@ -25,7 +25,10 @@ describe('handleModerateCommunityPost', () => {
         return { bind: vi.fn().mockReturnThis(), first: vi.fn(), run: vi.fn() };
       })
     };
-    return { DB: dbMock, rows: dbRows } as unknown as { DB: any, rows: any[] };
+    // handleModerateCommunityPost reads env.DB.prepare(...), so the mock must be
+    // wrapped under a DB property to match the real Env shape, not passed bare.
+    const env = { DB: dbMock } as unknown as Env;
+    return { env, rows: dbRows };
   };
 
   const createRequest = (status: string) => {
@@ -37,64 +40,64 @@ describe('handleModerateCommunityPost', () => {
   };
 
   it('active -> flagged', async () => {
-    const { DB, rows } = createMockEnv('active');
+    const { env, rows } = createMockEnv('active');
     const auth: AuthContext = { identifier: 'sys', scopes: ['internal'], isInternal: true };
-    await handleModerateCommunityPost(createRequest('flagged'), DB as Env, auth, 'post_1');
+    await handleModerateCommunityPost(createRequest('flagged'), env, auth, 'post_1');
     expect(rows.length).toBe(2);
     expect(rows[0]).toEqual(['flagged', 'post_1']);
     expect(rows[1]).toEqual(['post_1', 'sys', 'SYSTEM', 'active', 'flagged', 'Moderation action']);
   });
 
   it('flagged -> active', async () => {
-    const { DB, rows } = createMockEnv('flagged');
+    const { env, rows } = createMockEnv('flagged');
     const auth: AuthContext = { identifier: 'sys', scopes: ['internal'], isInternal: true };
-    await handleModerateCommunityPost(createRequest('active'), DB as Env, auth, 'post_1');
+    await handleModerateCommunityPost(createRequest('active'), env, auth, 'post_1');
     expect(rows[0]).toEqual(['active', 'post_1']);
   });
 
   it('flagged -> hidden', async () => {
-    const { DB, rows } = createMockEnv('flagged');
+    const { env, rows } = createMockEnv('flagged');
     const auth: AuthContext = { identifier: 'sys', scopes: ['internal'], isInternal: true };
-    await handleModerateCommunityPost(createRequest('hidden'), DB as Env, auth, 'post_1');
+    await handleModerateCommunityPost(createRequest('hidden'), env, auth, 'post_1');
     expect(rows[0]).toEqual(['hidden', 'post_1']);
   });
 
   it('hidden -> active', async () => {
-    const { DB, rows } = createMockEnv('hidden');
+    const { env, rows } = createMockEnv('hidden');
     const auth: AuthContext = { identifier: 'sys', scopes: ['internal'], isInternal: true };
-    await handleModerateCommunityPost(createRequest('active'), DB as Env, auth, 'post_1');
+    await handleModerateCommunityPost(createRequest('active'), env, auth, 'post_1');
     expect(rows[0]).toEqual(['active', 'post_1']);
   });
 
   it('admin audit records ADMIN', async () => {
-    const { DB, rows } = createMockEnv('active');
+    const { env, rows } = createMockEnv('active');
     const auth: AuthContext = { identifier: 'admin_usr', scopes: ['admin'], isInternal: true };
-    await handleModerateCommunityPost(createRequest('hidden'), DB as Env, auth, 'post_1');
+    await handleModerateCommunityPost(createRequest('hidden'), env, auth, 'post_1');
     expect(rows[1][2]).toBe('ADMIN');
   });
 
   it('moderator audit records MODERATOR', async () => {
-    const { DB, rows } = createMockEnv('active');
+    const { env, rows } = createMockEnv('active');
     const auth: AuthContext = { identifier: 'mod_usr', scopes: ['moderator'], isInternal: true };
-    await handleModerateCommunityPost(createRequest('flagged'), DB as Env, auth, 'post_1');
+    await handleModerateCommunityPost(createRequest('flagged'), env, auth, 'post_1');
     expect(rows[1][2]).toBe('MODERATOR');
   });
 
   it('invalid transitions rejected', async () => {
-    const { DB } = createMockEnv('active');
+    const { env } = createMockEnv('active');
     const auth: AuthContext = { identifier: 'mod', scopes: ['moderator'], isInternal: true };
-    await expect(handleModerateCommunityPost(createRequest('unknown'), DB as Env, auth, 'post_1')).rejects.toThrow(BadRequestError);
+    await expect(handleModerateCommunityPost(createRequest('unknown'), env, auth, 'post_1')).rejects.toThrow(BadRequestError);
   });
   
   it('cannot transition from hidden to flagged', async () => {
-    const { DB } = createMockEnv('hidden');
+    const { env } = createMockEnv('hidden');
     const auth: AuthContext = { identifier: 'mod', scopes: ['moderator'], isInternal: true };
-    await expect(handleModerateCommunityPost(createRequest('flagged'), DB as Env, auth, 'post_1')).rejects.toThrow(BadRequestError);
+    await expect(handleModerateCommunityPost(createRequest('flagged'), env, auth, 'post_1')).rejects.toThrow(BadRequestError);
   });
 
   it('deleted content cannot be resurrected', async () => {
-    const { DB } = createMockEnv('deleted');
+    const { env } = createMockEnv('deleted');
     const auth: AuthContext = { identifier: 'admin', scopes: ['admin'], isInternal: true };
-    await expect(handleModerateCommunityPost(createRequest('active'), DB as Env, auth, 'post_1')).rejects.toThrow(BadRequestError);
+    await expect(handleModerateCommunityPost(createRequest('active'), env, auth, 'post_1')).rejects.toThrow(BadRequestError);
   });
 });

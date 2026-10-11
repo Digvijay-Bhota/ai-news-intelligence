@@ -1,0 +1,47 @@
+name: Workers CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel superseded runs on a PR when a new commit is pushed to it (only the
+  # latest commit's result matters there). Never cancel push-to-main or manual
+  # runs: each of those must always run to completion and record its own result.
+  group: workers-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: Workers validate (typecheck + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # No secrets, no deployment credentials, no production access of any kind.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install dependencies (reproducible, from committed lockfile)
+        working-directory: workers
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: workers
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: workers
+        run: npm test
