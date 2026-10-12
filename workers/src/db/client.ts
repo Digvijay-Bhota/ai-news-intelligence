@@ -134,6 +134,9 @@ export class DbClient {
       topics: topicsRes.results ?? [],
       events: eventsRes.results ?? [],
       extracted_entities,
+      // Stored values; the router re-validates them before responding.
+      image_url: article.image_url ?? null,
+      image_credit: article.image_credit ?? null,
     };
   }
 
@@ -422,15 +425,16 @@ export class DbClient {
     const result = await this.db
       .prepare(
         `INSERT INTO articles_raw
-         (external_id, source_id, title, summary, url, raw_content, published_at, fetched_at, language, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         (external_id, source_id, title, summary, url, raw_content, published_at, fetched_at, language, status, created_at, image_url, image_credit)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          RETURNING *`
       )
       .bind(
         article.external_id, article.source_id, article.title,
         article.summary ?? null, article.url, article.raw_content ?? null,
         article.published_at ?? null, now, article.language ?? 'en',
-        article.status ?? 'pending', now
+        article.status ?? 'pending', now,
+        article.image_url ?? null, article.image_credit ?? null
       )
       .first<ArticleRaw>();
 

@@ -5,6 +5,7 @@
 import type { Env, Source } from '../types';
 import { createDbClient } from '../db/client';
 import { generateArticleHash } from './normalization';
+import { extractArticleImageFields } from '../utils/article-image';
 
 export interface IngestedArticle {
   external_id: string;
@@ -41,6 +42,9 @@ export async function fetchAndIngest(env: Env, source: Source): Promise<number> 
     // An edited title changes the hash but keeps the guid; external_id is unique.
     if (await db.getArticleByExternalId(article.external_id)) continue;
 
+    // Never throws: no eligible image (or any extraction error) means null fields.
+    const image = extractArticleImageFields(article.raw_content, source.name);
+
     const newArticle = await db.createArticle({
       external_id: article.external_id,
       source_id: source.id,
@@ -51,6 +55,8 @@ export async function fetchAndIngest(env: Env, source: Source): Promise<number> 
       published_at: article.published_at,
       language: 'en',
       status: 'pending',
+      image_url: image.image_url,
+      image_credit: image.image_credit,
     });
 
     await db.createDedupHash(hash, newArticle.id);
