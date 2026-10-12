@@ -21,6 +21,26 @@ export interface Article {
   extracted_entities?: ArticleExtractedEntities;
 }
 
+/**
+ * GET /api/v1/articles/:id data (the Worker's getArticleDetailById). Its
+ * image_url/image_credit fields are deliberately not typed here: article
+ * images are not displayed until image-use rights are established.
+ */
+export interface ArticleDetail {
+  id: number;
+  external_id: string;
+  title: string;
+  summary: string | null;
+  cleaned_text: string | null;
+  url: string;
+  source: string;
+  published_at: number | null;
+  topics: { name: string; slug: string }[];
+  events: { event_hash: string; title: string; description: string | null; severity: string; started_at: number | null }[];
+  /** Rendered as text labels by the article page. */
+  extracted_entities: string[];
+}
+
 export interface Topic {
   id: number;
   name: string;
@@ -304,5 +324,20 @@ export interface UserFollow {
   target_type: FollowTargetType;
   target_id: string;
   created_at: number;
+}
+
+// ─── Phase 13: Community Discussion ──────────────
+
+/**
+ * A post or reply from the public community API (the Worker's
+ * PublicCommunityPost); only the fields the UI reads.
+ */
+export interface PublicCommunityPost {
+  id: string;
+  body: string;
+  author_display_name: string;
+  created_at: number;
+  upvotes: number;
+  reply_count: number;
 }
 

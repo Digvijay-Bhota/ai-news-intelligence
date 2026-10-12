@@ -31,7 +31,7 @@ export default function SavedPage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
           </svg>
           <h3 className="mt-2 text-sm font-semibold text-gray-900">No saved articles</h3>
-          <p className="mt-1 text-sm text-gray-500">You haven't saved any articles yet.</p>
+          <p className="mt-1 text-sm text-gray-500">You haven&apos;t saved any articles yet.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

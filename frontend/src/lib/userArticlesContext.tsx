@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useSyncExternalStore } from 'react';
 import type { Article } from '../types';
 
 export interface SavedArticleLocal {
@@ -20,32 +20,46 @@ interface UserArticlesContextType {
 
 const UserArticlesContext = createContext<UserArticlesContextType | undefined>(undefined);
 
+const subscribeToNothing = () => () => {};
+
+/** False during SSR and hydration, true afterwards (localStorage is client-only). */
+function useHydrated(): boolean {
+  return useSyncExternalStore(subscribeToNothing, () => true, () => false);
+}
+
+function readCachedSaved(): SavedArticleLocal[] {
+  try {
+    const storedSaved = localStorage.getItem('ai_news_saved');
+    if (storedSaved) return JSON.parse(storedSaved);
+  } catch (e) {
+    console.warn('Failed to parse saved articles from local storage', e);
+  }
+  return [];
+}
+
+function readCachedHidden(): Set<number> {
+  try {
+    const storedHidden = localStorage.getItem('ai_news_hidden');
+    if (storedHidden) return new Set(JSON.parse(storedHidden));
+  } catch (e) {
+    console.warn('Failed to parse hidden articles from local storage', e);
+  }
+  return new Set();
+}
+
 export function UserArticlesProvider({ children }: { children: ReactNode }) {
+  const isReady = useHydrated();
   const [savedArticles, setSavedArticles] = useState<SavedArticleLocal[]>([]);
   const [hiddenArticleIds, setHiddenArticleIds] = useState<Set<number>>(new Set());
-  const [isReady, setIsReady] = useState(false);
+  const [cacheLoaded, setCacheLoaded] = useState(false);
 
-  useEffect(() => {
-    try {
-      const storedSaved = localStorage.getItem('ai_news_saved');
-      if (storedSaved) {
-        setSavedArticles(JSON.parse(storedSaved));
-      }
-    } catch (e) {
-      console.warn('Failed to parse saved articles from local storage', e);
-    }
-
-    try {
-      const storedHidden = localStorage.getItem('ai_news_hidden');
-      if (storedHidden) {
-        setHiddenArticleIds(new Set(JSON.parse(storedHidden)));
-      }
-    } catch (e) {
-      console.warn('Failed to parse hidden articles from local storage', e);
-    }
-
-    setIsReady(true);
-  }, []);
+  // Once hydrated, start from the cached lists; the first render must match
+  // the server render, so the cache cannot be the initial state.
+  if (isReady && !cacheLoaded) {
+    setCacheLoaded(true);
+    setSavedArticles(readCachedSaved());
+    setHiddenArticleIds(readCachedHidden());
+  }
 
   useEffect(() => {
     if (isReady) {

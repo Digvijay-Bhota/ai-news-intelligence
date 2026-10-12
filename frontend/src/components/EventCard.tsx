@@ -2,14 +2,15 @@
 
 import React from 'react';
 import Link from 'next/link';
-import type { EventSummary, SinceLastSeenInfo } from '../types';
+import type { EventSummary, PersonalizedFeedItem, SinceLastSeenInfo } from '../types';
 import { formatRelativeTime } from '../lib/utils';
 import { FollowButton } from './FollowButton';
 import { Kicker, Metadata } from './Foundations';
 import { SourceChip } from './Editorial/SourceChip';
 
 interface EventCardProps {
-  event: EventSummary;
+  /** Personalized feed items also carry the event id and since-last-seen info. */
+  event: EventSummary & Pick<PersonalizedFeedItem, 'id' | 'since_last_seen'>;
   matchedReason?: string | null;
   rankReasons?: string[];
   briefVersion?: number;
@@ -68,7 +69,7 @@ export function EventCard({
   const isStale = event.freshness === 'stale';
   const activeReasons = rankReasons || event.rank_reasons || (matchedReason ? [matchedReason] : []);
   const effectiveBriefVersion = briefVersion ?? event.brief_version ?? 0;
-  const delta = sinceLastSeen || (event as any).since_last_seen as SinceLastSeenInfo | undefined;
+  const delta = sinceLastSeen || event.since_last_seen;
 
   const kicker = kickerFromContext(delta, event.freshness, event.severity, activeReasons, effectiveBriefVersion);
 
@@ -88,7 +89,7 @@ export function EventCard({
         <h2 className="font-serif font-bold text-ink leading-tight text-3xl sm:text-4xl mb-4 group-hover:text-accent transition-colors">
           <Link
             href={`/events/${event.hash}`}
-            onClick={() => onMarkRead?.(event.hash, (event as any).id)}
+            onClick={() => onMarkRead?.(event.hash, event.id)}
             className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
           >
             {event.title}
@@ -129,7 +130,7 @@ export function EventCard({
         <h3 className="font-sans font-bold text-charcoal leading-snug text-sm group-hover:text-accent transition-colors line-clamp-2">
           <Link
             href={`/events/${event.hash}`}
-            onClick={() => onMarkRead?.(event.hash, (event as any).id)}
+            onClick={() => onMarkRead?.(event.hash, event.id)}
             className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
           >
             {event.title}
@@ -152,7 +153,7 @@ export function EventCard({
       <h3 className="font-serif font-bold text-charcoal leading-snug text-xl mb-2 group-hover:text-accent transition-colors">
         <Link
           href={`/events/${event.hash}`}
-          onClick={() => onMarkRead?.(event.hash, (event as any).id)}
+          onClick={() => onMarkRead?.(event.hash, event.id)}
           className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
         >
           {event.title}

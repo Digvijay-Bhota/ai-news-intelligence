@@ -6,7 +6,7 @@ import { EventDetailResponse } from '../../../types';
 import { ErrorState } from '../../../components/ErrorState';
 import { EmptyState } from '../../../components/EmptyState';
 import { FollowButton } from '../../../components/FollowButton';
-import { Kicker, EditorialHeading, SectionLabel, Metadata, Divider } from '../../../components/Foundations';
+import { Kicker, EditorialHeading, SectionLabel, Metadata } from '../../../components/Foundations';
 import { SourceChip } from '../../../components/Editorial/SourceChip';
 import { CommunityDiscussion } from '../../../components/CommunityDiscussion';
 import { EventBriefCard } from '../../../components/EventBriefCard';
@@ -44,7 +44,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
 
   try {
     eventDetail = await getEvent(hash);
-  } catch (error) {
+  } catch {
     return <div className="max-w-5xl mx-auto py-8"><ErrorState message="Failed to load the event." /></div>;
   }
 

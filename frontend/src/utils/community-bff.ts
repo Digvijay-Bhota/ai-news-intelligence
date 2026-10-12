@@ -28,7 +28,7 @@ export async function proxyCommunityApi(
       try {
         const text = await request.text();
         if (text) body = text;
-      } catch (e) {
+      } catch {
         // body could be empty or invalid
       }
     }
@@ -64,7 +64,7 @@ export async function proxyCommunityApi(
       let errorResponse = { error: `Backend error: ${backendRes.status}` };
       try {
         errorResponse = JSON.parse(errorText);
-      } catch (e) {}
+      } catch {}
       return withRateLimitHeaders(NextResponse.json(errorResponse, { status: backendRes.status }), backendRes);
     }
 

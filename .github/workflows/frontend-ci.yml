@@ -22,8 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # No secrets, no deployment credentials, no production access of any kind.
-    # `npm run lint` is not gated yet: it currently fails on main and is added
-    # here once its underlying issues are fixed.
     defaults:
       run:
         working-directory: frontend
@@ -41,6 +39,10 @@ jobs:
 
       - name: Install dependencies (reproducible, from committed lockfile)
         run: npm ci
+
+      # Runs before Build: the ESLint config does not ignore the generated dist/.
+      - name: Lint
+        run: npm run lint
 
       - name: Typecheck
         run: npm run typecheck

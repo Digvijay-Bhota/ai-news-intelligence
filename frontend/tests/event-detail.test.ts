@@ -2,7 +2,7 @@
  * event-detail.test.ts — Phase 9: Event Detail & Grounded Brief BFF Tests
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { GET } from '../src/app/api/events/[hash]/route';
 import { env } from 'cloudflare:workers';
 import type { EventDetailResponse, EventBrief } from '../src/types';
@@ -18,10 +18,17 @@ vi.mock('cloudflare:workers', () => ({
   },
 }));
 
+/** The env from the vi.mock factory above: tests set, replace and unset its bindings. */
+type MockedEnv = {
+  HMAC_SECRET: string | undefined;
+  BACKEND_API: { fetch: Mock } | undefined;
+};
+const testEnv = env as unknown as MockedEnv;
+
 describe('BFF /api/events/:hash Route — Phase 9 Intelligence Brief', () => {
   beforeEach(() => {
-    (env as any).HMAC_SECRET = 'test-secret-key-32-bytes-long!!';
-    (env as any).BACKEND_API = {
+    testEnv.HMAC_SECRET = 'test-secret-key-32-bytes-long!!';
+    testEnv.BACKEND_API = {
       fetch: vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -136,7 +143,7 @@ describe('BFF /api/events/:hash Route — Phase 9 Intelligence Brief', () => {
     const res = await GET(req, { params: Promise.resolve({ hash: 'test-hash' }) });
 
     expect(res.status).toBe(200);
-    const mockFetch = (env as any).BACKEND_API.fetch;
+    const mockFetch = testEnv.BACKEND_API!.fetch;
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
     const sentReq: Request = mockFetch.mock.calls[0][0];
@@ -188,7 +195,7 @@ describe('BFF /api/events/:hash Route — Phase 9 Intelligence Brief', () => {
       },
     };
 
-    (env as any).BACKEND_API.fetch = vi.fn().mockResolvedValue({
+    testEnv.BACKEND_API!.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       headers: new Headers({ 'Content-Type': 'application/json' }),
@@ -217,7 +224,7 @@ describe('BFF /api/events/:hash Route — Phase 9 Intelligence Brief', () => {
       },
     };
 
-    (env as any).BACKEND_API.fetch = vi.fn().mockResolvedValue({
+    testEnv.BACKEND_API!.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       headers: new Headers({ 'Content-Type': 'application/json' }),
@@ -235,7 +242,7 @@ describe('BFF /api/events/:hash Route — Phase 9 Intelligence Brief', () => {
   });
 
   it('propagates backend 404 when event is not found', async () => {
-    (env as any).BACKEND_API.fetch = vi.fn().mockResolvedValue({
+    testEnv.BACKEND_API!.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 404,
       headers: new Headers({ 'Content-Type': 'application/json' }),
@@ -249,13 +256,13 @@ describe('BFF /api/events/:hash Route — Phase 9 Intelligence Brief', () => {
   });
 
   it('returns 500 when HMAC_SECRET is not configured', async () => {
-    (env as any).HMAC_SECRET = undefined;
+    testEnv.HMAC_SECRET = undefined;
 
     const req = makeRequest();
     const res = await GET(req, { params: Promise.resolve({ hash: 'test-hash' }) });
 
     expect(res.status).toBe(500);
-    const json = await res.json() as any;
+    const json = await res.json() as { error: string };
     expect(json.error).toBe('Missing HMAC_SECRET');
   });
 
@@ -320,7 +327,7 @@ describe('BFF /api/events/:hash Route — Phase 9 Intelligence Brief', () => {
       },
     };
 
-    (env as any).BACKEND_API.fetch = vi.fn().mockResolvedValue({
+    testEnv.BACKEND_API!.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       headers: new Headers({ 'Content-Type': 'application/json' }),

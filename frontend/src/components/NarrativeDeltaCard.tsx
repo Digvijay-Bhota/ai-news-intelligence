@@ -34,7 +34,6 @@ function ChangeTypeBadge({ type }: { type: string }) {
 
 export function NarrativeDeltaCard({
   narrative_delta,
-  narrative_delta_metadata,
   brief_version = 1,
   articles = [],
 }: NarrativeDeltaCardProps) {

@@ -33,59 +33,64 @@ export function Feed({ topicsOverride, sourceNamesOverride }: FeedProps = {}) {
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const loadFeed = useCallback(async (isLoadMore = false) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    abortControllerRef.current = new AbortController();
+  // A filter change starts over from the loading state (adjusted during render;
+  // the effect below then loads the first page for the new filters).
+  const filters = { q, topic, source_id, topicsOverride, sourceNamesOverride };
+  const [shownFilters, setShownFilters] = useState(filters);
+  if ((Object.keys(filters) as (keyof typeof filters)[]).some(key => filters[key] !== shownFilters[key])) {
+    setShownFilters(filters);
+    setLoading(true);
+    setError(null);
+  }
 
-    try {
-      if (isLoadMore) {
-        setLoadingMore(true);
-      } else {
-        setLoading(true);
-        setError(null);
-      }
+  // Loads the page at pageOffset, replacing or appending to the list. State
+  // changes only when the request settles; a newer request aborts this one.
+  const requestFeed = useCallback((pageOffset: number, append: boolean) => {
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
-      const currentOffset = isLoadMore ? offset : 0;
-      // Also pass topicsOverride and sourceNamesOverride
-      const response = await fetchFeed(
-        LIMIT, currentOffset, q, topic, source_id,
-        topicsOverride, sourceNamesOverride,
-        abortControllerRef.current.signal
-      );
-
-      if (response.success) {
+    return fetchFeed(
+      LIMIT, pageOffset, q, topic, source_id,
+      topicsOverride, sourceNamesOverride,
+      controller.signal
+    )
+      .then(response => {
+        if (!response.success) throw new Error('Invalid response format');
         const newArticles = response.data.items;
-
-        if (isLoadMore) {
-          setArticles(prev => [...prev, ...newArticles]);
-        } else {
-          setArticles(newArticles);
-        }
-
-        setOffset(currentOffset + LIMIT);
-        setHasMore(currentOffset + newArticles.length < response.data.meta.total);
-      } else {
-        throw new Error('Invalid response format');
-      }
-    } catch (err: any) {
-      if (err.name === 'AbortError') return;
-      setError(err.message || 'Failed to load news feed. Please try again later.');
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [offset, q, topic, source_id, topicsOverride, sourceNamesOverride]);
+        setArticles(prev => (append ? [...prev, ...newArticles] : newArticles));
+        setOffset(pageOffset + LIMIT);
+        setHasMore(pageOffset + newArticles.length < response.data.meta.total);
+      })
+      .catch((err: unknown) => {
+        const isObject = typeof err === 'object' && err !== null;
+        if (isObject && 'name' in err && err.name === 'AbortError') return;
+        const message = isObject && 'message' in err && typeof err.message === 'string' ? err.message : '';
+        setError(message || 'Failed to load news feed. Please try again later.');
+      })
+      .finally(() => {
+        setLoading(false);
+        setLoadingMore(false);
+      });
+  }, [q, topic, source_id, topicsOverride, sourceNamesOverride]);
 
   useEffect(() => {
-    loadFeed(false);
+    requestFeed(0, false);
     return () => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
+      abortControllerRef.current?.abort();
     };
-  }, [q, topic, source_id, topicsOverride, sourceNamesOverride]);
+  }, [requestFeed]);
+
+  const retry = () => {
+    setLoading(true);
+    setError(null);
+    requestFeed(0, false);
+  };
+
+  const loadMore = () => {
+    setLoadingMore(true);
+    requestFeed(offset, true);
+  };
 
   if (loading) {
     return (
@@ -101,7 +106,7 @@ export function Feed({ topicsOverride, sourceNamesOverride }: FeedProps = {}) {
   }
 
   if (error && articles.length === 0) {
-    return <ErrorState message={error} onRetry={() => loadFeed(false)} />;
+    return <ErrorState message={error} onRetry={retry} />;
   }
 
   const visibleArticles = articles.filter(a => !hiddenArticleIds.has(a.id));
@@ -129,7 +134,7 @@ export function Feed({ topicsOverride, sourceNamesOverride }: FeedProps = {}) {
       {hasMore && (
         <div className="mt-12 flex justify-center">
           <button
-            onClick={() => loadFeed(true)}
+            onClick={loadMore}
             disabled={loadingMore}
             className="w-full sm:w-auto bg-surface border border-divider text-charcoal font-sans font-bold text-xs uppercase tracking-widest py-3 px-8 hover:border-slate transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
           >
