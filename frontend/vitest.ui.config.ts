@@ -14,6 +14,8 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['tests/**/*.test.tsx'],
     exclude: ['node_modules/**/*'],
+    // Registers jest-dom matchers and DOM cleanup (no Vitest globals here).
+    setupFiles: ['./tests/setup.ts'],
     pool: 'threads',
   },
 });
