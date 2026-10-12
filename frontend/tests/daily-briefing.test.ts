@@ -9,6 +9,7 @@ import {
   selectStories,
   toBriefingStory,
   titlesOverlap,
+  articlesOverlap,
   MAX_DETAIL_REQUESTS,
   MAX_STORIES,
 } from '../src/lib/dailyBriefing';
@@ -97,6 +98,44 @@ describe('selectStories', () => {
     const echo = detail('e2', { articles: first.articles }).data;
     const distinct = detail('e3').data;
     expect(selectStories([first, echo, distinct], NOW).map(s => s.event.hash)).toEqual(['e1', 'e3']);
+  });
+
+  describe('asymmetric article-set sizes', () => {
+    const articlesFor = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ ...detail('e1').data.articles[0], id: 9000 + i, url: `https://news.example/${prefix}/${i}` }));
+    const roundup = { ...detail('e1').data.articles[0], id: 8000, url: 'https://news.example/weekly-ai-roundup' };
+
+    it('keeps a small distinct story that shares one roundup article with a large cluster', () => {
+      const large = detail('e1', { articles: [...articlesFor('large', 19), roundup] }).data;
+      const small = detail('e2', { articles: [articlesFor('small', 1)[0], roundup] }).data;
+      expect(selectStories([large, small], NOW).map(s => s.event.hash)).toEqual(['e1', 'e2']);
+      expect(selectStories([small, large], NOW).map(s => s.event.hash)).toEqual(['e2', 'e1']);
+    });
+
+    it('keeps a single-article story whose only article also appears in a large cluster', () => {
+      const large = detail('e1', { articles: [...articlesFor('large', 19), roundup] }).data;
+      const single = detail('e2', { articles: [roundup] }).data;
+      expect(selectStories([large, single], NOW).map(s => s.event.hash)).toEqual(['e1', 'e2']);
+    });
+
+    it('requires both two shared articles and half of the smaller event', () => {
+      const largeArticles = articlesFor('large', 20);
+      const large = detail('e1', { articles: largeArticles }).data;
+      const withShared = (shared: number, total: number) =>
+        detail('e2', { articles: [...largeArticles.slice(0, shared), ...articlesFor('own', total - shared)] }).data;
+      expect(articlesOverlap(large, withShared(2, 4))).toBe(true); // 2 shared, 50%
+      expect(articlesOverlap(large, withShared(2, 5))).toBe(false); // 2 shared, 40%
+      expect(articlesOverlap(large, withShared(1, 2))).toBe(false); // 50%, but only 1 shared
+      expect(articlesOverlap(withShared(2, 4), large)).toBe(true); // symmetric
+    });
+
+    it('still suppresses a small fragment whose coverage sits inside a large cluster, in either priority order', () => {
+      const largeArticles = articlesFor('large', 20);
+      const large = detail('e1', { articles: largeArticles }).data;
+      const fragment = detail('e2', { articles: largeArticles.slice(0, 3) }).data;
+      expect(selectStories([large, fragment], NOW).map(s => s.event.hash)).toEqual(['e1']);
+      expect(selectStories([fragment, large], NOW).map(s => s.event.hash)).toEqual(['e2']);
+    });
   });
 
   it('returns only the stories that qualify (no padding)', () => {

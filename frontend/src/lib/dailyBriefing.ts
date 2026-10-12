@@ -14,6 +14,8 @@ export const MIN_FULL_BRIEFING = 3;
 export const MAX_DETAIL_REQUESTS = 8;
 /** Matches the backend "stale" freshness threshold (48 hours). */
 export const STALE_AFTER_SECONDS = 172800;
+/** Shared articles required before article overlap can mark two events as duplicates. */
+export const MIN_SHARED_ARTICLES = 2;
 
 export type EventDetail = EventDetailResponse['data'];
 
@@ -73,7 +75,12 @@ export function titlesOverlap(a: string, b: string): boolean {
   return smaller >= 3 && shared / smaller >= 0.8;
 }
 
-/** True when two events are largely built from the same articles. */
+/**
+ * True when one event's coverage is largely contained in the other's.
+ * Containment (not Jaccard) is intended, so a small fragment of a large
+ * cluster still counts as a duplicate. Articles can belong to several events
+ * (e.g. a roundup), so one shared article alone is not evidence.
+ */
 export function articlesOverlap(a: EventDetail, b: EventDetail): boolean {
   const keys = (d: EventDetail) => new Set((d.articles ?? []).map(art => art.url || `id:${art.id}`));
   const ka = keys(a);
@@ -82,7 +89,7 @@ export function articlesOverlap(a: EventDetail, b: EventDetail): boolean {
   if (smaller === 0) return false;
   let shared = 0;
   for (const k of ka) if (kb.has(k)) shared++;
-  return shared / smaller >= 0.5;
+  return shared >= MIN_SHARED_ARTICLES && shared / smaller >= 0.5;
 }
 
 export function isRecentlyActive(event: EventSummary, nowSeconds: number): boolean {
