@@ -1,21 +1,19 @@
 import { Suspense } from 'react';
 import { Feed } from '../components/Feed';
 import { FeedFilters } from '../components/FeedFilters';
-import { EventRadarHero } from '../components/EventRadarHero';
+import { DailyBriefing } from '../components/DailyBriefing/DailyBriefing';
 import { SectionLabel, Divider } from '../components/Foundations';
 
 export default function HomePage() {
   return (
     <div>
-      {/* Event Intelligence Radar */}
-      <Suspense fallback={<div className="h-48 bg-divider animate-pulse mb-12" />}>
-        <EventRadarHero />
-      </Suspense>
+      {/* Daily AI Briefing */}
+      <DailyBriefing />
 
       {/* Article Ingestion Stream */}
-      <section aria-label="Article ingestion stream">
+      <section aria-label="More coverage">
         <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
-          <SectionLabel className="mb-0">Article Stream</SectionLabel>
+          <SectionLabel className="mb-0">More coverage</SectionLabel>
           <p className="font-sans text-xs text-slate uppercase tracking-widest font-semibold">Chronological · Multi-Source</p>
         </div>
 
