@@ -32,7 +32,10 @@ CREATE TABLE IF NOT EXISTS articles_raw (
   language TEXT DEFAULT 'en',
   status TEXT DEFAULT 'pending', -- pending, processed, failed
   created_at INTEGER DEFAULT (unixepoch()),
-  updated_at INTEGER DEFAULT (unixepoch())
+  updated_at INTEGER DEFAULT (unixepoch()),
+  -- Optional, validated image metadata (migration 0014), NULL when absent
+  image_url TEXT,
+  image_credit TEXT
 );
 
 -- ─── Article Content (processed / enriched) ────────────────

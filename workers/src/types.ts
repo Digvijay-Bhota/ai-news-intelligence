@@ -88,6 +88,10 @@ export interface ArticleRaw {
   language: string;
   status: string;
   created_at: number;
+  /** Validated image URL from RSS ingestion (migration 0014); null or absent when none. */
+  image_url?: string | null;
+  /** Image credit tied to image_url by the feed structure; null or absent when none. */
+  image_credit?: string | null;
 }
 
 export interface ArticleContent {
@@ -372,6 +376,9 @@ export interface FeedItem {
   topics: string[];
   events: { title: string; hash: string }[];
   extracted_entities?: ArticleExtractedEntities;
+  /** Re-validated against the source's exact image hosts on every response. */
+  image_url: string | null;
+  image_credit: string | null;
 }
 
 export interface ApiResponse<T = unknown> {

@@ -31,6 +31,7 @@ import { applyCors, handleCorsPreflight } from './middleware/cors';
 import { parseBody } from './middleware/body-limit';
 import { createDbClient } from './db/client';
 import { withCache, generateCacheKey } from './utils/cache';
+import { sanitizeArticleImageFields } from './utils/article-image';
 import { requireString, optionalString, optionalNumber } from './middleware/validate';
 import { computeArticleFingerprint, generateAndSaveEventBrief } from './tasks/brief-generator';
 import { generateAndSaveNarrativeDelta } from './tasks/narrative-delta-generator';
@@ -72,7 +73,7 @@ async function buildFeedItemsBatch(db: ReturnType<typeof createDbClient>, articl
 
   return articles.map(article => {
     const intelligence = intelligenceMap.get(article.id) ?? { topics: [], events: [] };
-    return {
+    return sanitizeArticleImageFields({
       id: article.id,
       external_id: article.external_id,
       title: article.title,
@@ -83,7 +84,9 @@ async function buildFeedItemsBatch(db: ReturnType<typeof createDbClient>, articl
       category: null,
       topics: intelligence.topics,
       events: intelligence.events,
-    };
+      image_url: article.image_url,
+      image_credit: article.image_credit,
+    });
   });
 }
 
@@ -111,7 +114,8 @@ async function handleGetArticleDetail(_request: Request, env: Env, id: number): 
     throw new NotFoundError('Article not found');
   }
 
-  return success(article);
+  // Re-validate after the cache read so a revoked image host takes effect immediately.
+  return success(sanitizeArticleImageFields(article));
 }
 
 
@@ -508,7 +512,8 @@ async function handleFeed(request: Request, env: Env): Promise<Response> {
       offset,
       total: result.total,
     },
-    items: result.items,
+    // Re-validate after the cache read so a revoked image host takes effect immediately.
+    items: result.items.map(item => sanitizeArticleImageFields(item)),
   });
 }
 
@@ -940,9 +945,13 @@ async function handleInternalArticles(request: Request, env: Env): Promise<Respo
     published_at: optionalNumber(body.published_at) ?? null,
     language: optionalString(body.language) ?? 'en',
     status: 'pending',
+    // Manual ingestion is image-free; caller-supplied image fields are ignored.
+    image_url: null,
+    image_credit: null,
   });
 
-  return success(article, 201);
+  const { image_url: _imageUrl, image_credit: _imageCredit, ...created } = article;
+  return success(created, 201);
 }
 
 async function handleInternalEvents(request: Request, env: Env): Promise<Response> {

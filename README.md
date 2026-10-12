@@ -97,6 +97,68 @@ npx wrangler d1 execute ai-news-db --remote --file=../d1/migrations/0012_seed_so
 
 Use the same choice as above: `schema.sql` for a fresh database, the `0012` backfill for an existing one.
 
+### Migration 0014: article image metadata
+
+`d1/migrations/0014_article_image_metadata.sql` adds two nullable columns to `articles_raw`:
+`image_url TEXT` and `image_credit TEXT`. They have no defaults, so existing rows keep `NULL`;
+there is no backfill.
+
+**Fresh databases:** the current `schema.sql` already creates both columns. Do **not** also apply
+0014 to a database built from it.
+
+**Existing databases** (created before 0014): check, apply exactly once, then check again.
+
+1. Check the columns. `image_url` and `image_credit` should be **absent**:
+
+   ```bash
+   cd workers
+   npx wrangler d1 execute ai-news-db --local --command "PRAGMA table_info(articles_raw);"
+   ```
+
+   If both are already listed, the migration has been applied. Do not run it. If only one is
+   listed, stop and investigate before changing anything.
+
+2. Apply the migration once:
+
+   ```bash
+   npx wrangler d1 execute ai-news-db --local --file=../d1/migrations/0014_article_image_metadata.sql
+   ```
+
+3. Check again. Both `image_url` and `image_credit` should now be listed, with no default value.
+
+`ALTER TABLE ... ADD COLUMN` cannot be repeated: running 0014 a second time fails with a
+`duplicate column name` error, which means it was already applied.
+
+The commands above use `--local`, which only rehearses against the local D1 emulation. Running
+0014 against the real database is a separate action with the same three steps:
+
+> **Warning:** `--remote` changes the real Cloudflare D1 database. Run these only with explicit
+> approval.
+
+```bash
+cd workers
+npx wrangler d1 execute ai-news-db --remote --command "PRAGMA table_info(articles_raw);"   # 1. columns absent?
+npx wrangler d1 execute ai-news-db --remote --file=../d1/migrations/0014_article_image_metadata.sql   # 2. once
+npx wrangler d1 execute ai-news-db --remote --command "PRAGMA table_info(articles_raw);"   # 3. both columns listed?
+```
+
+**Order:** apply 0014 to the real database and verify both columns **before** deploying Worker
+code that writes or reads them. That Worker inserts `image_url` and `image_credit` for every new
+article, so without the columns every insert fails and ingestion stops.
+
+**Rollback** (not tested in production):
+
+- The previous Worker keeps working on a migrated database. Its `INSERT` names its columns
+  explicitly, so the new nullable columns stay `NULL`, and its public API responses list their
+  fields explicitly, so stored image metadata is not returned. (Its internal
+  `POST /internal/v1/articles` response echoes the inserted row, so there it would include the two
+  columns, always `NULL` for rows it creates.) The columns can stay in place.
+- To stop image metadata from being stored and returned while keeping the new Worker, remove the
+  source's entry from the exact-host allow-list in `workers/src/utils/image-hosts.ts`, then have the
+  change reviewed and deploy it. API responses re-validate stored URLs against that list after
+  every cache read, so they return `null` for both `image_url` and `image_credit` once the change
+  is deployed.
+
 ## Deployment
 
 > **Warning:** deploying replaces the live production Worker. Deploy only with explicit approval.
