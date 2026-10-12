@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Feed } from '../../../components/Feed';
 import { fetchTopics } from '../../../lib/api';
 import { FollowButton } from '../../../components/FollowButton';
@@ -11,6 +11,10 @@ export default function TopicPage({ params }: { params: Promise<{ slug: string }
   const [topicName, setTopicName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+
+  // Feed refetches whenever this array's identity changes, so keep one array
+  // per slug instead of creating a new one on every render.
+  const topicsOverride = useMemo(() => (slug ? [slug] : undefined), [slug]);
 
   useEffect(() => {
     async function load() {
@@ -71,7 +75,7 @@ export default function TopicPage({ params }: { params: Promise<{ slug: string }
         </div>
       </div>
 
-      <Feed topicsOverride={[slug]} />
+      <Feed topicsOverride={topicsOverride} />
     </div>
   );
 }
