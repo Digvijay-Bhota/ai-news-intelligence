@@ -12,6 +12,8 @@ interface EventBriefCardProps {
   brief: EventBrief | null;
   brief_metadata: EventBriefMetadata | null;
   articles?: Article[];
+  /** Omit the summary when the page already shows it (e.g. the event detail header). */
+  hideSummary?: boolean;
 }
 
 function EntityTypeBadge({ type }: { type: string }) {
@@ -39,7 +41,7 @@ function BriefSkeleton() {
   );
 }
 
-export function EventBriefCard({ brief, brief_metadata, articles = [] }: EventBriefCardProps) {
+export function EventBriefCard({ brief, brief_metadata, articles = [], hideSummary = false }: EventBriefCardProps) {
   const status = brief_metadata?.status ?? (brief ? 'completed' : 'unavailable');
 
   // Build article lookup for provenance display
@@ -160,14 +162,16 @@ export function EventBriefCard({ brief, brief_metadata, articles = [] }: EventBr
       </div>
 
       {/* ── Summary ── */}
-      <div className="mb-6">
-        <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-          What is Happening
-        </h3>
-        <p className="text-gray-800 dark:text-gray-200 leading-relaxed text-sm">
-          {brief.summary}
-        </p>
-      </div>
+      {!hideSummary && (
+        <div className="mb-6">
+          <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+            What is Happening
+          </h3>
+          <p className="text-gray-800 dark:text-gray-200 leading-relaxed text-sm">
+            {brief.summary}
+          </p>
+        </div>
+      )}
 
       {/* ── Why It Matters ── */}
       <div className="mb-6">
@@ -236,7 +240,7 @@ export function EventBriefCard({ brief, brief_metadata, articles = [] }: EventBr
 
       {/* ── Cited Sources ── */}
       {brief.source_references.length > 0 && (
-        <div>
+        <div id="evidence-sources" className="scroll-mt-24">
           <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
             Evidence Sources ({brief.source_references.length})
           </h3>

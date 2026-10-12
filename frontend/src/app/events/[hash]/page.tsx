@@ -9,6 +9,8 @@ import { FollowButton } from '../../../components/FollowButton';
 import { Kicker, EditorialHeading, SectionLabel, Metadata, Divider } from '../../../components/Foundations';
 import { SourceChip } from '../../../components/Editorial/SourceChip';
 import { CommunityDiscussion } from '../../../components/CommunityDiscussion';
+import { EventBriefCard } from '../../../components/EventBriefCard';
+import { ShareButton } from '../../../components/ShareButton';
 
 export const runtime = 'edge';
 
@@ -55,7 +57,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
     );
   }
 
-  const { event, coverage, intelligence, articles, brief, narrative_delta, claim_comparisons, change_summary } = eventDetail.data;
+  const { event, coverage, intelligence, articles, brief, brief_metadata, narrative_delta, claim_comparisons, change_summary } = eventDetail.data;
 
   const firstReport = coverage?.first_published_at ? new Date(coverage.first_published_at * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Unknown';
   const lastReport = event.last_published_at ? new Date(event.last_published_at * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unknown';
@@ -67,7 +69,10 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
         <Link href="/" className="font-sans text-sm font-bold text-slate hover:text-charcoal uppercase tracking-widest flex items-center gap-1.5 transition-colors">
           &larr; Front Page
         </Link>
-        <FollowButton targetType="event" targetId={event.hash} compact={false} />
+        <div className="flex items-center gap-3">
+          <ShareButton path={`/events/${event.hash}`} title={event.title} />
+          <FollowButton targetType="event" targetId={event.hash} compact={false} />
+        </div>
       </div>
 
       {/* 1. WHAT ACTUALLY HAPPENED? (Hero) */}
@@ -137,6 +142,9 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
         )}
       </header>
 
+      {/* STORED BRIEF: why it matters, key developments, entities, uncertainties, citations */}
+      <EventBriefCard brief={brief} brief_metadata={brief_metadata} articles={articles} hideSummary={!!brief} />
+
       {/* 2. WHAT CHANGED? */}
       {change_summary && change_summary.has_changed && (
         <section className="mb-16 bg-accent/5 dark:bg-accent/10 border-l-4 border-accent p-6 rounded-r-sm">
@@ -201,7 +209,7 @@ export default async function EventPage({ params }: { params: Promise<{ hash: st
       )}
 
       {/* 5. SOURCE MATERIAL */}
-      <section className="mb-16">
+      <section id="source-material" className="mb-16 scroll-mt-24">
         <SectionLabel>Source Material</SectionLabel>
         <div className="mt-6 flex flex-col gap-4">
           {articles.map(article => (
