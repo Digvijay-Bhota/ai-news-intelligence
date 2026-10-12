@@ -1,0 +1,54 @@
+name: Frontend CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel superseded runs on a PR when a new commit is pushed to it (only the
+  # latest commit's result matters there). Never cancel push-to-main runs: each
+  # must always run to completion and record its own result.
+  group: frontend-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: Frontend validate (typecheck + test + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # No secrets, no deployment credentials, no production access of any kind.
+    # `npm run lint` and `npm run test:ui` are not gated yet: both currently
+    # fail on main and are added here once their underlying issues are fixed.
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # vinext, jsdom 30 and the Cloudflare Vite plugin's wrangler need Node 22.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies (reproducible, from committed lockfile)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # Local build only (dist/); nothing is deployed. Fetches the
+      # next/font/google fonts used by src/app/layout.tsx.
+      - name: Build
+        run: npm run build
