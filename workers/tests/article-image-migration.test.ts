@@ -131,10 +131,12 @@ describe('Migration 0014: article image metadata (local D1)', () => {
     await run(PRE_0014_DDL);
     await seedLegacyArticle();
     await run(migration0014);
-    const before = await DB.prepare('SELECT * FROM articles_raw').all();
+    // Compare rows only: the full D1 result also carries timing metadata (meta.duration).
+    const before = (await DB.prepare('SELECT * FROM articles_raw').all()).results;
+    expect(before).toHaveLength(1);
 
     await expect(run(migration0014)).rejects.toThrow(/duplicate column name/i);
-    expect(await DB.prepare('SELECT * FROM articles_raw').all()).toEqual(before);
+    expect((await DB.prepare('SELECT * FROM articles_raw').all()).results).toEqual(before);
   });
 
   it('must not be applied on top of the current schema.sql (columns already exist)', async () => {
