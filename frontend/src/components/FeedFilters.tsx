@@ -18,6 +18,13 @@ export function FeedFilters() {
   const currentSource = searchParams.get('source_id') || '';
 
   const [localQ, setLocalQ] = useState(currentQ);
+  const [syncedQ, setSyncedQ] = useState(currentQ);
+
+  // When the URL query changes (navigation, clear), the input follows it.
+  if (currentQ !== syncedQ) {
+    setSyncedQ(currentQ);
+    setLocalQ(currentQ);
+  }
 
   const debounceTimer = useRef<NodeJS.Timeout | null>(null);
 
@@ -33,10 +40,6 @@ export function FeedFilters() {
       .catch(err => console.error('Failed to load metadata:', err));
     return () => { mounted = false; };
   }, []);
-
-  useEffect(() => {
-    setLocalQ(currentQ);
-  }, [currentQ]);
 
   const updateFilters = (key: string, value: string) => {
     const params = new URLSearchParams(searchParams.toString());

@@ -29,30 +29,30 @@ export default function ForYouPage() {
   const [markingCaughtUp, setMarkingCaughtUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadFeed = useCallback(async () => {
-    setError(null);
-    try {
-      const [feedRes, slsRes] = await Promise.all([
-        fetch('/api/feed/for-you?limit=20'),
-        fetch('/api/feed/since-last-seen?limit=20'),
-      ]);
-      if (!feedRes.ok) throw new Error(`Feed error (${feedRes.status})`);
-      const feedJson = await feedRes.json();
-      setFeedData(feedJson.data);
-      if (slsRes.ok) {
-        const slsJson = await slsRes.json();
-        const items: PersonalizedFeedItem[] = slsJson.data?.items ?? [];
-        setCatchUpItems(items.length > 0 ? items : null);
-        if (items.length > 0) setActiveTab('catch-up');
+  useEffect(() => {
+    async function loadFeed() {
+      try {
+        const [feedRes, slsRes] = await Promise.all([
+          fetch('/api/feed/for-you?limit=20'),
+          fetch('/api/feed/since-last-seen?limit=20'),
+        ]);
+        if (!feedRes.ok) throw new Error(`Feed error (${feedRes.status})`);
+        const feedJson = await feedRes.json();
+        setFeedData(feedJson.data);
+        if (slsRes.ok) {
+          const slsJson = await slsRes.json();
+          const items: PersonalizedFeedItem[] = slsJson.data?.items ?? [];
+          setCatchUpItems(items.length > 0 ? items : null);
+          if (items.length > 0) setActiveTab('catch-up');
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load feed.');
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load feed.');
-    } finally {
-      setLoading(false);
     }
+    loadFeed();
   }, []);
-
-  useEffect(() => { loadFeed(); }, [loadFeed]);
 
   const handleMarkRead = useCallback(async (_eventHash: string, eventId?: number) => {
     if (!eventId) return;

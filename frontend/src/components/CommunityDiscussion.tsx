@@ -1,10 +1,11 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { CommunityPulse } from './CommunityPulse';
+import type { PublicCommunityPost } from '../types';
 
 
 export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
-  const [posts, setPosts] = useState<any[]>([]);
+  const [posts, setPosts] = useState<PublicCommunityPost[]>([]);
   const [newPost, setNewPost] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -13,35 +14,37 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyBody, setReplyBody] = useState('');
   const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [replies, setReplies] = useState<Record<string, any[]>>({});
+  const [replies, setReplies] = useState<Record<string, PublicCommunityPost[]>>({});
   const [expandedReplies, setExpandedReplies] = useState<Record<string, boolean>>({});
 
-  const fetchPosts = async (cursor?: string) => {
-    try {
-      const url = cursor 
-        ? `/api/v1/events/${eventHash}/community?cursor=${cursor}`
-        : `/api/v1/events/${eventHash}/community`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error('Failed to load posts');
-      const data = await res.json();
-      if (data.success) {
-        if (cursor) {
-          setPosts(prev => [...prev, ...(data.data.items || [])]);
-        } else {
-          setPosts(data.data.items || []);
-        }
+  // Loads the first page, or appends the page at cursor. State changes only
+  // when the request settles.
+  const fetchPosts = useCallback((cursor?: string) => {
+    const url = cursor
+      ? `/api/v1/events/${eventHash}/community?cursor=${cursor}`
+      : `/api/v1/events/${eventHash}/community`;
+    return fetch(url)
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to load posts');
+        return res.json();
+      })
+      .then((data: { success: boolean; data: { items?: PublicCommunityPost[]; next_cursor?: string | null } }) => {
+        if (!data.success) return;
+        const items = data.data.items || [];
+        setPosts(prev => (cursor ? [...prev, ...items] : items));
         setNextCursor(data.data.next_cursor || null);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error loading posts');
-    } finally {
-      setLoading(false);
-    }
-  };
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : 'Error loading posts');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [eventHash]);
 
   useEffect(() => {
     fetchPosts();
-  }, [eventHash]);
+  }, [fetchPosts]);
 
   
   const fetchReplies = async (postId: string) => {
@@ -51,7 +54,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
         const d = await res.json();
         setReplies(prev => ({...prev, [postId]: d.data.items || []}));
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
   };
@@ -83,7 +86,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
         const d = await res.json();
         setError(d.error || 'Failed to post');
       }
-    } catch (e) {
+    } catch {
       setError('Network error');
     }
   };
@@ -110,7 +113,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
         const d = await res.json();
         setError(d.error || 'Failed to reply');
       }
-    } catch (e) {
+    } catch {
       setError('Network error');
     }
   };
@@ -130,7 +133,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
         const d = await res.json();
         setError(d.error || 'Failed to edit');
       }
-    } catch (e) {
+    } catch {
       setError('Network error');
     }
   };
@@ -141,7 +144,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
         method: isUpvoted ? 'DELETE' : 'PUT'
       });
       fetchPosts();
-    } catch (e) {
+    } catch {
       setError('Network error');
     }
   };
@@ -150,7 +153,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
     try {
       await fetch(`/api/v1/community/posts/${postId}`, { method: 'DELETE' });
       fetchPosts();
-    } catch (e) {
+    } catch {
       setError('Network error');
     }
   };
@@ -166,7 +169,7 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
         const d = await res.json();
         setError(d.error || 'Failed to report');
       }
-    } catch (e) {
+    } catch {
       setError('Network error');
     }
   };

@@ -3,10 +3,11 @@ import Link from 'next/link';
 import { env } from 'cloudflare:workers';
 import { generateHmac } from '../../../utils/hmac';
 import { FollowButton } from '../../../components/FollowButton';
+import type { ArticleDetail } from '../../../types';
 
 export const runtime = 'edge';
 
-async function getArticle(id: string) {
+async function getArticle(id: string): Promise<ArticleDetail | null> {
   const secret = env.HMAC_SECRET;
   if (!secret) throw new Error('Missing HMAC_SECRET');
   
@@ -43,7 +44,7 @@ async function getArticle(id: string) {
     throw new Error('Failed to fetch article from backend');
   }
   
-  const json = await res.json();
+  const json: { data: ArticleDetail } = await res.json();
   return json.data;
 }
 
@@ -55,7 +56,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
     return (
       <div className="max-w-3xl mx-auto py-12 text-center">
         <h1 className="text-2xl font-bold text-gray-900">Article Not Found</h1>
-        <p className="mt-2 text-gray-600">The article you're looking for does not exist or has been removed.</p>
+        <p className="mt-2 text-gray-600">The article you&apos;re looking for does not exist or has been removed.</p>
         <Link href="/" className="mt-4 inline-block text-indigo-600 hover:text-indigo-800">
           Return to Feed
         </Link>
@@ -125,7 +126,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
             <section>
               <h3 className="text-sm font-bold tracking-wider text-gray-500 dark:text-gray-400 uppercase mb-4">Topics</h3>
               <div className="flex flex-wrap gap-2">
-                {topics.map((t: any) => (
+                {topics.map(t => (
                   <Link key={t.slug} href={`/topics/${t.slug}`} className="inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-300 dark:hover:bg-indigo-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 transition-colors">
                     {t.name}
                   </Link>
@@ -151,7 +152,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
             <section>
               <h3 className="text-sm font-bold tracking-wider text-gray-500 dark:text-gray-400 uppercase mb-5">Event Timeline</h3>
               <div className="space-y-6">
-                {events.map((e: any, i: number) => (
+                {events.map((e, i) => (
                   <div key={i} className="relative pl-5 border-l-2 border-gray-200 dark:border-gray-700">
                     <div className={`absolute -left-[5px] top-1.5 w-2 h-2 rounded-full ${
                       e.severity === 'critical' ? 'bg-red-500' :

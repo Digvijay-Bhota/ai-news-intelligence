@@ -7,7 +7,7 @@ export function SourceChip({ name, url, className = '' }: { name: string, url?: 
     if (url) {
       host = new URL(url).hostname;
     }
-  } catch(e) {}
+  } catch {}
   
   const faviconUrl = host ? `https://www.google.com/s2/favicons?domain=${host}&sz=32` : null;
 

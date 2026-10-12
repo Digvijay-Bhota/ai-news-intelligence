@@ -42,7 +42,6 @@ function ClaimStatusBadge({ status }: { status: string }) {
 
 export function ClaimComparisonCard({
   claim_comparisons,
-  claim_comparison_metadata: _metadata,
   articles = [],
 }: ClaimComparisonCardProps) {
   // Article lookup map for links

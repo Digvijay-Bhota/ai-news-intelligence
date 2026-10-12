@@ -5,7 +5,17 @@ interface Signal {
   type: string;
   content: string;
   evidence_count: number;
-  [key: string]: any; // Allow for other fields but we won't render them
+  [key: string]: unknown; // Allow for other fields but we won't render them
+}
+
+/** An event's community_metrics_snapshots row, as returned by the API. */
+interface CommunityMetrics {
+  lifetime_posts: number;
+  lifetime_participants: number;
+  posts_last_24h: number;
+  participants_last_24h: number;
+  momentum_score: number;
+  last_computed_at: number;
 }
 
 function getSignalLabel(type: string): string | null {
@@ -18,7 +28,7 @@ function getSignalLabel(type: string): string | null {
 }
 
 export function CommunityPulse({ eventHash }: { eventHash: string }) {
-  const [pulse, setPulse] = useState<any>(null);
+  const [pulse, setPulse] = useState<CommunityMetrics | null>(null);
   const [signals, setSignals] = useState<Signal[]>([]);
 
   useEffect(() => {
@@ -30,7 +40,7 @@ export function CommunityPulse({ eventHash }: { eventHash: string }) {
           setPulse(data.data?.metrics);
           setSignals(data.data?.signals || []);
         }
-      } catch (e) {
+      } catch {
         // ignore
       }
     }
@@ -76,7 +86,7 @@ export function CommunityPulse({ eventHash }: { eventHash: string }) {
               return (
                 <li key={idx} className="text-sm">
                   <div className="font-medium text-indigo-900 dark:text-indigo-200 mb-1">{label}</div>
-                  <div className="text-gray-800 dark:text-gray-300 italic">"{sig.content}"</div>
+                  <div className="text-gray-800 dark:text-gray-300 italic">&quot;{sig.content}&quot;</div>
                   {typeof sig.evidence_count === 'number' && sig.evidence_count > 0 && (
                     <div className="mt-1.5 text-xs text-indigo-600 dark:text-indigo-400 font-medium opacity-80">
                       Based on {sig.evidence_count} posts

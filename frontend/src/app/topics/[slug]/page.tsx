@@ -46,7 +46,7 @@ export default function TopicPage({ params }: { params: Promise<{ slug: string }
     return (
       <div className="max-w-3xl mx-auto py-12 text-center">
         <h1 className="text-2xl font-bold text-gray-900">Topic Not Found</h1>
-        <p className="mt-2 text-gray-600">The topic you're looking for does not exist.</p>
+        <p className="mt-2 text-gray-600">The topic you&apos;re looking for does not exist.</p>
         <Link href="/" className="mt-4 inline-block text-indigo-600 hover:text-indigo-800">
           Return to Feed
         </Link>

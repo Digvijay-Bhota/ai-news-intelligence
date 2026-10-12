@@ -2,7 +2,7 @@
  * for-you.test.ts — Phase 11B: Personalized Intelligence Feed BFF Tests
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { GET } from '../src/app/api/feed/for-you/route';
 import { env } from 'cloudflare:workers';
 import type { PersonalizedFeedResponse, PersonalizedFeedItem } from '../src/types';
@@ -17,6 +17,13 @@ vi.mock('cloudflare:workers', () => ({
     BACKEND_API: undefined,
   },
 }));
+
+/** The env from the vi.mock factory above: tests set, replace and unset its bindings. */
+type MockedEnv = {
+  HMAC_SECRET: string | undefined;
+  BACKEND_API: { fetch: Mock } | undefined;
+};
+const testEnv = env as unknown as MockedEnv;
 
 describe('BFF /api/feed/for-you Route — Phase 11B Personalized Feed', () => {
   const mockPersonalizedEvent: PersonalizedFeedItem = {
@@ -60,8 +67,8 @@ describe('BFF /api/feed/for-you Route — Phase 11B Personalized Feed', () => {
   };
 
   beforeEach(() => {
-    (env as any).HMAC_SECRET = 'test-secret-key-32-bytes-long!!';
-    (env as any).BACKEND_API = {
+    testEnv.HMAC_SECRET = 'test-secret-key-32-bytes-long!!';
+    testEnv.BACKEND_API = {
       fetch: vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -82,7 +89,7 @@ describe('BFF /api/feed/for-you Route — Phase 11B Personalized Feed', () => {
   }
 
   it('returns 500 when HMAC_SECRET is missing', async () => {
-    (env as any).HMAC_SECRET = undefined;
+    testEnv.HMAC_SECRET = undefined;
     const res = await GET(makeRequest());
     expect(res.status).toBe(500);
     const json = (await res.json()) as { error: string };
@@ -90,7 +97,7 @@ describe('BFF /api/feed/for-you Route — Phase 11B Personalized Feed', () => {
   });
 
   it('returns 500 when BACKEND_API binding is missing', async () => {
-    (env as any).BACKEND_API = undefined;
+    testEnv.BACKEND_API = undefined;
     const res = await GET(makeRequest());
     expect(res.status).toBe(500);
     const json = (await res.json()) as { error: string };
@@ -117,7 +124,7 @@ describe('BFF /api/feed/for-you Route — Phase 11B Personalized Feed', () => {
 
   it('signs user identity and attaches X-Authenticated-User-Id to backend request', async () => {
     await GET(makeRequest());
-    const mockFetch = (env as any).BACKEND_API.fetch;
+    const mockFetch = testEnv.BACKEND_API!.fetch;
     expect(mockFetch).toHaveBeenCalledOnce();
 
     const sentReq: Request = mockFetch.mock.calls[0][0];
@@ -129,13 +136,13 @@ describe('BFF /api/feed/for-you Route — Phase 11B Personalized Feed', () => {
 
   it('correctly forwards pagination query parameters (limit and offset)', async () => {
     await GET(makeRequest('http://localhost/api/feed/for-you?limit=10&offset=20'));
-    const mockFetch = (env as any).BACKEND_API.fetch;
+    const mockFetch = testEnv.BACKEND_API!.fetch;
     const sentReq: Request = mockFetch.mock.calls[0][0];
     expect(sentReq.url).toContain('/api/v1/feed/for-you?limit=10&offset=20');
   });
 
   it('propagates backend errors with rate limit headers preserved', async () => {
-    (env as any).BACKEND_API.fetch = vi.fn().mockResolvedValue({
+    testEnv.BACKEND_API!.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 403,
       headers: new Headers({

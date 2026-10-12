@@ -1,12 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, Suspense, useCallback, useMemo } from 'react';
-import Link from 'next/link';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { fetchActiveEvents } from '../../lib/api';
 import type { EventSummary, GlobalFreshnessSummary } from '../../types';
 import { EventCard } from '../../components/EventCard';
-import { RadarIcon, ActivityIcon } from '../../components/icons';
+import { RadarIcon } from '../../components/icons';
 
 function EmptyState({ title, message }: { title: string; message: string }) {
   return (
@@ -34,33 +33,40 @@ function EventsDashboardInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
-  // Load active events
-  const load = useCallback(async () => {
+  // A filter change shows the loading state again (adjusted during render; the
+  // effect below then loads events for the new filters).
+  const filterKey = [currentFreshness, currentSeverity, currentMinArticles, currentSort].join('|');
+  const [loadedFilterKey, setLoadedFilterKey] = useState(filterKey);
+  if (filterKey !== loadedFilterKey) {
+    setLoadedFilterKey(filterKey);
     setLoading(true);
-    try {
-      const res = await fetchActiveEvents({
-        freshness: currentFreshness || undefined,
-        severity: currentSeverity || undefined,
-        min_articles: currentMinArticles ? parseInt(currentMinArticles, 10) : undefined,
-        sort: currentSort !== 'priority' ? currentSort : undefined
-      });
-      if (res.success) {
-        setEvents(res.data.items);
-        setSummary(res.data.summary);
-      } else {
-        setError(true);
-      }
-    } catch (err) {
-      console.error(err);
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentFreshness, currentSeverity, currentMinArticles, currentSort]);
+  }
 
+  // Load active events
   useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetchActiveEvents({
+          freshness: currentFreshness || undefined,
+          severity: currentSeverity || undefined,
+          min_articles: currentMinArticles ? parseInt(currentMinArticles, 10) : undefined,
+          sort: currentSort !== 'priority' ? currentSort : undefined
+        });
+        if (res.success) {
+          setEvents(res.data.items);
+          setSummary(res.data.summary);
+        } else {
+          setError(true);
+        }
+      } catch (err) {
+        console.error(err);
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+    }
     load();
-  }, [load]);
+  }, [currentFreshness, currentSeverity, currentMinArticles, currentSort]);
 
   // Load user preferences for personalization
   useEffect(() => {
@@ -76,7 +82,7 @@ function EventsDashboardInner() {
             });
           }
         }
-      } catch (_err) {
+      } catch {
         // Silently continue if preferences fail to load
       }
     }

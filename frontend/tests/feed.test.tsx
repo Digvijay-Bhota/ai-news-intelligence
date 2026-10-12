@@ -85,9 +85,68 @@ describe('ArticleCard', () => {
   });
 });
 
+const feedPage = (items: typeof mockArticle[], total = items.length) => ({
+  success: true as const,
+  data: { meta: { limit: 20, offset: 0, total }, items },
+});
+
 describe('Feed', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it('reloads the first page when the URL filters change', async () => {
+    vi.mocked(api.fetchFeed)
+      .mockResolvedValueOnce(feedPage([mockArticle]))
+      .mockResolvedValueOnce(feedPage([{ ...mockArticle, id: 2, title: 'Robotics Article' }]));
+
+    const { rerender } = renderWithProvider(<Feed />);
+    await waitFor(() => expect(screen.getByText('Test AI Article')).toBeInTheDocument());
+
+    mockSearchParams = new URLSearchParams('q=robotics');
+    rerender(<UserArticlesProvider><Feed /></UserArticlesProvider>);
+
+    // The loading state replaces the previous results right away.
+    expect(document.querySelector('.animate-pulse')).not.toBeNull();
+    expect(screen.queryByText('Test AI Article')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Robotics Article')).toBeInTheDocument());
+    expect(api.fetchFeed).toHaveBeenCalledTimes(2);
+    expect(api.fetchFeed).toHaveBeenLastCalledWith(
+      20, 0, 'robotics', undefined, undefined, undefined, undefined, expect.any(AbortSignal)
+    );
+  });
+
+  it('retries after an error', async () => {
+    vi.mocked(api.fetchFeed)
+      .mockRejectedValueOnce(new Error('Network failure'))
+      .mockResolvedValueOnce(feedPage([mockArticle]));
+
+    renderWithProvider(<Feed />);
+    await waitFor(() => expect(screen.getByText('Network failure')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => expect(screen.getByText('Test AI Article')).toBeInTheDocument());
+    expect(screen.queryByText('Network failure')).not.toBeInTheDocument();
+    expect(api.fetchFeed).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores saved and hidden articles from the previous session', async () => {
+    localStorage.setItem('ai_news_saved', JSON.stringify([{ saved_id: 7, article: mockArticle }]));
+    localStorage.setItem('ai_news_hidden', JSON.stringify([2]));
+    vi.mocked(api.fetchFeed).mockResolvedValueOnce(
+      feedPage([mockArticle, { ...mockArticle, id: 2, title: 'Previously Hidden Article' }])
+    );
+
+    renderWithProvider(<Feed />);
+
+    await waitFor(() => expect(screen.getByText('Test AI Article')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Unsave article' })).toBeInTheDocument();
+    expect(screen.queryByText('Previously Hidden Article')).not.toBeInTheDocument();
+    // The restored lists are written back unchanged.
+    expect(JSON.parse(localStorage.getItem('ai_news_hidden')!)).toEqual([2]);
   });
 
   it('feed loads articles', async () => {
@@ -192,10 +251,10 @@ describe('Article Actions', () => {
     vi.clearAllMocks();
     localStorage.clear();
     // mock global fetch
-    global.fetch = vi.fn(() => Promise.resolve({
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve({ id: 999 })
-    })) as any;
+    })));
   });
 
   it('save and unsave flow', async () => {
@@ -306,5 +365,22 @@ describe('Feed Filters', () => {
       expect(screen.getByText('AI Topic')).toBeDefined();
       expect(screen.getByText('TechCrunch')).toBeDefined();
     });
+  });
+
+  it('keeps typed search text until the URL query changes, then follows the URL', async () => {
+    mockSearchParams.set('q', 'first');
+    const ui = () => <UserArticlesProvider><FeedFilters /></UserArticlesProvider>;
+    const { rerender } = render(ui());
+    const input = screen.getByLabelText('Search');
+    expect(input).toHaveValue('first');
+
+    fireEvent.change(input, { target: { value: 'first draft' } });
+    rerender(ui());
+    expect(input).toHaveValue('first draft');
+
+    mockSearchParams = new URLSearchParams('q=second');
+    rerender(ui());
+    expect(input).toHaveValue('second');
+    await waitFor(() => expect(api.fetchTopics).toHaveBeenCalled());
   });
 });

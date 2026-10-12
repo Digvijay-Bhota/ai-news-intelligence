@@ -63,7 +63,7 @@ async function proxyToBackend(request: NextRequest, method: 'GET' | 'PATCH') {
       try {
         const parsed = JSON.parse(errorText);
         errorResponse = parsed;
-      } catch (e) {
+      } catch {
         // Not JSON
       }
       return withRateLimitHeaders(NextResponse.json(errorResponse, { status: backendRes.status }), backendRes);

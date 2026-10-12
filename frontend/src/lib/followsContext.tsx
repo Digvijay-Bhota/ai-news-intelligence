@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useSyncExternalStore } from 'react';
 import type { FollowTargetType, UserFollow } from '../types';
 
 export interface FollowItem {
@@ -24,46 +24,63 @@ const FollowsContext = createContext<FollowsContextType | undefined>(undefined);
 
 const STORAGE_KEY = 'ai_news_follows';
 
-export function FollowsProvider({ children }: { children: ReactNode }) {
-  const [follows, setFollows] = useState<FollowItem[]>([]);
-  const [isReady, setIsReady] = useState(false);
+const subscribeToNothing = () => () => {};
 
-  // Load cached follows from localStorage initially, then fetch from BFF
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setFollows(JSON.parse(stored));
-      }
-    } catch (e) {
-      console.warn('Failed to load cached follows from local storage', e);
-    }
-    setIsReady(true);
-  }, []);
+/** False during SSR and hydration, true afterwards (localStorage is client-only). */
+function useHydrated(): boolean {
+  return useSyncExternalStore(subscribeToNothing, () => true, () => false);
+}
+
+function readCachedFollows(): FollowItem[] {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch (e) {
+    console.warn('Failed to load cached follows from local storage', e);
+  }
+  return [];
+}
+
+/** The user's follows from the BFF, or null if they could not be loaded. */
+async function fetchFollows(): Promise<FollowItem[] | null> {
+  try {
+    const res = await fetch('/api/follows');
+    if (!res.ok) return null;
+    const json = await res.json();
+    const items = json.data || json;
+    return Array.isArray(items) ? items : null;
+  } catch (err) {
+    console.error('Failed to sync follows from backend', err);
+    return null;
+  }
+}
+
+export function FollowsProvider({ children }: { children: ReactNode }) {
+  const isReady = useHydrated();
+  const [follows, setFollows] = useState<FollowItem[]>([]);
+  const [cacheLoaded, setCacheLoaded] = useState(false);
+
+  // Once hydrated, start from the cached follows; the first render must match
+  // the server render, so the cache cannot be the initial state.
+  if (isReady && !cacheLoaded) {
+    setCacheLoaded(true);
+    setFollows(readCachedFollows());
+  }
 
   const refreshFollows = useCallback(async () => {
-    try {
-      const res = await fetch('/api/follows');
-      if (res.ok) {
-        const json = await res.json();
-        const items = json.data || json;
-        if (Array.isArray(items)) {
-          setFollows(items);
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-          } catch {}
-        }
-      }
-    } catch (err) {
-      console.error('Failed to sync follows from backend', err);
-    }
+    const items = await fetchFollows();
+    if (items) setFollows(items);
   }, []);
 
+  // Then sync with the BFF (the persist effect below caches the result).
   useEffect(() => {
-    if (isReady) {
-      refreshFollows();
-    }
-  }, [isReady, refreshFollows]);
+    if (!isReady) return;
+    let cancelled = false;
+    fetchFollows().then(items => {
+      if (!cancelled && items) setFollows(items);
+    });
+    return () => { cancelled = true; };
+  }, [isReady]);
 
   // Persist follows to localStorage on change
   useEffect(() => {

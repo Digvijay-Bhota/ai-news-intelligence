@@ -77,8 +77,8 @@ export default function SettingsPage() {
       }
 
       setMessage({ type: 'success', text: 'Settings saved successfully!' });
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to save.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: (err instanceof Error && err.message) || 'Failed to save.' });
     } finally {
       setSaving(false);
     }
