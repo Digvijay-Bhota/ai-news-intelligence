@@ -36,7 +36,7 @@ export interface ArticleDetail {
   source: string;
   published_at: number | null;
   topics: { name: string; slug: string }[];
-  events: { event_hash: string; title: string; description: string; severity: string; started_at: number }[];
+  events: { event_hash: string; title: string; description: string | null; severity: string; started_at: number | null }[];
   /** Rendered as text labels by the article page. */
   extracted_entities: string[];
 }

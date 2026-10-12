@@ -3,7 +3,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { FollowsProvider } from '../src/lib/followsContext';
 import { FollowButton } from '../src/components/FollowButton';
 
@@ -55,7 +55,8 @@ describe('FollowsProvider', () => {
     renderButtons();
 
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/follows'));
-    await fetchSpy.mock.results[0].value;
+    // Let the failed sync settle: its response is handled in later microtasks.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
     expect(screen.getByRole('button', { name: 'Unfollow robotics' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Follow agents' })).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem(CACHE_KEY)!)).toEqual([{ target_type: 'topic', target_id: 'robotics' }]);
