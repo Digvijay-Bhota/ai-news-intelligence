@@ -7,6 +7,34 @@ import { getEventFreshness } from '../utils/freshness';
 import { RankingEvent, FollowContext, rankEvents, RankingFreshness } from '../utils/ranking';
 import { evaluateEventDelta } from '../utils/change-engine';
 
+/**
+ * The article-detail `extracted_entities` labels, from the stored
+ * article_content.extracted_entities JSON. The processor stores
+ * {"topics": string[], "events": [...]}; the labels are its topics (events
+ * are served separately). A plain string array, which this reader used to
+ * expect, is still accepted. Labels are trimmed, non-empty and unique;
+ * anything else (null, invalid JSON, other shapes) gives [].
+ */
+export function keyEntityLabels(stored: string | null | undefined): string[] {
+  if (!stored) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored);
+  } catch {
+    return [];
+  }
+  const values = Array.isArray(parsed)
+    ? parsed
+    : typeof parsed === 'object' && parsed !== null && 'topics' in parsed && Array.isArray(parsed.topics)
+      ? parsed.topics
+      : [];
+  const labels = new Set<string>();
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) labels.add(value.trim());
+  }
+  return [...labels];
+}
+
 export class DbClient {
   constructor(private readonly db: D1Database) {}
 
@@ -111,16 +139,7 @@ export class DbClient {
     `;
     const eventsRes = await this.db.prepare(eventsQuery).bind(id).all<{ event_hash: string; title: string; description: string; severity: string; started_at: number }>();
 
-    let extracted_entities: any[] = [];
-    if (content?.extracted_entities) {
-      try {
-        const parsed = JSON.parse(content.extracted_entities);
-        extracted_entities = Array.isArray(parsed) ? parsed : [];
-      } catch (e) {
-        // Fallback for malformed JSON
-        extracted_entities = [];
-      }
-    }
+    const extracted_entities = keyEntityLabels(content?.extracted_entities);
 
     return {
       id: article.id,
