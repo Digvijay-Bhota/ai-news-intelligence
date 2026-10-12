@@ -37,7 +37,10 @@ export interface ArticleDetail {
   published_at: number | null;
   topics: { name: string; slug: string }[];
   events: { event_hash: string; title: string; description: string | null; severity: string; started_at: number | null }[];
-  /** Rendered as text labels by the article page. */
+  /**
+   * Key Entities labels: the topic strings from the processor's stored
+   * extracted_entities (trimmed, unique; [] when none). Rendered as text.
+   */
   extracted_entities: string[];
 }
 
