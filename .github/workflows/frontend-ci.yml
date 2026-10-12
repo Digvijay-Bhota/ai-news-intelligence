@@ -22,8 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # No secrets, no deployment credentials, no production access of any kind.
-    # `npm run lint` and `npm run test:ui` are not gated yet: both currently
-    # fail on main and are added here once their underlying issues are fixed.
+    # `npm run lint` is not gated yet: it currently fails on main and is added
+    # here once its underlying issues are fixed.
     defaults:
       run:
         working-directory: frontend
@@ -47,6 +47,10 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # jsdom component tests (vitest.ui.config.ts).
+      - name: UI tests
+        run: npm run test:ui
 
       # Local build only (dist/); nothing is deployed. Fetches the
       # next/font/google fonts used by src/app/layout.tsx.

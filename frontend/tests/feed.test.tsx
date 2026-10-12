@@ -49,19 +49,39 @@ describe('ArticleCard', () => {
   it('renders title, source, summary, and external link', () => {
     renderWithProvider(<ArticleCard article={mockArticle} />);
 
-    expect(screen.getByText('Test Source')).toBeDefined();
-    expect(screen.getByText('Test Article Title')).toBeDefined();
-    expect(screen.getByText('Test summary content')).toBeDefined();
+    expect(screen.getByText('TechCrunch')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Test AI Article' })).toHaveAttribute('href', '/article/1');
+    expect(screen.getByText('This is a test summary about AI.')).toBeInTheDocument();
 
-    const link = screen.getByRole('link', { name: /Read full article:/ });
-    expect(link).toHaveProperty('href', 'https://example.com/');
+    const link = screen.getByRole('link', { name: 'Read full article at source: Test AI Article' });
+    expect(link).toHaveAttribute('href', 'https://example.com/test-ai');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
-  it('renders topic and event badges', () => {
-    renderWithProvider(<ArticleCard article={mockArticle} />);
-    expect(screen.getByText('AI')).toBeDefined();
-    expect(screen.getByText('Tech')).toBeDefined();
-    expect(screen.getByText('Launch')).toBeDefined();
+  // Since the 9817006 redesign the card shows linked event badges (at most
+  // two) and no topic badges.
+  it('renders linked event badges, at most two', () => {
+    renderWithProvider(<ArticleCard article={{
+      ...mockArticle,
+      events: [...mockArticle.events, { title: 'Second Event', hash: 'event456' }, { title: 'Third Event', hash: 'event789' }],
+    }} />);
+    expect(screen.getByRole('link', { name: 'AI Update' })).toHaveAttribute('href', '/events/event123');
+    expect(screen.getByRole('link', { name: 'Second Event' })).toHaveAttribute('href', '/events/event456');
+    expect(screen.queryByRole('link', { name: 'Third Event' })).not.toBeInTheDocument();
+  });
+
+  // Article images stay hidden until image-use rights are established, even
+  // though /api/feed items can carry validated image_url/image_credit fields.
+  it('does not render article image metadata', () => {
+    const imageUrl = 'https://platform.theverge.com/uploads/2026/10/photo.jpg';
+    const withImage = { ...mockArticle, image_url: imageUrl, image_credit: 'Verge Photo Desk' };
+    const { container } = renderWithProvider(<ArticleCard article={withImage} />);
+
+    expect(screen.getByRole('link', { name: 'Test AI Article' })).toBeInTheDocument();
+    expect(container.querySelector(`img[src="${imageUrl}"]`)).toBeNull();
+    expect(container.innerHTML).not.toContain(imageUrl);
+    expect(screen.queryByText('Verge Photo Desk')).not.toBeInTheDocument();
   });
 });
 
@@ -82,10 +102,10 @@ describe('Feed', () => {
     renderWithProvider(<Feed />);
 
     // Starts in loading state
-    expect(document.querySelector('.animate-pulse')).toBeDefined();
+    expect(document.querySelector('.animate-pulse')).not.toBeNull();
 
     await waitFor(() => {
-      expect(screen.getByText('Test Article Title')).toBeDefined();
+      expect(screen.getByText('Test AI Article')).toBeDefined();
     });
   });
 
@@ -136,14 +156,14 @@ describe('Feed', () => {
     renderWithProvider(<Feed />);
 
     await waitFor(() => {
-      expect(screen.getByText('Test Article Title')).toBeDefined();
+      expect(screen.getByText('Test AI Article')).toBeDefined();
     });
 
     const loadMoreBtn = screen.getByRole('button', { name: /Load more articles/i });
     fireEvent.click(loadMoreBtn);
 
     await waitFor(() => {
-      expect(screen.getByText('Test Article Title')).toBeDefined();
+      expect(screen.getByText('Test AI Article')).toBeDefined();
       expect(screen.getByText('Second Article')).toBeDefined();
     });
   });
@@ -160,7 +180,7 @@ describe('Feed', () => {
     renderWithProvider(<Feed />);
 
     await waitFor(() => {
-      expect(screen.getByText('Test Article Title')).toBeDefined();
+      expect(screen.getByText('Test AI Article')).toBeDefined();
     });
 
     expect(screen.queryByRole('button', { name: /Load more articles/i })).toBeNull();
@@ -190,7 +210,7 @@ describe('Article Actions', () => {
     renderWithProvider(<Feed />);
 
     await waitFor(() => {
-      expect(screen.getByText('Test Article Title')).toBeDefined();
+      expect(screen.getByText('Test AI Article')).toBeDefined();
     });
 
     const saveBtn = screen.getByRole('button', { name: 'Save article' });
@@ -223,7 +243,7 @@ describe('Article Actions', () => {
     renderWithProvider(<Feed />);
 
     await waitFor(() => {
-      expect(screen.getByText('Test Article Title')).toBeDefined();
+      expect(screen.getByText('Test AI Article')).toBeDefined();
     });
 
     const hideBtn = screen.getByRole('button', { name: 'Hide article' });
@@ -235,7 +255,7 @@ describe('Article Actions', () => {
 
     // The article is hidden from feed
     await waitFor(() => {
-      expect(screen.queryByText('Test Article Title')).toBeNull();
+      expect(screen.queryByText('Test AI Article')).toBeNull();
     });
   });
 });
@@ -262,8 +282,10 @@ describe('Feed Filters', () => {
     renderWithProvider(<Feed />);
 
     await waitFor(() => {
+      // fetchFeed(limit, offset, q, topic, source_id, topics, sourceNames, signal);
+      // Feed passes its optional topic/source overrides, unset here.
       expect(api.fetchFeed).toHaveBeenCalledWith(
-        20, 0, 'robotics', 'ai', '1', expect.any(AbortSignal)
+        20, 0, 'robotics', 'ai', '1', undefined, undefined, expect.any(AbortSignal)
       );
     });
   });

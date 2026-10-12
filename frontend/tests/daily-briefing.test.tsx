@@ -126,6 +126,22 @@ describe('DailyBriefing states', () => {
 });
 
 describe('BriefingStoryCard', () => {
+  // Article images stay hidden until image-use rights are established, even
+  // when the event's articles carry validated image_url/image_credit fields.
+  it('does not render article image metadata', () => {
+    const imageUrl = 'https://platform.theverge.com/uploads/2026/10/photo.jpg';
+    const d = recentDetail('e1');
+    d.data.articles = d.data.articles.map(a => ({ ...a, image_url: imageUrl, image_credit: 'Verge Photo Desk' }));
+    const story = toBriefingStory(d.data);
+    const { container } = render(<BriefingStoryCard story={story} position={1} lead />);
+
+    expect(screen.getByRole('heading', { name: story.title })).toBeInTheDocument();
+    expect(container.querySelector(`img[src="${imageUrl}"]`)).toBeNull();
+    expect(container.innerHTML).not.toContain(imageUrl);
+    expect(screen.queryByText('Verge Photo Desk')).not.toBeInTheDocument();
+    expect(screen.getByTestId('story-visual-fallback')).toBeInTheDocument();
+  });
+
   it('omits sections whose data is missing', () => {
     const d = recentDetail('e1', {
       brief: { summary: 'Only a summary.', why_it_matters: '', key_developments: [], key_entities: [], uncertainties: [], source_references: [] },

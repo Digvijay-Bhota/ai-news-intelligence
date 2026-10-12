@@ -1,8 +1,8 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CommunityDiscussion } from '../src/components/CommunityDiscussion';
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest';
 
 describe('CommunityDiscussion', () => {
   const mockFetch = vi.fn();
@@ -387,8 +387,13 @@ describe('CommunityDiscussion', () => {
       expect(screen.getByText('This is a test reply')).toBeInTheDocument();
       expect(screen.getByText('ReplyUser')).toBeInTheDocument();
       expect(screen.getByText('👍 2')).toBeInTheDocument();
-      const replyElement = screen.getByText('This is a test reply').closest('.p-2.border');
-      expect(replyElement).not.toHaveTextContent('Reply');
+      // Replies are depth 1, so a reply has no Reply action of its own. Check the
+      // control, not the text: the reply's author "ReplyUser" contains "Reply".
+      const replyElement = screen.getByText('This is a test reply').closest<HTMLElement>('.p-2.border');
+      expect(replyElement).not.toBeNull();
+      expect(within(replyElement!).queryByRole('button', { name: 'Reply' })).not.toBeInTheDocument();
+      // The top-level post keeps its Reply button, and it is the only one.
+      expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument();
     });
   });
 
