@@ -4,6 +4,31 @@ import React, { useState, useEffect } from 'react';
 import { fetchTopics, fetchSources } from '../../lib/api';
 import type { Topic, Source } from '../../types';
 
+interface CommunityProfile {
+  public_id: string;
+  display_name: string;
+}
+
+/**
+ * The profile in a /api/v1/community/profile response body
+ * ({ success: true, data: { public_id, display_name, ... } }), or null for an
+ * error or a body without a usable profile.
+ */
+function profileFrom(body: unknown): CommunityProfile | null {
+  if (typeof body !== 'object' || body === null || !('success' in body) || body.success !== true || !('data' in body)) {
+    return null;
+  }
+  const { data } = body;
+  if (
+    typeof data !== 'object' || data === null ||
+    !('public_id' in data) || typeof data.public_id !== 'string' ||
+    !('display_name' in data) || typeof data.display_name !== 'string'
+  ) {
+    return null;
+  }
+  return { public_id: data.public_id, display_name: data.display_name };
+}
+
 export default function SettingsPage() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
@@ -12,7 +37,7 @@ export default function SettingsPage() {
   const [prefSources, setPrefSources] = useState<string[]>([]);
   const [digestFreq, setDigestFreq] = useState<string>('daily');
 
-  const [profile, setProfile] = useState<{ public_id: string; display_name: string } | null>(null);
+  const [profile, setProfile] = useState<CommunityProfile | null>(null);
   const [displayName, setDisplayName] = useState('');
 
   const [loading, setLoading] = useState(true);
@@ -20,6 +45,7 @@ export default function SettingsPage() {
   const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     async function load() {
       try {
         const [topicsRes, sourcesRes, prefsRes, profileRes] = await Promise.all([
@@ -28,6 +54,7 @@ export default function SettingsPage() {
           fetch('/api/preferences').then(r => r.ok ? r.json() : null),
           fetch('/api/v1/community/profile').then(r => r.ok ? r.json() : null)
         ]);
+        if (cancelled) return;
 
         if (topicsRes.success) setTopics(topicsRes.data || []);
         if (sourcesRes.success) setSources(sourcesRes.data || []);
@@ -37,14 +64,23 @@ export default function SettingsPage() {
           setPrefSources(prefsRes.data.preferred_sources || []);
           setDigestFreq(prefsRes.data.digest_frequency || 'daily');
         }
+
+        // Without a profile the Community Profile section stays hidden.
+        const loadedProfile = profileFrom(profileRes);
+        if (loadedProfile) {
+          setProfile(loadedProfile);
+          setDisplayName(loadedProfile.display_name);
+        }
       } catch (err) {
+        if (cancelled) return;
         console.error('Failed to load settings', err);
         setMessage({ type: 'error', text: 'Failed to load settings.' });
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
     load();
+    return () => { cancelled = true; };
   }, []);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -73,7 +109,12 @@ export default function SettingsPage() {
         if (!pRes.ok) throw new Error('Failed to update display name');
         const pData = await pRes.json();
         if (!pData.success) throw new Error(pData.error || 'Failed to update display name');
-        setProfile(pData.data);
+        // Show the name as stored (the Worker trims it).
+        const updatedProfile = profileFrom(pData);
+        if (updatedProfile) {
+          setProfile(updatedProfile);
+          setDisplayName(updatedProfile.display_name);
+        }
       }
 
       setMessage({ type: 'success', text: 'Settings saved successfully!' });
