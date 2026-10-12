@@ -68,7 +68,7 @@ interface HtmlTag {
 }
 
 /** Parse attributes, decoding entities in each value exactly once. */
-function parseAttributes(rawAttributes: string): Record<string, string> {
+export function parseAttributes(rawAttributes: string): Record<string, string> {
   const attributes: Record<string, string> = {};
   const pattern = /([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
   for (const match of rawAttributes.matchAll(pattern)) {
@@ -105,10 +105,10 @@ function isTooSmall(width: number | null, height: number | null): boolean {
     (height !== null && height < MIN_IMAGE_DIMENSION);
 }
 
-const CDATA_PATTERN = /<!\[CDATA\[([\s\S]*?)\]\]>/g;
+export const CDATA_PATTERN = /<!\[CDATA\[([\s\S]*?)\]\]>/g;
 
 /** XML element text: CDATA sections are literal, other text is entity-decoded once. */
-function xmlTextContent(raw: string): string {
+export function xmlTextContent(raw: string): string {
   let text = '';
   let last = 0;
   for (const match of raw.matchAll(CDATA_PATTERN)) {
