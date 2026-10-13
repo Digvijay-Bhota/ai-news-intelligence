@@ -55,6 +55,7 @@ function EventsDashboardInner() {
         if (res.success) {
           setEvents(res.data.items);
           setSummary(res.data.summary);
+          setError(false);
         } else {
           setError(true);
         }
