@@ -42,8 +42,10 @@ function EventsDashboardInner() {
     setLoading(true);
   }
 
-  // Load active events
+  // Load active events. A filter change or unmount aborts the request, and an
+  // aborted request leaves state alone, so older results never replace newer ones.
   useEffect(() => {
+    const controller = new AbortController();
     async function load() {
       try {
         const res = await fetchActiveEvents({
@@ -51,7 +53,8 @@ function EventsDashboardInner() {
           severity: currentSeverity || undefined,
           min_articles: currentMinArticles ? parseInt(currentMinArticles, 10) : undefined,
           sort: currentSort !== 'priority' ? currentSort : undefined
-        });
+        }, controller.signal);
+        if (controller.signal.aborted) return;
         if (res.success) {
           setEvents(res.data.items);
           setSummary(res.data.summary);
@@ -60,13 +63,15 @@ function EventsDashboardInner() {
           setError(true);
         }
       } catch (err) {
+        if (controller.signal.aborted) return;
         console.error(err);
         setError(true);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
     load();
+    return () => controller.abort();
   }, [currentFreshness, currentSeverity, currentMinArticles, currentSort]);
 
   // Load user preferences for personalization
