@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { CommunityPulse } from './CommunityPulse';
 import type { PublicCommunityPost } from '../types';
 
@@ -17,9 +17,18 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
   const [replies, setReplies] = useState<Record<string, PublicCommunityPost[]>>({});
   const [expandedReplies, setExpandedReplies] = useState<Record<string, boolean>>({});
 
+  // Each post-list request takes the next id, and only the latest one may
+  // update the list, cursor, error or loading state: a slower earlier request
+  // (an older reload, a page for a replaced list) never overwrites newer results.
+  const latestPostsRequest = useRef(0);
+  // Whether a list request is in flight; the first load starts on mount.
+  const [postsPending, setPostsPending] = useState(true);
+
   // Loads the first page, or appends the page at cursor. State changes only
   // when the request settles.
-  const fetchPosts = useCallback((cursor?: string) => {
+  const loadPosts = useCallback((cursor?: string) => {
+    const requestId = ++latestPostsRequest.current;
+    const isLatest = () => requestId === latestPostsRequest.current;
     const url = cursor
       ? `/api/v1/events/${eventHash}/community?cursor=${cursor}`
       : `/api/v1/events/${eventHash}/community`;
@@ -29,22 +38,34 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
         return res.json();
       })
       .then((data: { success: boolean; data: { items?: PublicCommunityPost[]; next_cursor?: string | null } }) => {
-        if (!data.success) return;
+        if (!isLatest() || !data.success) return;
         const items = data.data.items || [];
         setPosts(prev => (cursor ? [...prev, ...items] : items));
         setNextCursor(data.data.next_cursor || null);
       })
       .catch((e: unknown) => {
+        if (!isLatest()) return;
         setError(e instanceof Error ? e.message : 'Error loading posts');
       })
       .finally(() => {
+        if (!isLatest()) return;
         setLoading(false);
+        setPostsPending(false);
       });
   }, [eventHash]);
 
+  // Load More and the reloads after a change mark the list pending first.
+  const fetchPosts = (cursor?: string) => {
+    setPostsPending(true);
+    return loadPosts(cursor);
+  };
+
   useEffect(() => {
-    fetchPosts();
-  }, [fetchPosts]);
+    loadPosts();
+    // Switching events or unmounting makes the in-flight request obsolete.
+    const requests = latestPostsRequest;
+    return () => { requests.current++; };
+  }, [loadPosts]);
 
   
   const fetchReplies = async (postId: string) => {
@@ -317,7 +338,13 @@ export function CommunityDiscussion({ eventHash }: { eventHash: string }) {
         ))}
         {posts.length === 0 && <p className="text-gray-500">No posts yet. Be the first to discuss this event!</p>}
         {nextCursor && (
-          <button onClick={() => fetchPosts(nextCursor)} className="mt-4 px-4 py-2 bg-gray-200 text-black rounded">
+          // Disabled while any list request is pending, so a page is never
+          // requested twice or appended to a list a reload is replacing.
+          <button
+            onClick={() => fetchPosts(nextCursor)}
+            disabled={postsPending}
+            className="mt-4 px-4 py-2 bg-gray-200 text-black rounded disabled:opacity-50"
+          >
             Load More
           </button>
         )}
