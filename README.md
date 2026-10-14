@@ -1,49 +1,79 @@
 # AI News Intelligence
 
-Phase 0 — Foundation API
+An AI news product on Cloudflare: it ingests RSS sources every hour, uses Google Gemini to
+enrich articles and match them to events, writes event briefs, narrative changes and claim
+comparisons, and
+serves them through a Next.js-style web app with personalization and community discussion.
 
 ## Architecture
 
 ```
-GitHub Actions
-      ↓
-Cloudflare Workers
-      ↓
-Cloudflare D1
+Browser ──> frontend Worker (vinext / Next.js App Router, Cloudflare Worker "frontend")
+               │  BFF routes under /api/*, HMAC-signed with HMAC_SECRET
+               │  service binding BACKEND_API
+               ▼
+            backend Worker ("ai-news-intelligence", custom router in workers/src/router.ts)
+               │  public API /api/v1/*, internal API /internal/v1/* (HMAC + replay protection)
+               │  hourly cron (0 * * * *) → workers/src/tasks/orchestrator.ts runPipeline
+               ▼
+            D1 "ai-news-db" (binding DB) + KV (binding CACHE)
+               ▲
+            Google Gemini API (GEMINI_API_KEY), called from the cron pipeline
 ```
 
-## Components
+**Backend** (`workers/`): RSS fetch and ingestion, Gemini article enrichment and event matching,
+Gemini generation (briefs, narrative deltas, claim comparisons, community signals) with model routing
+and an optional, budget-limited quality escalation, public read APIs, follows, preferences,
+saved and hidden items, community posts, votes and moderation. Rate limiting, CORS and body
+limits live in `workers/src/middleware/`.
 
-- **Public API** — External-facing endpoints with HMAC authentication
-- **Internal API** — Service-to-service endpoints with replay protection
-- **D1 Layer** — SQLite database access layer
-- **Middleware** — Rate limiting, CORS, body limits, caching
+**Frontend** (`frontend/`): Daily Briefing homepage with the news Feed (`/`), Topics
+(`/topics`, `/topics/[slug]`), Events (`/events`, `/events/[hash]` with Community discussion),
+article detail with Key Entities (`/article/[id]`), For You (`/foryou`), Saved (`/saved`) and
+Settings (`/settings`). Its `/api/*` routes are a backend-for-frontend that signs requests to the
+backend.
+
+**External services:** Cloudflare Workers, D1 and KV; Google Gemini.
 
 ## Project Structure
 
 ```
 d1/
-  schema.sql      — D1 database schema
-  migrate.py      — Migration helper
-
-workers/
-  src/
-    index.ts           — Worker entry point
-    router.ts          — Request router
-    middleware/        — Auth, rate limit, CORS, body limit
-    db/                — D1 access layer
-    utils/             — HMAC, replay protection, cache
-  tests/             — Vitest test suite
+  schema.sql        — full schema for a fresh database (includes every migration)
+  migrations/       — numbered changes for existing databases, applied by hand (see runbook)
+  migrate.py        — prints the Wrangler commands
+workers/            — backend Worker (wrangler.toml, src/, tests/)
+frontend/           — frontend Worker (wrangler.toml, src/app, src/components, tests/)
+docs/release-runbook.md — how to release to production safely
+.github/workflows/  — Workers CI and Frontend CI
 ```
 
 ## Development
 
+Backend:
+
 ```bash
 cd workers
-npm install
+npm ci
 npm run typecheck
 npm test
 ```
+
+Frontend (Frontend CI runs these in this order; lint must come before build because generated
+output under `dist/` is not excluded from linting):
+
+```bash
+cd frontend
+npm ci
+npm run lint
+npm run typecheck
+npm test          # node tests (*.test.ts)
+npm run test:ui   # jsdom UI tests (*.test.tsx)
+npm run build
+```
+
+Local secrets go in `.dev.vars` in each Worker directory and must never be committed:
+`HMAC_SECRET` for both, `GEMINI_API_KEY` for the backend.
 
 Local development server:
 
@@ -61,6 +91,11 @@ dedicated development D1 and KV resources exist.
 ## Database setup
 
 Run these commands from the `workers/` directory, where `wrangler.toml` is; the SQL paths are relative to it.
+
+Migrations in `d1/migrations/` are applied by hand with `wrangler d1 execute --file`. The project
+does not use Wrangler's migration tracking (`wrangler.toml` sets no `migrations_dir`), so
+`wrangler d1 migrations list` does not show which of these files a database has. Check each
+migration's effect in the schema instead; the runbook lists read-only checks.
 
 ### Local database
 
@@ -161,16 +196,29 @@ article, so without the columns every insert fails and ingestion stops.
 
 ## Deployment
 
-> **Warning:** deploying replaces the live production Worker. Deploy only with explicit approval.
+> **Warning:** deploying replaces the live production Workers. Deploy only with explicit approval,
+> following [docs/release-runbook.md](docs/release-runbook.md): pre-deployment checks, migrations,
+> deployment order, smoke checks, rollback and go/no-go criteria.
+
+Deploy order: approved D1 migrations, then the backend, then the frontend.
 
 ```bash
 cd workers
-npx wrangler deploy
+npx wrangler deploy                      # backend Worker "ai-news-intelligence"
+
+cd ../frontend
+npm run build && npx wrangler deploy     # frontend Worker "frontend"
 ```
 
-This deploys the top-level configuration in `workers/wrangler.toml` to the Worker
+The backend command deploys the top-level configuration in `workers/wrangler.toml` to the Worker
 `ai-news-intelligence`, the single production Worker. The frontend's `BACKEND_API`
-service binding targets this Worker.
+service binding targets this Worker. The frontend build writes `frontend/.wrangler/deploy/config.json`,
+which points `wrangler deploy` at the generated `frontend/dist/server/wrangler.json`.
+
+**What is live is not necessarily `main`.** As of 2026-10-14 (read-only checks), production runs a
+backend deployed 2026-10-10 and a frontend deployed 2026-09-15. Merges since then are not live, and
+whether migrations 0013 and 0014 are applied to the production database is unverified. See
+"Production state" in the runbook, and recheck before relying on it.
 
 Do not use `--env production` (or any `--env`). `wrangler.toml` defines no named
 environments, because they do not inherit the D1 and KV bindings. Wrangler does not
