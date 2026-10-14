@@ -46,7 +46,9 @@ describe('FollowsProvider', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Unfollow agents' })).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Follow robotics' })).toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem(CACHE_KEY)!)).toEqual(synced);
+    // The persist effect caches the synced list in a later task than the render
+    // that shows it, so wait for the write instead of racing it.
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(CACHE_KEY)!)).toEqual(synced));
   });
 
   it('keeps the cached follows when the BFF sync fails', async () => {
