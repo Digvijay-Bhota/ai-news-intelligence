@@ -633,7 +633,8 @@ export interface ModerationAudit {
 }
 
 export interface PublicCommunityPost extends Omit<CommunityPost, 'user_id' | 'status'> {
-  author_public_id: string;
+  /** null when the author has no community profile. */
+  author_public_id: string | null;
   author_display_name: string;
   upvotes: number;
   reply_count: number;
