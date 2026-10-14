@@ -1,11 +1,12 @@
 /**
  * Events page: a failed events request shows the error state, and a later
  * successful request (e.g. after a filter change) replaces it with the events.
- * Responses for superseded filters never replace the current results.
+ * Responses for superseded filters never replace the current results, and a
+ * failed current request does not leave the previous summary on screen.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, within } from '@testing-library/react';
 import EventsDashboard from '../src/app/events/page';
 import * as api from '../src/lib/api';
 import type { EventSummary } from '../src/types';
@@ -66,7 +67,20 @@ function signalOf(call: number) {
   return vi.mocked(api.fetchActiveEvents).mock.calls[call][1];
 }
 
+type Deferred = ReturnType<typeof deferred>;
+
+/** The Total Events figure in the summary HUD, or null when the HUD is hidden. */
+function hudTotal() {
+  return screen.queryByText('Total Events')?.nextElementSibling?.textContent ?? null;
+}
+
 const unsuccessful = { success: false, data: { items: [], summary: { total: 0, developing: 0, active: 0, stale: 0 } } };
+
+/** The two ways a request fails: it throws, or the API reports no success. */
+const failures: [string, (request: Deferred) => void][] = [
+  ['throws', request => request.reject(new Error('network down'))],
+  ['is unsuccessful', request => request.resolve(unsuccessful)],
+];
 
 async function changeFilters(rerender: (ui: React.ReactElement) => void, query: string, calls: number) {
   mockSearchParams = new URLSearchParams(query);
@@ -236,5 +250,81 @@ describe('Events page superseded requests', () => {
     unmount();
 
     expect(signalOf(0)?.aborted).toBe(true);
+  });
+});
+
+describe('Events page failure after loaded results', () => {
+  it.each(failures)('hides the previous summary when the filtered request %s', async (_label, fail) => {
+    const failing = deferred();
+    vi.mocked(api.fetchActiveEvents)
+      .mockResolvedValueOnce(eventsResponse(['Chip export rules tighten', 'Model weights leak']))
+      .mockReturnValueOnce(failing.promise);
+
+    const { rerender } = render(<EventsDashboard />);
+    expect(await screen.findByText('Chip export rules tighten')).toBeInTheDocument();
+    expect(hudTotal()).toBe('2');
+
+    await changeFilters(rerender, 'severity=critical', 2);
+    await act(async () => fail(failing));
+
+    expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument();
+    expect(hudTotal()).toBeNull();
+    expect(screen.queryByText('Chip export rules tighten')).not.toBeInTheDocument();
+  });
+
+  it('drops the previous interest matches when the filtered request fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: { preferred_topics: ['chip'], preferred_sources: [] } }),
+    }));
+    vi.mocked(api.fetchActiveEvents)
+      .mockResolvedValueOnce(eventsResponse(['Chip export rules tighten', 'Model weights leak']))
+      .mockRejectedValueOnce(new Error('network down'));
+
+    const { rerender } = render(<EventsDashboard />);
+    const matches = await screen.findByRole('button', { name: /Matched My Interests/ });
+    await waitFor(() => expect(within(matches).getByText('1')).toBeInTheDocument());
+
+    await changeFilters(rerender, 'severity=critical', 2);
+
+    expect(await screen.findByText(ERROR_TEXT)).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /Matched My Interests/ })).queryByText('1')).not.toBeInTheDocument();
+  });
+
+  it('shows the new summary when a request after the failure succeeds', async () => {
+    vi.mocked(api.fetchActiveEvents)
+      .mockResolvedValueOnce(eventsResponse(['Chip export rules tighten', 'Model weights leak']))
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce(eventsResponse(['Datacenter outage']));
+
+    const { rerender } = render(<EventsDashboard />);
+    expect(await screen.findByText('Chip export rules tighten')).toBeInTheDocument();
+
+    await changeFilters(rerender, 'severity=critical', 2);
+    expect(await screen.findByText(ERROR_TEXT)).toBeInTheDocument();
+
+    await changeFilters(rerender, 'severity=high', 3);
+
+    expect(await screen.findByText('Datacenter outage')).toBeInTheDocument();
+    expect(hudTotal()).toBe('1');
+    expect(screen.queryByText(ERROR_TEXT)).not.toBeInTheDocument();
+  });
+
+  it.each(failures)('keeps the newer summary when a superseded request %s', async (_label, fail) => {
+    const older = deferred();
+    vi.mocked(api.fetchActiveEvents)
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(eventsResponse(['Datacenter outage']));
+
+    const { rerender } = render(<EventsDashboard />);
+    await changeFilters(rerender, 'severity=critical', 2);
+    expect(await screen.findByText('Datacenter outage')).toBeInTheDocument();
+    expect(hudTotal()).toBe('1');
+
+    await act(async () => fail(older));
+
+    expect(screen.getByText('Datacenter outage')).toBeInTheDocument();
+    expect(hudTotal()).toBe('1');
+    expect(screen.queryByText(ERROR_TEXT)).not.toBeInTheDocument();
   });
 });
