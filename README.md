@@ -215,10 +215,10 @@ The backend command deploys the top-level configuration in `workers/wrangler.tom
 service binding targets this Worker. The frontend build writes `frontend/.wrangler/deploy/config.json`,
 which points `wrangler deploy` at the generated `frontend/dist/server/wrangler.json`.
 
-**What is live is not necessarily `main`.** As of 2026-10-14 (read-only checks), production runs a
-backend deployed 2026-10-10 and a frontend deployed 2026-09-15. Merges since then are not live, and
-whether migrations 0013 and 0014 are applied to the production database is unverified. See
-"Production state" in the runbook, and recheck before relying on it.
+**What is live is not necessarily `main`.** The last recorded release (2026-10-14) deployed
+`92fbd106` to both Workers, after applying migrations 0012–0014 to the production database. Merges
+after that commit are not live until the next release. See "Release record" in the runbook, and
+recheck with its pre-deployment checks before relying on it.
 
 Do not use `--env production` (or any `--env`). `wrangler.toml` defines no named
 environments, because they do not inherit the D1 and KV bindings. Wrangler does not
