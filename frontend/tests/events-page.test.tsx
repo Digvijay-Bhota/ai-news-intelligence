@@ -1,10 +1,11 @@
 /**
  * Events page: a failed events request shows the error state, and a later
  * successful request (e.g. after a filter change) replaces it with the events.
+ * Responses for superseded filters never replace the current results.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import EventsDashboard from '../src/app/events/page';
 import * as api from '../src/lib/api';
 import type { EventSummary } from '../src/types';
@@ -47,6 +48,24 @@ function eventsResponse(titles: string[]) {
   };
 }
 
+type EventsResult = Awaited<ReturnType<typeof api.fetchActiveEvents>>;
+
+/** A request the test settles explicitly, to control response order. */
+function deferred() {
+  let resolve: (value: EventsResult) => void = () => {};
+  let reject: (reason: unknown) => void = () => {};
+  const promise = new Promise<EventsResult>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** The AbortSignal passed to the nth fetchActiveEvents call. */
+function signalOf(call: number) {
+  return vi.mocked(api.fetchActiveEvents).mock.calls[call][1];
+}
+
 const unsuccessful = { success: false, data: { items: [], summary: { total: 0, developing: 0, active: 0, stale: 0 } } };
 
 async function changeFilters(rerender: (ui: React.ReactElement) => void, query: string, calls: number) {
@@ -56,7 +75,7 @@ async function changeFilters(rerender: (ui: React.ReactElement) => void, query: 
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   mockSearchParams = new URLSearchParams();
   // Preferences are optional for this page; an unavailable endpoint is ignored.
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
@@ -142,7 +161,7 @@ describe('Events page successful loading', () => {
     expect(api.fetchActiveEvents).toHaveBeenCalledTimes(1);
     expect(api.fetchActiveEvents).toHaveBeenLastCalledWith({
       freshness: undefined, severity: undefined, min_articles: undefined, sort: undefined,
-    });
+    }, expect.any(AbortSignal));
 
     await changeFilters(rerender, 'severity=critical&min_articles=5&sort=recent', 2);
 
@@ -151,6 +170,71 @@ describe('Events page successful loading', () => {
     expect(screen.queryByText(ERROR_TEXT)).not.toBeInTheDocument();
     expect(api.fetchActiveEvents).toHaveBeenLastCalledWith({
       freshness: undefined, severity: 'critical', min_articles: 5, sort: 'recent',
-    });
+    }, expect.any(AbortSignal));
+  });
+});
+
+describe('Events page superseded requests', () => {
+  it('keeps the newer results when an older request finishes last', async () => {
+    const older = deferred();
+    vi.mocked(api.fetchActiveEvents)
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(eventsResponse(['Datacenter outage']));
+
+    const { rerender } = render(<EventsDashboard />);
+    await changeFilters(rerender, 'severity=critical', 2);
+    expect(await screen.findByText('Datacenter outage')).toBeInTheDocument();
+
+    await act(async () => older.resolve(eventsResponse(['Chip export rules tighten'])));
+
+    expect(screen.getByText('Datacenter outage')).toBeInTheDocument();
+    expect(screen.queryByText('Chip export rules tighten')).not.toBeInTheDocument();
+    expect(signalOf(0)?.aborted).toBe(true);
+    expect(signalOf(1)?.aborted).toBe(false);
+  });
+
+  it('ignores an older request that fails after newer results are shown', async () => {
+    const older = deferred();
+    vi.mocked(api.fetchActiveEvents)
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(eventsResponse(['Datacenter outage']));
+
+    const { rerender } = render(<EventsDashboard />);
+    await changeFilters(rerender, 'severity=critical', 2);
+    expect(await screen.findByText('Datacenter outage')).toBeInTheDocument();
+
+    await act(async () => older.reject(new Error('network down')));
+
+    expect(screen.getByText('Datacenter outage')).toBeInTheDocument();
+    expect(screen.queryByText(ERROR_TEXT)).not.toBeInTheDocument();
+  });
+
+  it('does not show an older response while the newer request is still loading', async () => {
+    const older = deferred();
+    const newer = deferred();
+    vi.mocked(api.fetchActiveEvents)
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
+
+    const { rerender } = render(<EventsDashboard />);
+    await changeFilters(rerender, 'sort=recent', 2);
+
+    await act(async () => older.resolve(eventsResponse(['Chip export rules tighten'])));
+    expect(screen.queryByText('Chip export rules tighten')).not.toBeInTheDocument();
+    expect(screen.queryByText('No Events Found')).not.toBeInTheDocument();
+
+    await act(async () => newer.resolve(eventsResponse(['Datacenter outage'])));
+    expect(screen.getByText('Datacenter outage')).toBeInTheDocument();
+    expect(screen.queryByText('Chip export rules tighten')).not.toBeInTheDocument();
+  });
+
+  it('aborts the in-flight request when the page unmounts', async () => {
+    vi.mocked(api.fetchActiveEvents).mockReturnValueOnce(deferred().promise);
+
+    const { unmount } = render(<EventsDashboard />);
+    await waitFor(() => expect(api.fetchActiveEvents).toHaveBeenCalledTimes(1));
+    unmount();
+
+    expect(signalOf(0)?.aborted).toBe(true);
   });
 });
