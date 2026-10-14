@@ -32,13 +32,16 @@ export async function handleGetCommunityPosts(request: Request, env: Env, eventH
   const event = await env.DB.prepare('SELECT id FROM events WHERE event_hash = ?').bind(eventHash).first<{ id: number }>();
   if (!event) throw new NotFoundError('Event not found');
   
+  // Profiles are created lazily, so an author may have none: LEFT JOIN keeps
+  // their posts, shown as "Anonymous reader" with a null public id. Nothing is
+  // derived from user_id, which is never returned.
   let q = `
     SELECT p.id, p.body, p.created_at, p.edited_at, p.context_anchor_type, p.context_anchor_id,
-           u.public_id as author_public_id, u.display_name as author_display_name,
+           u.public_id as author_public_id, COALESCE(u.display_name, 'Anonymous reader') as author_display_name,
            (SELECT COUNT(*) FROM community_votes v WHERE v.post_id = p.id) as upvotes,
            (SELECT COUNT(*) FROM community_posts r WHERE r.parent_id = p.id AND r.status IN ('active', 'flagged')) as reply_count
     FROM community_posts p
-    JOIN user_profiles u ON p.user_id = u.user_id
+    LEFT JOIN user_profiles u ON p.user_id = u.user_id
     WHERE p.event_id = ? AND p.parent_id IS NULL AND p.status IN ('active', 'flagged')
   `;
   const params: any[] = [event.id];
@@ -107,12 +110,13 @@ export async function handleCreateCommunityPost(request: Request, env: Env, auth
 }
 
 export async function handleGetCommunityReplies(_request: Request, env: Env, postId: string): Promise<Response> {
+  // Same author handling as handleGetCommunityPosts.
   const q = `
     SELECT p.id, p.body, p.created_at, p.edited_at,
-           u.public_id as author_public_id, u.display_name as author_display_name,
+           u.public_id as author_public_id, COALESCE(u.display_name, 'Anonymous reader') as author_display_name,
            (SELECT COUNT(*) FROM community_votes v WHERE v.post_id = p.id) as upvotes
     FROM community_posts p
-    JOIN user_profiles u ON p.user_id = u.user_id
+    LEFT JOIN user_profiles u ON p.user_id = u.user_id
     WHERE p.parent_id = ? AND p.status IN ('active', 'flagged')
     ORDER BY p.created_at ASC LIMIT 100
   `;
