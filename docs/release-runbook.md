@@ -183,20 +183,69 @@ Roll back the frontend and backend independently, newest first.
 **Go** only when every check in A passes, the migration plan in B is approved, and someone is
 available to run D and E.
 
-## Production state at the time of writing (2026-10-14)
+## Release record
 
-Observed with read-only `wrangler deployments list` and the Cloudflare API. It is out of date
-the moment someone deploys; recheck with A.6 and A.7.
+### 2026-10-14 — release of `92fbd1068eec87eb84c25346b2015ebac55dbb26`
 
-| | Backend `ai-news-intelligence` | Frontend `frontend` |
-|---|---|---|
-| Serving version | `613a3ea9…`, deployed 2026-10-10 20:00 UTC | `bfb3b13f…`, deployed 2026-09-15 17:00 UTC |
-| Previous version | `61f421c5…` (2026-09-18) | `20b2f6ab…` (2026-09-15) |
-| Source commit | Not recorded by Cloudflare. Likely `45a753f` (main, PR #8, merged 33 minutes before the deploy). **Unconfirmed.** | Not recorded. **Unknown** |
-| Merged to `main` after the deploy | 8 merges touching `workers/` or `d1/`: #9, #10, #11, #12, #13, #15, #16, #21 | 12 merges touching `frontend/`: #7, #14, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27 |
+Approved by the repository owner; performed with Wrangler 3.114.17 from a clean, locked worktree
+at that commit. Frontend CI and Workers CI passed on the exact commit. Times are UTC.
 
-**D1 (`ai-news-db`):** 38 tables (Cloudflare API). Whether **0013** and **0014** are applied is
-**unknown**. Both files say they were not applied by their PRs. Run the checks in
-[Migrations](#migrations-how-this-project-applies-them) before any backend deploy. The backend on
-`main` writes the 0014 columns on every ingested article, so deploying it without 0014 stops
-ingestion.
+**Pre-release production state** (read-only checks before any write):
+
+- Backend served `613a3ea9-d5de-427d-a224-017a7e514d33` (deployed 2026-10-10 20:00); frontend
+  served `bfb3b13f-a36d-4845-bdd5-11e554c727e8` (deployed 2026-09-15 17:00). Neither records a
+  source commit.
+- D1: migrations 0001–0011 present (every object they create exists; their added columns exist).
+  **0012 not applied** (TechCrunch and The Verge had no feed URL and were `unconfigured`, so only
+  Ars Technica was ingesting), **0013 not applied** (no `gemini_escalation_budget`), **0014 not
+  applied** (neither image column; not partial).
+- D1 recovery bookmark captured at 10:50:24, immediately before the first write:
+  `0000052a-0000000a-00005104-403332aa8a3b586af104a60d7cc5bb9c` (not used).
+
+**Changes** (each checked immediately before and after):
+
+| Step | Time | Before | After |
+|---|---|---|---|
+| Migration 0012 | 10:50 | both feed URLs `NULL` | `https://techcrunch.com/feed/`, `https://www.theverge.com/rss/index.xml`; Ars Technica unchanged |
+| Migration 0013 | 10:51 | table absent | `gemini_escalation_budget` with PK `(bucket_date, model)`, `reserved_count` default 0, `updated_at` default `unixepoch()` |
+| Migration 0014 | 10:51 | 13 columns, 0 of 2 image columns | `image_url` and `image_credit` present, nullable `TEXT`, no default |
+| Backend deploy | 10:52 | `613a3ea9…` | `720f79d8-bc35-49e2-8e22-bf865546f635` (100%) |
+| Frontend deploy | 11:07 | `bfb3b13f…` | `d87005b1-de7a-4014-bb1e-210d5f1f7d2c` (100%) |
+
+Rollback targets if needed: backend `613a3ea9-d5de-427d-a224-017a7e514d33`, frontend
+`bfb3b13f-a36d-4845-bdd5-11e554c727e8` (see E). The three migrations are additive and stay.
+
+**Verification after the release:**
+
+- Backend `/api/v1/health` healthy. Between the backend and frontend deploys, the previously
+  deployed frontend worked against the new backend: the 12 signed `/api/*` routes tested through it
+  returned 200.
+- 11:00 cron: outcome `ok`, no exceptions, no errors mentioning `image_url`/`image_credit`.
+  `articles_raw` grew from 453 to 483 (TechCrunch 20, The Verge 10); all three sources
+  `healthy`; a new event brief at 11:06. The Verge's new articles carry `image_url` (its image
+  host is allow-listed); TechCrunch's do not (not allow-listed).
+- 12:00 cron: outcome `ok`, no exceptions. `articles_raw` grew from 483 to 486 (TechCrunch 1,
+  The Verge 2); all three sources configured and `healthy`; 4 new event briefs (latest 12:03).
+- Frontend: all routes in D returned 200; 14 data routes returned `success: true`. A headless
+  Chromium session (read-only: every non-GET `/api/*` request blocked) exercised the Daily
+  Briefing, Feed with Load more, topic/source/search filters and Clear All, Topics and a topic page,
+  Events with Freshness/Severity/Ranking filters and Reset Filters, event detail with Community
+  discussion, article detail with Key Entities, For You, Settings (not submitted) and Saved.
+
+**Open items after this release** (none blocks it):
+
+- Community "Load More" was not exercised live: no event has more than 50 posts. It is covered by
+  `frontend/tests/community-discussion.test.tsx`.
+- Index `idx_article_events_event_id` is in `d1/schema.sql` but no migration creates it, so
+  production lacks it. Lookups of `article_events` by `event_id` scan the table (255 rows on
+  2026-10-14).
+- Table `rate_limit_logs_backup` exists in production only, apparently a manual copy of
+  `rate_limit_logs` (its untyped columns match `CREATE TABLE … AS SELECT`): 4,657 rows, window
+  2026-08-30 to 2026-09-18, used by no code, with IP-address-like identifiers. Its origin is
+  unrecorded; keep or remove it as a separate, reviewed decision.
+- Community listings inner-join `user_profiles` (`workers/src/community.ts`; the join was added
+  on 2026-09-13 and this release does not change the file), so posts whose author has no profile
+  are not shown: 3 of the 7 posts in production. Pre-existing; not caused by this release.
+- Wrangler's `d1_migrations` table records only 0005 and 0007; do not use `d1 migrations list`.
+
+Record each future release here in the same form.
