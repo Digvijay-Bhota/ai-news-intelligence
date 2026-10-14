@@ -46,6 +46,13 @@ function EventsDashboardInner() {
   // aborted request leaves state alone, so older results never replace newer ones.
   useEffect(() => {
     const controller = new AbortController();
+    // The error replaces the previous results, so the summary HUD never shows
+    // figures for earlier filters next to it.
+    function showError() {
+      setEvents([]);
+      setSummary(null);
+      setError(true);
+    }
     async function load() {
       try {
         const res = await fetchActiveEvents({
@@ -60,12 +67,12 @@ function EventsDashboardInner() {
           setSummary(res.data.summary);
           setError(false);
         } else {
-          setError(true);
+          showError();
         }
       } catch (err) {
         if (controller.signal.aborted) return;
         console.error(err);
-        setError(true);
+        showError();
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
