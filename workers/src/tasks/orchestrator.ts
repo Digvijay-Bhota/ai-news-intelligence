@@ -6,7 +6,7 @@ import type { Env } from '../types';
 import { createDbClient } from '../db/client';
 import { fetchAndIngest, hasFeedUrl } from './fetcher';
 import { processArticle } from './processor';
-import { computeArticleFingerprint, generateAndSaveEventBrief } from './brief-generator';
+import { computeArticleFingerprint, EventBriefLeaseHeldError, generateAndSaveEventBrief } from './brief-generator';
 import { generateAndSaveNarrativeDelta } from './narrative-delta-generator';
 import { generateAndSaveClaimComparisons } from './claim-comparison-generator';
 import { generateCommunitySignalsForEvent } from './community-signal-generator';
@@ -59,6 +59,8 @@ export interface PipelineRunSummary {
     generated: number;
     failed: number;
     deferred: number;
+    /** Another worker was already generating the brief for this event state. */
+    in_progress: number;
   } | null;
 }
 
@@ -215,7 +217,7 @@ export async function runPipeline(env: Env): Promise<void> {
     }
 
     // 4. Grounded AI Event Brief Generation (its errors never fail the run)
-    const briefs: NonNullable<PipelineRunSummary['briefs']> = { state: 'skipped', events: 0, generated: 0, failed: 0, deferred: 0 };
+    const briefs: NonNullable<PipelineRunSummary['briefs']> = { state: 'skipped', events: 0, generated: 0, failed: 0, deferred: 0, in_progress: 0 };
     summary.briefs = briefs;
     try {
       const tableReady = typeof db.hasEventBriefsTable === 'function' ? await db.hasEventBriefsTable() : true;
@@ -250,6 +252,7 @@ export async function runPipeline(env: Env): Promise<void> {
 
               // Skip if another worker is actively generating for this exact state within lease timeout
               if (isMatch && latestBrief.status === 'generating' && (now - latestBrief.updated_at) < 300) {
+                briefs.in_progress++;
                 continue;
               }
 
@@ -258,23 +261,17 @@ export async function runPipeline(env: Env): Promise<void> {
                 continue;
               }
 
-              let newBrief: Awaited<ReturnType<typeof generateAndSaveEventBrief>>;
-              try {
-                newBrief = await generateAndSaveEventBrief(
-                  env,
-                  {
-                    id: event.id,
-                    hash: event.event_hash,
-                    title: event.title,
-                    description: event.description,
-                    severity: event.severity,
-                  },
-                  detail.articles
-                );
-              } catch (briefErr) {
-                briefs[briefErr instanceof GeminiDeferredError ? 'deferred' : 'failed']++;
-                throw briefErr;
-              }
+              const newBrief = await generateAndSaveEventBrief(
+                env,
+                {
+                  id: event.id,
+                  hash: event.event_hash,
+                  title: event.title,
+                  description: event.description,
+                  severity: event.severity,
+                },
+                detail.articles
+              );
               briefs.generated++;
 
               // Phase 10: Narrative Delta (if Version >= 2 and previous brief exists)
@@ -307,8 +304,11 @@ export async function runPipeline(env: Env): Promise<void> {
                 newBrief,
                 detail.articles
               ).catch(() => null);
-            } catch (_briefErr) {
-              // Failure on individual event brief does not block other events
+            } catch (briefErr) {
+              // Failure on individual event brief does not block other events.
+              // Later steps catch their own errors, so this is the brief itself.
+              if (briefErr instanceof EventBriefLeaseHeldError) briefs.in_progress++;
+              else briefs[briefErr instanceof GeminiDeferredError ? 'deferred' : 'failed']++;
             }
           }
         }

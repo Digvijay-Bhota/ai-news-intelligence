@@ -136,7 +136,7 @@ describe('Pipeline-run summary (local D1)', () => {
       processing: { attempted: 3, succeeded: 3, failed: 0, deferred: 0 },
       retries: { attempted: 0, succeeded: 0, failed: 0, deferred: 0 },
       stale_articles_recovered: 0,
-      briefs: { state: 'ran', events: 0, generated: 0, failed: 0, deferred: 0 },
+      briefs: { state: 'ran', events: 0, generated: 0, failed: 0, deferred: 0, in_progress: 0 },
     });
     expect(summary.started_at).toBeGreaterThanOrEqual(before);
     expect(summary.completed_at).toBeGreaterThanOrEqual(summary.started_at);
@@ -294,6 +294,8 @@ describe('Stale pipeline-job recovery (local D1)', () => {
       expect(row.status).toBe('failed');
       expect(row.completed_at).toBeGreaterThanOrEqual(now);
       expect(row.error_message).toMatch(/still running after 900s/);
+      // The run never recorded a summary, so none is invented.
+      expect(row.result).toBeNull();
     }
     expect(await job(freshRun)).toMatchObject({ status: 'running', completed_at: null, error_message: null });
     expect(await job(completed)).toMatchObject({ status: 'completed', completed_at: now - 4970, error_message: null });

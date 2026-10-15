@@ -159,6 +159,13 @@ export function validateEventBrief(
   data.source_references = deduplicatedRefs;
 }
 
+/** Another worker holds the generation lease for this event state; nothing failed. */
+export class EventBriefLeaseHeldError extends Error {
+  constructor(eventId: number) {
+    super(`Generation in progress: another worker holds active lease for event ${eventId}`);
+  }
+}
+
 /**
  * Generates and durably persists an AI Event Brief with provenance and fingerprint tracking.
  */
@@ -209,7 +216,7 @@ export async function generateAndSaveEventBrief(
 
   if (!lease) {
     if (existing && existing.status === 'completed') return existing;
-    throw new Error(`Generation in progress: another worker holds active lease for event ${event.id}`);
+    throw new EventBriefLeaseHeldError(event.id);
   }
 
   // 3b. Track the AI job only once this worker holds the lease, so a lease

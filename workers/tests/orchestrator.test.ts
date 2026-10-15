@@ -504,7 +504,37 @@ describe('Orchestrator', () => {
       await runPipeline(env);
 
       expect(briefSpy).toHaveBeenCalledTimes(3);
-      expect(persistedSummary(db).briefs).toEqual({ state: 'ran', events: 4, generated: 1, failed: 1, deferred: 1 });
+      expect(persistedSummary(db).briefs).toEqual({ state: 'ran', events: 4, generated: 1, failed: 1, deferred: 1, in_progress: 0 });
+    });
+
+    it('counts a held generation lease as in progress, a cooldown as neither, and a lookup error as failed', async () => {
+      const env = createMockEnv();
+      const now = Math.floor(Date.now() / 1000);
+      const events = [1, 2, 3, 4].map((id) => ({ id, event_hash: `hash-${id}`, title: 'T', description: null, severity: 'info' }));
+      const latest: Record<number, unknown> = {
+        1: { article_fingerprint: 'fp', status: 'generating', updated_at: now - 60, version: 1 }, // another worker holds the lease
+        3: { article_fingerprint: 'fp', status: 'failed', updated_at: now - 60, version: 1 }, // failed recently: cooldown
+      };
+      const db = baseDb({
+        getRecentActiveEvents: vi.fn().mockResolvedValue(events),
+        getEventDetailByHash: vi.fn(async (hash: string) => {
+          if (hash === 'hash-4') throw new Error('detail query failed');
+          return { articles: [{ id: 1, source_id: 1, published_at: 1000 }] };
+        }),
+        getLatestEventBrief: vi.fn(async (eventId: number) => latest[eventId] ?? null),
+      });
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(db as any);
+      vi.spyOn(commGenModule, 'generateCommunitySignalsForEvent').mockResolvedValue(undefined as any);
+      vi.spyOn(briefGenModule, 'computeArticleFingerprint').mockResolvedValue('fp');
+      // Event 2: the lease was taken between the pipeline's check and its own lease attempt.
+      const briefSpy = vi.spyOn(briefGenModule, 'generateAndSaveEventBrief')
+        .mockRejectedValueOnce(new briefGenModule.EventBriefLeaseHeldError(2));
+
+      await runPipeline(env);
+
+      expect(briefSpy).toHaveBeenCalledTimes(1);
+      expect(db.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined, expect.any(String));
+      expect(persistedSummary(db).briefs).toEqual({ state: 'ran', events: 4, generated: 0, failed: 1, deferred: 0, in_progress: 2 });
     });
 
     it('records a brief stage error without failing the run', async () => {
@@ -515,7 +545,7 @@ describe('Orchestrator', () => {
       await runPipeline(env);
 
       expect(db.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined, expect.any(String));
-      expect(persistedSummary(db).briefs).toEqual({ state: 'errored', events: 0, generated: 0, failed: 0, deferred: 0 });
+      expect(persistedSummary(db).briefs).toEqual({ state: 'errored', events: 0, generated: 0, failed: 0, deferred: 0, in_progress: 0 });
     });
 
     it('records a skipped brief stage when event_briefs is not migrated', async () => {
@@ -525,7 +555,7 @@ describe('Orchestrator', () => {
 
       await runPipeline(env);
 
-      expect(persistedSummary(db).briefs).toEqual({ state: 'skipped', events: 0, generated: 0, failed: 0, deferred: 0 });
+      expect(persistedSummary(db).briefs).toEqual({ state: 'skipped', events: 0, generated: 0, failed: 0, deferred: 0, in_progress: 0 });
     });
 
     it('records a thrown source fetch as down with unknown counts and keeps its error', async () => {
