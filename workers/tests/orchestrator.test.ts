@@ -6,6 +6,7 @@ import * as fetcherModule from '../src/tasks/fetcher';
 import * as processorModule from '../src/tasks/processor';
 import * as briefGenModule from '../src/tasks/brief-generator';
 import * as commGenModule from '../src/tasks/community-signal-generator';
+import * as claimGenModule from '../src/tasks/claim-comparison-generator';
 import { GeminiDeferredError } from '../src/tasks/model-router';
 
 describe('Orchestrator', () => {
@@ -13,6 +14,7 @@ describe('Orchestrator', () => {
     const env = createMockEnv();
     const mockDbClient = {
       createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+      recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
       listSources: vi.fn().mockResolvedValue([{ id: 1, feed_url: 'u' }]),
       getSourceHealth: vi.fn().mockResolvedValue(null),
       updateSourceHealth: vi.fn(),
@@ -24,7 +26,7 @@ describe('Orchestrator', () => {
       recoverStaleProcessingArticles: vi.fn(),
     };
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
-    const fetchSpy = vi.spyOn(fetcherModule, 'fetchAndIngest').mockResolvedValue(1);
+    const fetchSpy = vi.spyOn(fetcherModule, 'fetchAndIngest').mockResolvedValue({ parsed: 1, inserted: 1, newest_published_at: null });
     const processSpy = vi.spyOn(processorModule, 'processArticle').mockResolvedValue(undefined);
 
     await runPipeline(env);
@@ -32,13 +34,14 @@ describe('Orchestrator', () => {
     expect(fetchSpy).toHaveBeenCalled();
     expect(processSpy).toHaveBeenCalled();
     expect(mockDbClient.updateSourceHealth).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'healthy' }));
-    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined);
+    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined, expect.any(String));
   });
 
   it('isolates failures', async () => {
     const env = createMockEnv();
     const mockDbClient = {
       createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+      recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
       listSources: vi.fn().mockResolvedValue([{ id: 1, feed_url: 'u' }]),
       getSourceHealth: vi.fn().mockResolvedValue(null),
       updateSourceHealth: vi.fn(),
@@ -58,13 +61,14 @@ describe('Orchestrator', () => {
 
     expect(mockDbClient.updateSourceHealth).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'down', error_message: 'Fetch fail' }));
     expect(mockDbClient.updateArticleStatus).toHaveBeenCalledWith(1, 'failed');
-    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined);
+    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined, expect.any(String));
   });
 
   it('correctly finalizes pipeline on unexpected error', async () => {
     const env = createMockEnv();
     const mockDbClient = {
       createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+      recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
       listSources: vi.fn().mockRejectedValue(new Error('Fatal DB Error')),
       updatePipelineJobStatus: vi.fn(),
       recoverStaleProcessingArticles: vi.fn(),
@@ -72,7 +76,7 @@ describe('Orchestrator', () => {
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
 
     await expect(runPipeline(env)).rejects.toThrow('Fatal DB Error');
-    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'failed', 'Fatal DB Error');
+    expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'failed', 'Fatal DB Error', expect.any(String));
   });
 
   describe('Unified Retry and Budget Mechanism', () => {
@@ -81,6 +85,7 @@ describe('Orchestrator', () => {
       const mockArticles = Array.from({ length: 25 }, (_, i) => ({ id: i + 1 }));
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: mockArticles }),
         claimArticle: vi.fn().mockResolvedValue(true),
@@ -104,6 +109,7 @@ describe('Orchestrator', () => {
       const mockRetries = Array.from({ length: 10 }, (_, i) => ({ id: i + 100 }));
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: mockPending }),
         claimArticle: vi.fn().mockResolvedValue(true),
@@ -130,6 +136,7 @@ describe('Orchestrator', () => {
       const mockRetries = [{ id: 3 }, { id: 4 }];
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: mockPending }),
         // First pending claim fails, second succeeds
@@ -156,6 +163,7 @@ describe('Orchestrator', () => {
       const mockRetries = [{ id: 100 }];
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: [] }),
         claimArticle: vi.fn(),
@@ -179,6 +187,7 @@ describe('Orchestrator', () => {
       const env = createMockEnv();
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: [] }),
         listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
@@ -202,7 +211,7 @@ describe('Orchestrator', () => {
       expect(commSpy).toHaveBeenCalledTimes(2);
       expect(commSpy).toHaveBeenNthCalledWith(1, env, 1);
       expect(commSpy).toHaveBeenNthCalledWith(2, env, 2);
-      expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined);
+      expect(mockDbClient.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined, expect.any(String));
     });
   });
 
@@ -211,6 +220,7 @@ describe('Orchestrator', () => {
       const env = createMockEnv();
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: [] }),
         listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
@@ -235,6 +245,7 @@ describe('Orchestrator', () => {
       const fp = 'deterministic-fp-123';
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: [] }),
         listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
@@ -267,6 +278,7 @@ describe('Orchestrator', () => {
       const now = Math.floor(Date.now() / 1000);
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: [] }),
         listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
@@ -298,6 +310,7 @@ describe('Orchestrator', () => {
       const newFp = 'new-fp-456';
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: [] }),
         listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
@@ -329,6 +342,7 @@ describe('Orchestrator', () => {
       const mockArticles = [{ id: 1 }, { id: 2 }];
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: mockArticles }),
         claimArticle: vi.fn().mockResolvedValue(true),
@@ -357,6 +371,7 @@ describe('Orchestrator', () => {
       const mockRetries = [{ id: 100 }, { id: 101 }];
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: [] }),
         claimArticle: vi.fn(),
@@ -383,6 +398,7 @@ describe('Orchestrator', () => {
       const mockArticles = [{ id: 1 }];
       const mockDbClient = {
         createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
         listSources: vi.fn().mockResolvedValue([]),
         listArticles: vi.fn().mockResolvedValue({ articles: mockArticles }),
         claimArticle: vi.fn().mockResolvedValue(true),
@@ -400,6 +416,167 @@ describe('Orchestrator', () => {
 
       expect(processSpy).toHaveBeenCalledTimes(1);
       expect(mockDbClient.claimFailedArticle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Run summary counters', () => {
+    function baseDb(overrides: Record<string, unknown> = {}): Record<string, any> {
+      return {
+        createPipelineJob: vi.fn().mockResolvedValue({ id: 1 }),
+        recoverStalePipelineJobs: vi.fn().mockResolvedValue(0),
+        listSources: vi.fn().mockResolvedValue([]),
+        listArticles: vi.fn().mockResolvedValue({ articles: [] }),
+        claimArticle: vi.fn().mockResolvedValue(true),
+        listRetryableFailedArticles: vi.fn().mockResolvedValue([]),
+        claimFailedArticle: vi.fn().mockResolvedValue(true),
+        updateArticleStatus: vi.fn(),
+        updatePipelineJobStatus: vi.fn(),
+        recoverStaleProcessingArticles: vi.fn().mockResolvedValue(0),
+        hasEventBriefsTable: vi.fn().mockResolvedValue(true),
+        getRecentActiveEvents: vi.fn().mockResolvedValue([]),
+        ...overrides,
+      };
+    }
+
+    function persistedSummary(db: Record<string, any>) {
+      const call = db.updatePipelineJobStatus.mock.calls.at(-1)!;
+      return JSON.parse(call[3]);
+    }
+
+    it('counts pending attempts, failures and a deferral separately; a deferral is not a failure', async () => {
+      const env = createMockEnv();
+      const db = baseDb({
+        listArticles: vi.fn().mockResolvedValue({ articles: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }] }),
+        recoverStaleProcessingArticles: vi.fn().mockResolvedValue(2),
+      });
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(db as any);
+      vi.spyOn(processorModule, 'processArticle')
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('Enrichment failed'))
+        .mockRejectedValueOnce(new GeminiDeferredError('enrichment', 'models_unavailable', [], null));
+
+      await runPipeline(env);
+
+      expect(db.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined, expect.any(String));
+      const summary = persistedSummary(db);
+      expect(summary.processing).toEqual({ attempted: 3, succeeded: 1, failed: 1, deferred: 1 });
+      // The deferral ends article processing, so the retry pass makes no attempts.
+      expect(summary.retries).toEqual({ attempted: 0, succeeded: 0, failed: 0, deferred: 0 });
+      expect(summary.stale_articles_recovered).toBe(2);
+    });
+
+    it('counts retry attempts, failures and a deferral', async () => {
+      const env = createMockEnv();
+      const db = baseDb({
+        listRetryableFailedArticles: vi.fn().mockResolvedValue([{ id: 100 }, { id: 101 }, { id: 102 }, { id: 103 }]),
+      });
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(db as any);
+      vi.spyOn(processorModule, 'processArticle')
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('Retry failed'))
+        .mockRejectedValueOnce(new GeminiDeferredError('enrichment', 'models_unavailable', [], null));
+
+      await runPipeline(env);
+
+      const summary = persistedSummary(db);
+      expect(summary.processing).toEqual({ attempted: 0, succeeded: 0, failed: 0, deferred: 0 });
+      expect(summary.retries).toEqual({ attempted: 3, succeeded: 1, failed: 1, deferred: 1 });
+    });
+
+    it('counts briefs generated, failed and deferred, ignoring events whose brief is current', async () => {
+      const env = createMockEnv();
+      const events = [1, 2, 3, 4].map((id) => ({ id, event_hash: `hash-${id}`, title: 'T', description: null, severity: 'info' }));
+      const db = baseDb({
+        getRecentActiveEvents: vi.fn().mockResolvedValue(events),
+        getEventDetailByHash: vi.fn().mockResolvedValue({ articles: [{ id: 1, source_id: 1, published_at: 1000 }] }),
+        getLatestEventBrief: vi.fn(async (eventId: number) =>
+          eventId === 4 ? { article_fingerprint: 'fp', status: 'completed', version: 1 } : null),
+      });
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(db as any);
+      vi.spyOn(commGenModule, 'generateCommunitySignalsForEvent').mockResolvedValue(undefined as any);
+      vi.spyOn(briefGenModule, 'computeArticleFingerprint').mockResolvedValue('fp');
+      vi.spyOn(claimGenModule, 'generateAndSaveClaimComparisons').mockResolvedValue([] as any);
+      const briefSpy = vi.spyOn(briefGenModule, 'generateAndSaveEventBrief')
+        .mockResolvedValueOnce({ id: 10, version: 1 } as any)
+        .mockRejectedValueOnce(new Error('Brief failed'))
+        .mockRejectedValueOnce(new GeminiDeferredError('event_brief', 'models_unavailable', [], null));
+
+      await runPipeline(env);
+
+      expect(briefSpy).toHaveBeenCalledTimes(3);
+      expect(persistedSummary(db).briefs).toEqual({ state: 'ran', events: 4, generated: 1, failed: 1, deferred: 1, in_progress: 0 });
+    });
+
+    it('counts a held generation lease as in progress, a cooldown as neither, and a lookup error as failed', async () => {
+      const env = createMockEnv();
+      const now = Math.floor(Date.now() / 1000);
+      const events = [1, 2, 3, 4].map((id) => ({ id, event_hash: `hash-${id}`, title: 'T', description: null, severity: 'info' }));
+      const latest: Record<number, unknown> = {
+        1: { article_fingerprint: 'fp', status: 'generating', updated_at: now - 60, version: 1 }, // another worker holds the lease
+        3: { article_fingerprint: 'fp', status: 'failed', updated_at: now - 60, version: 1 }, // failed recently: cooldown
+      };
+      const db = baseDb({
+        getRecentActiveEvents: vi.fn().mockResolvedValue(events),
+        getEventDetailByHash: vi.fn(async (hash: string) => {
+          if (hash === 'hash-4') throw new Error('detail query failed');
+          return { articles: [{ id: 1, source_id: 1, published_at: 1000 }] };
+        }),
+        getLatestEventBrief: vi.fn(async (eventId: number) => latest[eventId] ?? null),
+      });
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(db as any);
+      vi.spyOn(commGenModule, 'generateCommunitySignalsForEvent').mockResolvedValue(undefined as any);
+      vi.spyOn(briefGenModule, 'computeArticleFingerprint').mockResolvedValue('fp');
+      // Event 2: the lease was taken between the pipeline's check and its own lease attempt.
+      const briefSpy = vi.spyOn(briefGenModule, 'generateAndSaveEventBrief')
+        .mockRejectedValueOnce(new briefGenModule.EventBriefLeaseHeldError(2));
+
+      await runPipeline(env);
+
+      expect(briefSpy).toHaveBeenCalledTimes(1);
+      expect(db.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined, expect.any(String));
+      expect(persistedSummary(db).briefs).toEqual({ state: 'ran', events: 4, generated: 0, failed: 1, deferred: 0, in_progress: 2 });
+    });
+
+    it('records a brief stage error without failing the run', async () => {
+      const env = createMockEnv();
+      const db = baseDb({ getRecentActiveEvents: vi.fn().mockRejectedValue(new Error('events query failed')) });
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(db as any);
+
+      await runPipeline(env);
+
+      expect(db.updatePipelineJobStatus).toHaveBeenCalledWith(1, 'completed', undefined, expect.any(String));
+      expect(persistedSummary(db).briefs).toEqual({ state: 'errored', events: 0, generated: 0, failed: 0, deferred: 0, in_progress: 0 });
+    });
+
+    it('records a skipped brief stage when event_briefs is not migrated', async () => {
+      const env = createMockEnv();
+      const db = baseDb({ hasEventBriefsTable: vi.fn().mockResolvedValue(false) });
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(db as any);
+
+      await runPipeline(env);
+
+      expect(persistedSummary(db).briefs).toEqual({ state: 'skipped', events: 0, generated: 0, failed: 0, deferred: 0, in_progress: 0 });
+    });
+
+    it('records a thrown source fetch as down with unknown counts and keeps its error', async () => {
+      const env = createMockEnv();
+      const db = baseDb({
+        listSources: vi.fn().mockResolvedValue([{ id: 1, name: 'Up', feed_url: 'u1' }, { id: 2, name: 'Down', feed_url: 'u2' }]),
+        getSourceHealth: vi.fn().mockResolvedValue(null),
+        updateSourceHealth: vi.fn(),
+      });
+      vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(db as any);
+      vi.spyOn(fetcherModule, 'fetchAndIngest')
+        .mockResolvedValueOnce({ parsed: 5, inserted: 2, newest_published_at: 1700000000 })
+        .mockRejectedValueOnce(new Error('Fetch fail'));
+
+      await runPipeline(env);
+
+      expect(persistedSummary(db).sources).toEqual([
+        { id: 1, name: 'Up', outcome: 'healthy', parsed: 5, inserted: 2, newest_published_at: 1700000000, error: null },
+        { id: 2, name: 'Down', outcome: 'down', parsed: null, inserted: null, newest_published_at: null, error: 'Fetch fail' },
+      ]);
+      expect(db.updateSourceHealth).toHaveBeenCalledWith(2, expect.objectContaining({ status: 'down', error_message: 'Fetch fail' }));
     });
   });
 });

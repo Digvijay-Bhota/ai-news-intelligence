@@ -133,8 +133,8 @@ describe('Starter source initialization (local D1)', () => {
     const techcrunch = rows.find((r) => r.name === 'TechCrunch')!;
     const ars = rows.find((r) => r.name === 'Ars Technica')!;
 
-    expect(await fetchAndIngest(env, techcrunch)).toBe(1);
-    expect(await fetchAndIngest(env, ars)).toBe(0);
+    expect((await fetchAndIngest(env, techcrunch)).inserted).toBe(1);
+    expect((await fetchAndIngest(env, ars)).inserted).toBe(0);
     expect(fetchStub).toHaveBeenCalledTimes(1);
 
     const article = await DB.prepare('SELECT * FROM articles_raw WHERE external_id = ?1').bind('seed-fixture-1').first<any>();

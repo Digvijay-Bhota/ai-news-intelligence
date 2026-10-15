@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // @ts-expect-error -- untyped pool runtime module (see header comment)
 import { env as workerEnv } from 'cloudflare:test-internal';
 import schemaSql from '../../d1/schema.sql?raw';
-import { computeArticleFingerprint, generateAndSaveEventBrief } from '../src/tasks/brief-generator';
+import { computeArticleFingerprint, EventBriefLeaseHeldError, generateAndSaveEventBrief } from '../src/tasks/brief-generator';
 import * as geminiModule from '../src/tasks/gemini';
 import { createMockEnv } from './setup';
 import type { ArticleRaw } from '../src/types';
@@ -106,7 +106,9 @@ describe('Event brief generation lease and AI job lifecycle (local D1)', () => {
     await holdLease(heldAt);
     const gemini = vi.spyOn(geminiModule, 'generateEventBriefFromGemini');
 
-    await expect(generate()).rejects.toThrow(/Generation in progress/);
+    const held = generate();
+    await expect(held).rejects.toThrow(/Generation in progress/);
+    await expect(held).rejects.toBeInstanceOf(EventBriefLeaseHeldError);
 
     expect(await aiJobs()).toEqual([]);
     expect(gemini).not.toHaveBeenCalled();

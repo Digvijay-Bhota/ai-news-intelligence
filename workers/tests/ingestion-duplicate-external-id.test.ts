@@ -87,12 +87,12 @@ describe('Ingestion with an edited title and an unchanged external_id (local D1)
     const env = createMockEnv({ DB });
 
     serveFeed(FIRST_FEED);
-    expect(await fetchAndIngest(env, source)).toBe(1);
+    expect((await fetchAndIngest(env, source)).inserted).toBe(1);
     const original = await article('dup-x');
     expect(original).toMatchObject({ title: 'Original title', source_id: source.id });
 
     serveFeed(SECOND_FEED);
-    await expect(fetchAndIngest(env, source)).resolves.toBe(2);
+    await expect(fetchAndIngest(env, source)).resolves.toMatchObject({ inserted: 2 });
 
     expect(await article('dup-new')).toMatchObject({ title: 'Brand new story', source_id: source.id, status: 'pending' });
     expect(await article('dup-after')).toMatchObject({
@@ -108,7 +108,7 @@ describe('Ingestion with an edited title and an unchanged external_id (local D1)
     const env = createMockEnv({ DB });
 
     serveFeed(FIRST_FEED);
-    expect(await fetchAndIngest(env, source)).toBe(1);
+    expect((await fetchAndIngest(env, source)).inserted).toBe(1);
 
     serveFeed(SECOND_FEED);
     await runPipeline(env);

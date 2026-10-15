@@ -493,11 +493,11 @@ export class DbClient {
     const startedAt = job.status === 'running' ? now : (job.started_at ?? null);
     const result = await this.db
       .prepare(
-        `INSERT INTO pipeline_jobs (job_type, status, payload, created_at, started_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        `INSERT INTO pipeline_jobs (job_type, status, payload, result, created_at, started_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          RETURNING *`
       )
-      .bind(job.job_type, job.status ?? 'queued', job.payload ?? null, now, startedAt)
+      .bind(job.job_type, job.status ?? 'queued', job.payload ?? null, job.result ?? null, now, startedAt)
       .first<PipelineJob>();
     if (!result) throw new Error('Failed to create pipeline job');
     return result;
@@ -691,14 +691,36 @@ export class DbClient {
     return r.results ?? [];
   }
 
-  async updatePipelineJobStatus(id: number, status: string, error?: string | null): Promise<void> {
+  /** An omitted `result` keeps the stored one. */
+  async updatePipelineJobStatus(id: number, status: string, error?: string | null, result?: string): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     await this.db
       .prepare(
-        'UPDATE pipeline_jobs SET status = ?1, error_message = ?2, completed_at = ?3 WHERE id = ?4'
+        'UPDATE pipeline_jobs SET status = ?1, error_message = ?2, completed_at = ?3, result = COALESCE(?5, result) WHERE id = ?4'
       )
-      .bind(status, error ?? null, now, id)
+      .bind(status, error ?? null, now, id, result ?? null)
       .run();
+  }
+
+  /**
+   * Fails pipeline-run jobs still 'running' after `timeoutSeconds`. A scheduled
+   * run is capped at 15 minutes, so such a job was cut off before it could
+   * record its own outcome.
+   */
+  async recoverStalePipelineJobs(timeoutSeconds: number = 900): Promise<number> {
+    const result = await this.db
+      .prepare(
+        `UPDATE pipeline_jobs
+         SET status = 'failed',
+             completed_at = unixepoch(),
+             error_message = 'Recovered: still running after ' || CAST(?1 AS INTEGER) || 's; the run ended without recording an outcome'
+         WHERE job_type = 'pipeline-run'
+           AND status = 'running'
+           AND COALESCE(started_at, created_at) < unixepoch() - ?1`
+      )
+      .bind(timeoutSeconds)
+      .run();
+    return result.meta.changes;
   }
 
   async getSourceHealth(source_id: number): Promise<SourceHealth | null> {
