@@ -14,9 +14,78 @@ import { GeminiDeferredError } from './model-router';
 
 const MAX_SOURCES = 10;
 const MAX_ARTICLES = 20;
+// A scheduled run is capped at 15 minutes; a pipeline-run job still running
+// after that never recorded its outcome.
+const STALE_PIPELINE_JOB_SECONDS = 900;
+
+/** Outcome of one source in a run. Counts are null when they are not known. */
+export interface SourceRunSummary {
+  id: number;
+  name: string;
+  outcome: 'healthy' | 'down' | 'unconfigured';
+  parsed: number | null;
+  inserted: number | null;
+  newest_published_at: number | null;
+  error: string | null;
+}
+
+export interface ProcessingCounts {
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  /** No Gemini model was available; not a failure. */
+  deferred: number;
+}
+
+/**
+ * Stored as JSON in pipeline_jobs.result. Timestamps are Unix seconds. A stage
+ * that never started is null; after a failure, `failed_stage` names the stage
+ * that was running and its counts cover only the work done before it failed.
+ */
+export interface PipelineRunSummary {
+  version: 1;
+  started_at: number;
+  completed_at: number | null;
+  failed_stage: 'recovery' | 'ingestion' | 'processing' | 'retries' | null;
+  stale_jobs_recovered: number | null;
+  sources: SourceRunSummary[];
+  processing: ProcessingCounts | null;
+  stale_articles_recovered: number | null;
+  retries: ProcessingCounts | null;
+  briefs: {
+    /** 'skipped': event_briefs is not migrated; 'errored': the stage stopped early. */
+    state: 'ran' | 'skipped' | 'errored';
+    events: number;
+    generated: number;
+    failed: number;
+    deferred: number;
+  } | null;
+}
+
+const ERROR_SUMMARY_LENGTH = 200;
+
+function errorText(e: unknown): string {
+  return (e instanceof Error ? e.message : 'Unknown error').slice(0, ERROR_SUMMARY_LENGTH);
+}
+
+function emptyCounts(): ProcessingCounts {
+  return { attempted: 0, succeeded: 0, failed: 0, deferred: 0 };
+}
 
 export async function runPipeline(env: Env): Promise<void> {
   const db = createDbClient(env);
+  const summary: PipelineRunSummary = {
+    version: 1,
+    started_at: Math.floor(Date.now() / 1000),
+    completed_at: null,
+    failed_stage: null,
+    stale_jobs_recovered: null,
+    sources: [],
+    processing: null,
+    stale_articles_recovered: null,
+    retries: null,
+    briefs: null,
+  };
   const pipelineJob = await db.createPipelineJob({
     job_type: 'pipeline-run',
     status: 'running',
@@ -26,13 +95,28 @@ export async function runPipeline(env: Env): Promise<void> {
   });
 
   let error: Error | undefined;
+  let stage: NonNullable<PipelineRunSummary['failed_stage']> = 'recovery';
 
   try {
+    // 0. Close out earlier runs that were cut off (this run's job is fresh).
+    summary.stale_jobs_recovered = await db.recoverStalePipelineJobs(STALE_PIPELINE_JOB_SECONDS);
+
     // 1. Ingestion
+    stage = 'ingestion';
     const sources = await db.listSources();
     for (const source of sources.slice(0, MAX_SOURCES)) {
       const now = Math.floor(Date.now() / 1000);
       const health = await db.getSourceHealth(source.id);
+      const entry: SourceRunSummary = {
+        id: source.id,
+        name: source.name,
+        outcome: 'unconfigured',
+        parsed: null,
+        inserted: null,
+        newest_published_at: null,
+        error: null,
+      };
+      summary.sources.push(entry);
       if (!hasFeedUrl(source)) {
         // Nothing is fetched, so this is neither a success nor a failure:
         // keep the previous timestamps and failure count.
@@ -46,7 +130,11 @@ export async function runPipeline(env: Env): Promise<void> {
         continue;
       }
       try {
-        await fetchAndIngest(env, source);
+        const ingest = await fetchAndIngest(env, source);
+        entry.parsed = ingest.parsed;
+        entry.inserted = ingest.inserted;
+        entry.newest_published_at = ingest.newest_published_at;
+        entry.outcome = 'healthy';
         await db.updateSourceHealth(source.id, {
           status: 'healthy',
           last_success_at: now,
@@ -56,6 +144,8 @@ export async function runPipeline(env: Env): Promise<void> {
         });
       } catch (e) {
         const errorMsg = e instanceof Error ? e.message : 'Unknown error';
+        // A fetch that fails partway may have stored some items: the counts are unknown.
+        Object.assign(entry, { outcome: 'down', parsed: null, inserted: null, newest_published_at: null, error: errorText(e) });
         await db.updateSourceHealth(source.id, {
           status: 'down',
           last_success_at: health?.last_success_at ?? null,
@@ -67,7 +157,9 @@ export async function runPipeline(env: Env): Promise<void> {
     }
 
     // 2. Processing (Pending)
+    stage = 'processing';
     const { articles } = await db.listArticles({ status: 'pending', limit: 100 });
+    const processing = (summary.processing = emptyCounts());
     let totalAttempts = 0;
     // An article gets at most one processing attempt per run, and a deferral
     // (no Gemini model currently available) ends article processing for the run.
@@ -81,17 +173,22 @@ export async function runPipeline(env: Env): Promise<void> {
 
       totalAttempts++;
       attemptedThisRun.add(article.id);
+      processing.attempted++;
       try {
         await processArticle(env, article);
+        processing.succeeded++;
       } catch (e) {
         // processor handles ai_job status and logs
         deferred = e instanceof GeminiDeferredError;
+        processing[deferred ? 'deferred' : 'failed']++;
         await db.updateArticleStatus(article.id, deferred ? 'pending' : 'failed');
       }
     }
 
     // 3. Retry Processing (Failed)
-    await db.recoverStaleProcessingArticles(900); // 15 minutes
+    stage = 'retries';
+    const retries = (summary.retries = emptyCounts());
+    summary.stale_articles_recovered = await db.recoverStaleProcessingArticles(900); // 15 minutes
 
     const remainingSlots = MAX_ARTICLES - totalAttempts;
     if (remainingSlots > 0 && !deferred) {
@@ -104,22 +201,29 @@ export async function runPipeline(env: Env): Promise<void> {
 
         totalAttempts++;
         attemptedThisRun.add(article.id);
+        retries.attempted++;
         try {
           await processArticle(env, article);
+          retries.succeeded++;
         } catch (e) {
           // A deferred retry returns to 'failed' with its retry budget untouched.
           deferred = e instanceof GeminiDeferredError;
+          retries[deferred ? 'deferred' : 'failed']++;
           await db.updateArticleStatus(article.id, 'failed');
         }
       }
     }
 
-    // 4. Grounded AI Event Brief Generation
+    // 4. Grounded AI Event Brief Generation (its errors never fail the run)
+    const briefs: NonNullable<PipelineRunSummary['briefs']> = { state: 'skipped', events: 0, generated: 0, failed: 0, deferred: 0 };
+    summary.briefs = briefs;
     try {
       const tableReady = typeof db.hasEventBriefsTable === 'function' ? await db.hasEventBriefsTable() : true;
       if (tableReady && typeof db.getRecentActiveEvents === 'function') {
         const activeEvents = await db.getRecentActiveEvents(5);
+        briefs.state = 'ran';
         if (Array.isArray(activeEvents)) {
+          briefs.events = activeEvents.length;
           const now = Math.floor(Date.now() / 1000);
           for (const event of activeEvents) {
             if (!event.id || !event.event_hash) continue;
@@ -154,17 +258,24 @@ export async function runPipeline(env: Env): Promise<void> {
                 continue;
               }
 
-              const newBrief = await generateAndSaveEventBrief(
-                env,
-                {
-                  id: event.id,
-                  hash: event.event_hash,
-                  title: event.title,
-                  description: event.description,
-                  severity: event.severity,
-                },
-                detail.articles
-              );
+              let newBrief: Awaited<ReturnType<typeof generateAndSaveEventBrief>>;
+              try {
+                newBrief = await generateAndSaveEventBrief(
+                  env,
+                  {
+                    id: event.id,
+                    hash: event.event_hash,
+                    title: event.title,
+                    description: event.description,
+                    severity: event.severity,
+                  },
+                  detail.articles
+                );
+              } catch (briefErr) {
+                briefs[briefErr instanceof GeminiDeferredError ? 'deferred' : 'failed']++;
+                throw briefErr;
+              }
+              briefs.generated++;
 
               // Phase 10: Narrative Delta (if Version >= 2 and previous brief exists)
               if (latestBrief && latestBrief.status === 'completed' && latestBrief.version < newBrief.version) {
@@ -204,14 +315,18 @@ export async function runPipeline(env: Env): Promise<void> {
       }
     } catch (_e) {
       // Pipeline continues safely even if brief stage encounters unexpected schema state
+      briefs.state = 'errored';
     }
   } catch (e) {
     error = e instanceof Error ? e : new Error(String(e));
+    summary.failed_stage = stage;
   } finally {
+    summary.completed_at = Math.floor(Date.now() / 1000);
     await db.updatePipelineJobStatus(
       pipelineJob.id,
       error ? 'failed' : 'completed',
-      error?.message
+      error?.message,
+      JSON.stringify(summary)
     );
     if (error) throw error;
   }

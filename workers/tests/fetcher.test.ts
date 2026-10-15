@@ -49,7 +49,7 @@ describe('fetchAndIngest', () => {
     };
     vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
 
-    const ingested = await fetchAndIngest(env, source);
+    const { inserted: ingested } = await fetchAndIngest(env, source);
     expect(ingested).toBe(1);
     expect(global.fetch).toHaveBeenCalledWith('http://example.com/rss');
     expect(mockDbClient.createArticle).toHaveBeenCalled();
@@ -287,7 +287,7 @@ describe('fetchAndIngest legacy identity lookups', () => {
   it('makes no extra lookups for entity-free items', async () => {
     serve(rssItem(`<title>Plain</title>${LINK}<guid>g1</guid>`));
     const db = mockDb();
-    expect(await fetchAndIngest(createMockEnv(), source)).toBe(1);
+    expect((await fetchAndIngest(createMockEnv(), source)).inserted).toBe(1);
     expect(db.getDedupHash).toHaveBeenCalledTimes(1);
     expect(db.getArticleByExternalId).toHaveBeenCalledTimes(1);
   });
@@ -295,7 +295,7 @@ describe('fetchAndIngest legacy identity lookups', () => {
   it('skips an item whose encoded external_id is already stored', async () => {
     serve(rssItem('<title>A &amp; B</title><link>https://news.example.test/s?id=1&amp;src=rss</link>'));
     const db = mockDb(['https://news.example.test/s?id=1&amp;src=rss']);
-    expect(await fetchAndIngest(createMockEnv(), source)).toBe(0);
+    expect((await fetchAndIngest(createMockEnv(), source)).inserted).toBe(0);
     expect(db.getArticleByExternalId).toHaveBeenNthCalledWith(1, 'https://news.example.test/s?id=1&src=rss');
     expect(db.createArticle).not.toHaveBeenCalled();
   });

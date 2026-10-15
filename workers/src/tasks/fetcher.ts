@@ -34,8 +34,18 @@ export function hasFeedUrl(source: Pick<Source, 'feed_url'>): source is Pick<Sou
   return typeof source.feed_url === 'string' && source.feed_url.trim() !== '';
 }
 
-export async function fetchAndIngest(env: Env, source: Source): Promise<number> {
-  if (!hasFeedUrl(source)) return 0;
+/** What one feed fetch found; published_at values are Unix seconds. */
+export interface IngestResult {
+  /** Items parsed from the feed (after collapsing repeated guids). */
+  parsed: number;
+  /** Items stored as new articles; the rest were already known. */
+  inserted: number;
+  /** Newest parseable publication time among the parsed items, or null. */
+  newest_published_at: number | null;
+}
+
+export async function fetchAndIngest(env: Env, source: Source): Promise<IngestResult> {
+  if (!hasFeedUrl(source)) return { parsed: 0, inserted: 0, newest_published_at: null };
 
   const response = await fetch(source.feed_url);
   if (!response.ok) {
@@ -78,7 +88,12 @@ export async function fetchAndIngest(env: Env, source: Source): Promise<number> 
     ingested++;
   }
 
-  return ingested;
+  const published = articles.map(a => a.published_at).filter((t): t is number => t !== null);
+  return {
+    parsed: articles.length,
+    inserted: ingested,
+    newest_published_at: published.length > 0 ? Math.max(...published) : null,
+  };
 }
 
 /**

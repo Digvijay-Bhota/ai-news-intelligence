@@ -129,9 +129,9 @@ describe('Ingestion of feeds stored by the pre-decoding parser (local D1)', () =
     const env = createMockEnv({ DB });
     serveFeeds({ [RSS_URL]: RSS_FEED, [ATOM_URL]: ATOM_FEED });
 
-    expect(await fetchAndIngest(env, sources.rss)).toBe(0);
-    expect(await fetchAndIngest(env, sources.atom)).toBe(0);
-    expect(await fetchAndIngest(env, sources.rss)).toBe(0);
+    expect((await fetchAndIngest(env, sources.rss)).inserted).toBe(0);
+    expect((await fetchAndIngest(env, sources.atom)).inserted).toBe(0);
+    expect((await fetchAndIngest(env, sources.rss)).inserted).toBe(0);
 
     expect(await snapshot()).toEqual(before);
   });
@@ -142,7 +142,7 @@ describe('Ingestion of feeds stored by the pre-decoding parser (local D1)', () =
     const env = createMockEnv({ DB });
     serveFeeds({ [RSS_URL]: RSS_FEED.replace('<channel>', `<channel>${newItem}`) });
 
-    expect(await fetchAndIngest(env, sources.rss)).toBe(1);
+    expect((await fetchAndIngest(env, sources.rss)).inserted).toBe(1);
     const row = await DB.prepare('SELECT * FROM articles_raw WHERE source_id = ?1 AND title = ?2')
       .bind(sources.rss.id, 'New & noteworthy').first<any>();
     expect(row).toMatchObject({
@@ -156,7 +156,7 @@ describe('Ingestion of feeds stored by the pre-decoding parser (local D1)', () =
     expect(await DB.prepare('SELECT article_raw_id FROM dedup_hashes WHERE hash = ?1').bind(hash).first()).toEqual({ article_raw_id: row.id });
 
     const after = await snapshot();
-    expect(await fetchAndIngest(env, sources.rss)).toBe(0);
+    expect((await fetchAndIngest(env, sources.rss)).inserted).toBe(0);
     expect(await snapshot()).toEqual(after);
     expect(after.articles).toHaveLength(LEGACY_ROWS.length + 1);
   });
@@ -165,11 +165,11 @@ describe('Ingestion of feeds stored by the pre-decoding parser (local D1)', () =
     const env = createMockEnv({ DB });
     serveFeeds({ [RSS_URL]: RSS_FEED, [ATOM_URL]: ATOM_FEED });
 
-    expect(await fetchAndIngest(env, sources.rss)).toBe(3);
-    expect(await fetchAndIngest(env, sources.atom)).toBe(1);
+    expect((await fetchAndIngest(env, sources.rss)).inserted).toBe(3);
+    expect((await fetchAndIngest(env, sources.atom)).inserted).toBe(1);
     const first = await snapshot();
-    expect(await fetchAndIngest(env, sources.rss)).toBe(0);
-    expect(await fetchAndIngest(env, sources.atom)).toBe(0);
+    expect((await fetchAndIngest(env, sources.rss)).inserted).toBe(0);
+    expect((await fetchAndIngest(env, sources.atom)).inserted).toBe(0);
     expect(await snapshot()).toEqual(first);
 
     expect(first.articles.map((r: any) => ({ external_id: r.external_id, title: r.title, url: r.url, summary: r.summary }))).toEqual([

@@ -130,8 +130,8 @@ describe('Article image metadata during RSS ingestion (local D1)', () => {
     installFetchStub({ verge: VERGE_FEED, techcrunch: TECHCRUNCH_FEED });
     const env = createMockEnv({ DB, CACHE: bindings.CACHE });
 
-    expect(await fetchAndIngest(env, sources['The Verge'])).toBe(6);
-    expect(await fetchAndIngest(env, sources['TechCrunch'])).toBe(1);
+    expect((await fetchAndIngest(env, sources['The Verge'])).inserted).toBe(6);
+    expect((await fetchAndIngest(env, sources['TechCrunch'])).inserted).toBe(1);
 
     expect(await storedImages()).toEqual(EXPECTED);
   });
@@ -151,7 +151,7 @@ describe('Article image metadata during RSS ingestion (local D1)', () => {
       const hash = await generateArticleHash(p.title, p.url);
       expect(await DB.prepare('SELECT 1 AS ok FROM dedup_hashes WHERE hash = ?1').bind(hash).first()).toEqual({ ok: 1 });
     }
-    expect(await fetchAndIngest(env, sources['The Verge'])).toBe(0);
+    expect((await fetchAndIngest(env, sources['The Verge'])).inserted).toBe(0);
   });
 
   it('runs the pipeline with healthy sources, no extra model calls and no image fields in prompts', async () => {

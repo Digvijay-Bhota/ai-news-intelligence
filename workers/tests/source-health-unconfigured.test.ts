@@ -116,7 +116,7 @@ describe('Source health for sources without a feed URL (local D1)', () => {
     const source = await addSource(`Blank Feed (${_label})`, feedUrl);
     await setHealth(source.id, { status: 'down', last_success_at: null, last_failure_at: 900, consecutive_failures: 2 });
 
-    expect(await fetchAndIngest(createMockEnv({ DB }), source)).toBe(0);
+    expect((await fetchAndIngest(createMockEnv({ DB }), source)).inserted).toBe(0);
     await runPipeline(createMockEnv({ DB }));
 
     expect(await health(source.id)).toMatchObject({
@@ -147,7 +147,7 @@ describe('Source health for sources without a feed URL (local D1)', () => {
     const env = createMockEnv({ DB });
     const feed = rss(item('quiet-1', 'Already seen story'));
     serveFeed(feed);
-    expect(await fetchAndIngest(env, source)).toBe(1);
+    expect((await fetchAndIngest(env, source)).inserted).toBe(1);
     await setHealth(source.id, { status: 'down', last_success_at: 1000, last_failure_at: 900, consecutive_failures: 3 });
     serveFeed(feed); // fresh stub so only the pipeline's request is counted
 

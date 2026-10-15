@@ -63,7 +63,7 @@ describe('Normalization and Deduplication', () => {
       };
       vi.spyOn(dbClientModule, 'createDbClient').mockReturnValue(mockDbClient as any);
 
-      const ingested = await fetchAndIngest(env, source);
+      const { inserted: ingested } = await fetchAndIngest(env, source);
       expect(ingested).toBe(0);
       expect(mockDbClient.createArticle).not.toHaveBeenCalled();
     });
