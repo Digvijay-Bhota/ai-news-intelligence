@@ -39,19 +39,20 @@ hourly cron. Deploy the top-level configuration only.
 
 ## Migrations: how this project applies them
 
-Schema changes live in `d1/migrations/NNNN_*.sql` (0001–0014) and are applied **by hand** with
+Schema changes live in `d1/migrations/NNNN_*.sql` (0001–0015) and are applied **by hand** with
 `wrangler d1 execute --file`. `workers/wrangler.toml` sets no `migrations_dir`, and the project
 does not use Wrangler's migration tracking.
 
 So `wrangler d1 migrations list` **cannot** tell you which of these files production has. The only
 reliable check is to inspect the production schema for each migration's effect.
 
-Read-only checks for the two newest migrations:
+Read-only checks for recent migrations:
 
 | Migration | Effect | Read-only check (writes nothing) | Re-runnable? |
 |---|---|---|---|
 | `0013_gemini_escalation_budget.sql` | creates table `gemini_escalation_budget` | `npx wrangler d1 execute ai-news-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name='gemini_escalation_budget';"` | yes (`CREATE TABLE IF NOT EXISTS`) |
 | `0014_article_image_metadata.sql` | adds `articles_raw.image_url` and `articles_raw.image_credit` | `npx wrangler d1 execute ai-news-db --remote --command "PRAGMA table_info(articles_raw);"` | **no**: `ALTER TABLE ADD COLUMN` fails with `duplicate column name` the second time |
+| `0015_article_events_event_id_index.sql` | creates index `idx_article_events_event_id` on `article_events(event_id)` | `npx wrangler d1 execute ai-news-db --remote --command "SELECT name, sql FROM sqlite_master WHERE type='index' AND name='idx_article_events_event_id';"` | yes (`CREATE INDEX IF NOT EXISTS`) |
 
 Run these from `workers/`, where `wrangler.toml` is. `ai-news-db` resolves to the
 `database_id` above through that file.
@@ -247,5 +248,88 @@ Rollback targets if needed: backend `613a3ea9-d5de-427d-a224-017a7e514d33`, fron
   on 2026-09-13 and this release does not change the file), so posts whose author has no profile
   are not shown: 3 of the 7 posts in production. Pre-existing; not caused by this release.
 - Wrangler's `d1_migrations` table records only 0005 and 0007; do not use `d1 migrations list`.
+
+### 2026-10-15 — release of `5362d67d4263aef4d2a565db1fc2c523cb97fa05`
+
+Released the pipeline-run summary and stale-job recovery feature from PR #34. Workers CI and
+Frontend CI passed on the exact commit. Deployed with Wrangler 3.114.17 from a clean, locked
+release worktree at the exact commit. Times are UTC.
+
+**Source and pre-release state** (read-only unless noted):
+
+- Commit `5362d67d4263aef4d2a565db1fc2c523cb97fa05`, parent
+  `95eb93a6edabf247e832bbbc84a0a4a7d14cf983`; commit tree `93f6b0c`, identical to reviewed PR head
+  `90f2a360dad7821256300bd31eb70779c50836be`. No `Co-Authored-By` trailer.
+- Workers CI and Frontend CI passed on the merge commit. Local validation passed: Workers
+  typecheck, 51 test files / 776 tests, ledger 4 files / 64 tests; frontend lint, typecheck,
+  5 test files / 66 tests, UI 10 test files / 94 tests, and production build. Lint reported one
+  existing `<img>` warning in `SourceChip.tsx`; frontend code was unchanged.
+- Before deploy, backend served `2ff3ff88-ad22-4dfe-bda3-689f669ffcac` and frontend served
+  `d87005b1-de7a-4014-bb1e-210d5f1f7d2c`, each at 100%.
+- The live frontend was not redeployed: its source matched commit `92fbd106`, the code associated
+  with deployed frontend version `d87005b1-de7a-4014-bb1e-210d5f1f7d2c`.
+- Required secret names were present (values not read). Production D1 contained
+  `gemini_escalation_budget`, `articles_raw.image_url`, `articles_raw.image_credit`,
+  `idx_pipeline_jobs_status`, and `idx_article_events_event_id`. The recovery query plan used
+  `idx_pipeline_jobs_status`.
+- D1 recovery bookmark captured at 12:26:04Z, before deployment:
+  `00000556-00000096-00005105-f881ac29fb9b8b73e3f29a35724f63a2` (not restored).
+- No migration was applied in this release. Migration 0015 and its index were already present in
+  production.
+
+**Changes and deployment**:
+
+| Step | Time (UTC) | Before | After |
+|---|---|---|---|
+| Backend deploy | 12:48:53 | `2ff3ff88-ad22-4dfe-bda3-689f669ffcac` | `54f4d8da-71ff-4bf3-ab4c-26ba417970b3` (100%) |
+| Frontend deploy | — | `d87005b1-de7a-4014-bb1e-210d5f1f7d2c` | Not redeployed; frontend code unchanged |
+
+Deployment used the top-level Worker configuration, with no `--env` and no migrations. Rollback
+targets are backend `2ff3ff88-ad22-4dfe-bda3-689f669ffcac` and frontend
+`d87005b1-de7a-4014-bb1e-210d5f1f7d2c`. Rolling back the Worker does not reverse the stale-job
+status updates described below.
+
+**Verification after deployment**:
+
+- Backend version `54f4d8da-71ff-4bf3-ab4c-26ba417970b3` served 100% of traffic at the final
+  check. `GET /api/v1/health` returned HTTP 200 / healthy on four consecutive checks (three
+  immediate and one after the cron).
+- Runtime tail covered 12:50–13:14Z and captured the scheduled run. No runtime exceptions, error
+  logs, or warning logs were observed. The tail disconnected before its own timeout after the cron
+  had finished.
+- All 18 frontend smoke checks passed against the existing frontend and newly deployed backend.
+  The browser test blocked non-GET `/api/*` requests. Checks covered the briefing/feed, topics,
+  events and filters, event detail and community, article detail and Key Entities, For You,
+  Settings, and Saved. All 7 production community posts rendered, including 3 labelled
+  “Anonymous reader”; no page errors were observed. The first script timed out on three checks
+  due to assumptions in the script; follow-up checks corrected those assumptions and passed.
+- The first post-deploy scheduled cron was job `4471` at 13:00Z. It ran from 13:00:09Z to
+  13:01:10Z, completed with outcome `ok`, no `error_message`, and `failed_stage: null`. The
+  version-1 summary was persisted to `pipeline_jobs.result`.
+- **Stale-job recovery:** `stale_jobs_recovered: 3243`, matching the exact pre-deploy eligibility
+  count. Pipeline-run jobs 41–4457 were marked failed with `completed_at` 13:00:09Z and the
+  recovery reason. Their `result` remained null because no historic summary was available. The
+  table then held 1,228 completed and 3,243 failed jobs, with none running.
+- All three sources were healthy:
+
+  | Source | Parsed | Inserted |
+  |---|---:|---:|
+  | Ars Technica | 20 | 0 |
+  | TechCrunch | 20 | 0 |
+  | The Verge | 10 | 2 |
+
+- Processing: 2 attempted, 2 succeeded; retries: none attempted; stale articles recovered: 0.
+  Brief generation covered 5 events, generated 3 briefs, and recorded 0 failed, deferred, or
+  in-progress briefs. Three completed event briefs were confirmed since the cron. Two articles
+  were inserted; the newest was created at 13:00:10Z.
+- Per-run D1 read cost was not measured. Post-cron read-only verification used about 8.4k rows
+  read and wrote nothing.
+
+**Follow-up**:
+
+- Verify the next scheduled hourly run; it should report `stale_jobs_recovered: 0` if no
+  additional eligible stale runs accumulate.
+- Per-run D1 read accounting is not implemented; investigate separately if needed.
+- No D1 Time Travel restore or rollback was required.
 
 Record each future release here in the same form.
